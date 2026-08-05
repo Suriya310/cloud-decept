@@ -1,112 +1,124 @@
-version: '3.8'
+version: "3.9"
 
 services:
-  # =============== DATABASES (Stage 1) ===============
+  # ============================================================
+  # STAGE 1: DATA LAYER (Deploy first - no dependencies)
+  # ============================================================
+  
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8
-    container_name: clickhouse
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse
-      - ./config/clickhouse:/etc/clickhouse-server
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: clouddecept-clickhouse
+    restart: unless-stopped
     ports:
       - "8123:8123"
       - "9000:9000"
     environment:
-      - CLICKHOUSE_DB=deception
-      - CLICKHOUSE_USER=deception
-      - CLICKHOUSE_PASSWORD=deception123
-      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
-    networks:
-      - deception-net
+      CLICKHOUSE_DB: clouddecept
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./configs/clickhouse/config.xml:/etc/clickhouse-server/config.xml:ro
+      - ./configs/clickhouse/users.xml:/etc/clickhouse-server/users.xml:ro
+    ulimits:
+      nofile: 64000
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8123/ping"]
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
+    networks:
+      - clouddecept-network
 
   postgres:
     image: postgres:16-alpine
-    container_name: postgres
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init-scripts:/docker-entrypoint-initdb.d
-    environment:
-      - POSTGRES_DB=deception
-      - POSTGRES_USER=deception
-      - POSTGRES_PASSWORD=deception123
+    container_name: clouddecept-postgres
+    restart: unless-stopped
     ports:
       - "5432:5432"
-    networks:
-      - deception-net
+    environment:
+      POSTGRES_DB: clouddecept
+      POSTGRES_USER: clouddecept
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./configs/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U deception"]
+      test: ["CMD-SHELL", "pg_isready -U clouddecept -d clouddecept"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 20s
+    networks:
+      - clouddecept-network
 
   redis:
     image: redis:7-alpine
-    container_name: redis
-    volumes:
-      - redis_data:/data
+    container_name: clouddecept-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
-    networks:
-      - deception-net
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
+    networks:
+      - clouddecept-network
 
-  # =============== BACKEND SERVICES (Stage 2) ===============
+  # ============================================================
+  # STAGE 2: BACKEND SERVICES (Depend on data layer)
+  # ============================================================
+
   event-collector:
-    build: ./backend/collector
-    container_name: event-collector
+    build:
+      context: ./backend/collector
+      dockerfile: Dockerfile
+    container_name: clouddecept-collector
+    restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8002:8000"
     environment:
       - REDIS_URL=redis://redis:6379
+      - REDIS_STREAM_MAXLEN=10000
       - LOG_LEVEL=INFO
     depends_on:
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     networks:
-      - deception-net
-    restart: unless-stopped
-
-  llm-gateway:
-    build: ./backend/gateway
-    container_name: llm-gateway
-    ports:
-      - "8003:8003"
-    environment:
-      - OLLAMA_URL=http://ollama:11434
-      - LLM_PROVIDER=ollama
-      - LOG_LEVEL=INFO
-    depends_on:
-      ollama:
-        condition: service_healthy
-    networks:
-      - deception-net
-    restart: unless-stopped
+      - clouddecept-network
 
   backend-api:
-    build: ./backend/api
-    container_name: backend-api
+    build:
+      context: ./backend/api
+      dockerfile: Dockerfile
+    container_name: clouddecept-api
+    restart: unless-stopped
     ports:
-      - "8004:8000"
+      - "8000:8000"
     environment:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_PORT=8123
-      - CLICKHOUSE_DB=deception
-      - CLICKHOUSE_USER=deception
-      - CLICKHOUSE_PASSWORD=deception123
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DATABASE=clouddecept
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=deception
-      - POSTGRES_USER=deception
-      - POSTGRES_PASSWORD=deception123
+      - POSTGRES_USER=clouddecept
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=clouddecept
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=INFO
     depends_on:
@@ -116,201 +128,257 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
-      - deception-net
-    restart: unless-stopped
+      - clouddecept-network
 
-  # =============== HONEYPOTS (Stage 2) ===============
-  cowrie-ssh:
-    build: ./config/cowrie
-    container_name: cowrie-ssh
-    ports:
-      - "2222:2222"
-    volumes:
-      - ./config/cowrie/cowrie.cfg:/cowrie/etc/cowrie.cfg:ro
-      - ./honeypot_data:/cowrie/honeypot
-      - ./config/cowrie/userdb.txt:/cowrie/etc/userdb.txt:ro
-    environment:
-      - CLICKHOUSE_HOST=clickhouse
-      - CLICKHOUSE_PORT=9000
-      - CLICKHOUSE_DB=deception
-      - CLICKHOUSE_USER=deception
-      - CLICKHOUSE_PASSWORD=deception123
-      - EVENT_COLLECTOR_URL=http://event-collector:8000
-      - ADAPTIVE_ENGINE_URL=http://adaptive-engine:8002
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-      event-collector:
-        condition: service_started
-      adaptive-engine:
-        condition: service_started
-    networks:
-      - deception-net
+  llm-gateway:
+    build:
+      context: ./backend/gateway
+      dockerfile: Dockerfile
+    container_name: clouddecept-llm-gateway
     restart: unless-stopped
+    ports:
+      - "8001:8000"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DEFAULT_PROVIDER=ollama
+      - LOG_LEVEL=INFO
+    depends_on:
+      - ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - clouddecept-network
+
+  # ============================================================
+  # STAGE 3: HONEYPOT & AI ENGINES (Depend on backend + LLM)
+  # ============================================================
+
+  intent-engine:
+    build:
+      context: ./services/intent-engine
+      dockerfile: Dockerfile
+    container_name: clouddecept-intent
+    restart: unless-stopped
+    ports:
+      - "8003:8000"
+    environment:
+      - LLM_GATEWAY_URL=http://llm-gateway:8000
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=INFO
+    depends_on:
+      llm-gateway:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - clouddecept-network
+
+  adaptive-engine:
+    build:
+      context: ./services/adaptive-engine
+      dockerfile: Dockerfile
+    container_name: clouddecept-adaptive
+    restart: unless-stopped
+    ports:
+      - "8004:8000"
+    environment:
+      - LLM_GATEWAY_URL=http://llm-gateway:8000
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=INFO
+    depends_on:
+      llm-gateway:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - clouddecept-network
+
+  threat-intel:
+    build:
+      context: ./services/threat-intel
+      dockerfile: Dockerfile
+    container_name: clouddecept-threat-intel
+    restart: unless-stopped
+    ports:
+      - "8005:8000"
+    environment:
+      - LLM_GATEWAY_URL=http://llm-gateway:8000
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=clouddecept
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=clouddecept
+      - LOG_LEVEL=INFO
+    depends_on:
+      llm-gateway:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - clouddecept-network
+
+  # ============================================================
+  # STAGE 4: CLOUD API MOCK + COWRIE HONEYPOT
+  # ============================================================
 
   cloud-api-mock:
-    build: ./services/cloud-api-mock
-    container_name: cloud-api-mock
+    build:
+      context: ./services/cloud-api-mock
+      dockerfile: Dockerfile
+    container_name: clouddecept-cloud-mock
+    restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8080:8000"
     environment:
+      - INTENT_ENGINE_URL=http://intent-engine:8000
+      - ADAPTIVE_ENGINE_URL=http://adaptive-engine:8000
+      - THREAT_INTEL_URL=http://threat-intel:8000
       - EVENT_COLLECTOR_URL=http://event-collector:8000
-      - ADAPTIVE_ENGINE_URL=http://adaptive-engine:8002
-      - CLICKHOUSE_HOST=clickhouse
-      - CLICKHOUSE_PORT=9000
-      - CLICKHOUSE_DB=deception
-      - CLICKHOUSE_USER=deception
-      - CLICKHOUSE_PASSWORD=deception123
-      - ORG_PROFILE=northbridge-healthcare
-      - CLOUD_PROVIDER=aws
+      - LOG_LEVEL=INFO
     depends_on:
-      clickhouse:
+      intent-engine:
+        condition: service_healthy
+      adaptive-engine:
+        condition: service_healthy
+      threat-intel:
         condition: service_healthy
       event-collector:
-        condition: service_started
-      adaptive-engine:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
-      - deception-net
-    restart: unless-stopped
+      - clouddecept-network
 
-  # =============== AI SERVICES (Stage 3) ===============
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
+  cowrie-ssh:
+    build:
+      context: ./configs/cowrie
+      dockerfile: Dockerfile
+    container_name: clouddecept-cowrie
+    restart: unless-stopped
+    ports:
+      - "2222:2222"
+      - "2323:2323"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - EVENT_COLLECTOR_URL=http://event-collector:8000
+      - CLOUD_API_MOCK_URL=http://cloud-api-mock:8000
+      - COWRIE_CONFIG=/cowrie/etc/cowrie.cfg
+      - LOG_LEVEL=INFO
     volumes:
-      - ollama_data:/root/.ollama
+      - ./configs/cowrie/cowrie/cowrie.cfg:/cowrie/etc/cowrie.cfg:ro
+      - ./configs/cowrie/cowrie/userdb.txt:/cowrie/etc/userdb.txt:ro
+      - cowrie_tty:/cowrie/tty
+      - cowrie_dl:/cowrie/dl
+    depends_on:
+      redis:
+        condition: service_healthy
+      event-collector:
+        condition: service_healthy
+      cloud-api-mock:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - clouddecept-network
+
+  # ============================================================
+  # STAGE 5: OLLAMA + DASHBOARD (Deploy last)
+  # ============================================================
+
+  ollama:
+    image: ollama/ollama:0.5.11
+    container_name: clouddecept-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
     environment:
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_ORIGINS=*
-    ports:
-      - "11434:11434"
-    networks:
-      - deception-net
+    volumes:
+      - ollama_data:/root/.ollama
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
       timeout: 10s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 8G
-        reservations:
-          memory: 4G
-
-  intent-engine:
-    build: ./services/intent-engine
-    container_name: intent-engine
-    ports:
-      - "8001:8001"
-    environment:
-      - LLM_GATEWAY_URL=http://llm-gateway:8003
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - LOG_LEVEL=INFO
-    depends_on:
-      redis:
-        condition: service_healthy
-      llm-gateway:
-        condition: service_healthy
+      retries: 5
+      start_period: 60s
     networks:
-      - deception-net
-    restart: unless-stopped
+      - clouddecept-network
 
-  adaptive-engine:
-    build: ./services/adaptive-engine
-    container_name: adaptive-engine
-    ports:
-      - "8002:8002"
-    environment:
-      - INTENT_ENGINE_URL=http://intent-engine:8001
-      - EVENT_COLLECTOR_URL=http://event-collector:8000
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - LOG_LEVEL=INFO
-    depends_on:
-      - intent-engine
-      - redis
-      - event-collector
-    networks:
-      - deception-net
-    restart: unless-stopped
-
-  threat-intel:
-    build: ./services/threat-intel
-    container_name: threat-intel
-    environment:
-      - CLICKHOUSE_HOST=clickhouse
-      - CLICKHOUSE_PORT=9000
-      - CLICKHOUSE_DB=deception
-      - CLICKHOUSE_USER=deception
-      - CLICKHOUSE_PASSWORD=deception123
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=deception
-      - POSTGRES_USER=deception
-      - POSTGRES_PASSWORD=deception123
-      - LLM_GATEWAY_URL=http://llm-gateway:8003
-      - EVENT_COLLECTOR_URL=http://event-collector:8000
-      - LOG_LEVEL=INFO
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      llm-gateway:
-        condition: service_healthy
-      event-collector:
-        condition: service_started
-    networks:
-      - deception-net
-    restart: unless-stopped
-
-  # =============== DASHBOARD (Stage 4) ===============
   dashboard:
-    build: ./apps/dashboard
-    container_name: dashboard
+    build:
+      context: ./apps/dashboard
+      dockerfile: Dockerfile
+    container_name: clouddecept-dashboard
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=deception
-      - POSTGRES_USER=deception
-      - POSTGRES_PASSWORD=deception123
-      - CLICKHOUSE_HOST=clickhouse
-      - CLICKHOUSE_PORT=8123
-      - CLICKHOUSE_DB=deception
-      - CLICKHOUSE_USER=deception
-      - CLICKHOUSE_PASSWORD=deception123
-      - BACKEND_API_URL=http://backend-api:8000
-      - INTENT_ENGINE_URL=http://intent-engine:8001
-      - ADAPTIVE_ENGINE_URL=http://adaptive-engine:8002
-      - NEXT_PUBLIC_API_URL=http://localhost:8080
+      - NEXT_PUBLIC_API_URL=http://backend-api:8000
+      - NEXT_PUBLIC_WS_URL=ws://backend-api:8000
+      - NODE_ENV=production
     depends_on:
-      postgres:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
       backend-api:
         condition: service_healthy
-      intent-engine:
-        condition: service_started
-      adaptive-engine:
-        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     networks:
-      - deception-net
-    restart: unless-stopped
-
-networks:
-  deception-net:
-    driver: bridge
+      - clouddecept-network
 
 volumes:
   clickhouse_data:
   postgres_data:
   redis_data:
   ollama_data:
-  honeypot_data:
+  cowrie_tty:
+  cowrie_dl:
+
+networks:
+  clouddecept-network:
+    driver: bridge

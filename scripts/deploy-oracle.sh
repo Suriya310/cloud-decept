@@ -98,7 +98,7 @@ setup_directories() {
     log_info "Setting up directories..."
 
     mkdir -p "$PROJECT_DIR/honeypot_data"
-    mkdir -p "$PROJECT_DIR/config/clickhouse"
+    mkdir -p "$PROJECT_DIR/configs/clickhouse"
     mkdir -p "$PROJECT_DIR/logs"
 
     # Ensure proper permissions for ClickHouse (UID 101)
@@ -111,7 +111,7 @@ setup_directories() {
 gen_clickhouse_config() {
     log_info "Generating ClickHouse config (2 GB optimized)..."
 
-    cat > "$PROJECT_DIR/config/clickhouse/config.xml" << 'EOF'
+    cat > "$PROJECT_DIR/configs/clickhouse/config.xml" << 'EOF'
 <clickhouse>
     <logger>
         <level>information</level>
@@ -163,7 +163,7 @@ gen_clickhouse_config() {
 </clickhouse>
 EOF
 
-    cat > "$PROJECT_DIR/config/clickhouse/users.xml" << 'EOF'
+    cat > "$PROJECT_DIR/configs/clickhouse/users.xml" << 'EOF'
 <clickhouse>
     <users>
         <deception>

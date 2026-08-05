@@ -209,7 +209,7 @@ cloud-decept/
 ├── apps/
 │   ├── cloud-api-mock/      # FastAPI cloud simulation
 │   └── dashboard/           # Next.js monitoring UI
-├── config/
+├── configs/
 │   ├── clickhouse/          # ClickHouse configs
 │   └── cowrie/              # Cowrie config, custom modules
 ├── services/

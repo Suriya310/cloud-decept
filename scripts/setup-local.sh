@@ -45,8 +45,8 @@ create_dirs() {
     log_info "Creating directory structure..."
 
     mkdir -p honeypot_data
-    mkdir -p config/clickhouse
-    mkdir -p config/cowrie
+    mkdir -p configs/clickhouse
+    mkdir -p configs/cowrie
     mkdir -p logs
 
     log_success "Directories created"

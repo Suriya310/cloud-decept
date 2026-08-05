@@ -151,12 +151,12 @@ main() {
     log_info ""
     log_info "=== Checking Local Service Builds ==="
 
-    check_local_build "cloud-api-mock" "Dockerfile" "apps/cloud-api-mock" && ((passed++)) || ((failed++))
+    check_local_build "cloud-api-mock" "Dockerfile" "services/cloud-api-mock" && ((passed++)) || ((failed++))
     check_local_build "intent-engine" "Dockerfile" "services/intent-engine" && ((passed++)) || ((failed++))
     check_local_build "adaptive-engine" "Dockerfile" "services/adaptive-engine" && ((passed++)) || ((failed++))
     check_local_build "threat-intel" "Dockerfile" "services/threat-intel" && ((passed++)) || ((failed++))
     check_local_build "dashboard" "Dockerfile" "apps/dashboard" && ((passed++)) || ((failed++))
-    check_local_build "cowrie-ssh" "Dockerfile" "config/cowrie" && ((passed++)) || ((failed++))
+    check_local_build "cowrie-ssh" "Dockerfile" "configs/cowrie" && ((passed++)) || ((failed++))
 
     # Summary
     echo ""

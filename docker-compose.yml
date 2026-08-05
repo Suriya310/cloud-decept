@@ -150,7 +150,7 @@ services:
     restart: unless-stopped
 
   cloud-api-mock:
-    build: ./apps/cloud-api-mock
+    build: ./services/cloud-api-mock
     container_name: cloud-api-mock
     ports:
       - "8080:8080"

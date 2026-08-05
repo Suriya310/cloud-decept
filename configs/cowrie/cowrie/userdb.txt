@@ -1,0 +1,29 @@
+# Cowrie user database
+# Format: username:password:uid:gid:groups:home:shell
+#
+# Common credentials attackers try
+root:root:0:0:root:/root:/bin/bash
+root:admin:0:0:root:/root:/bin/bash
+root:password:0:0:root:/root:/bin/bash
+root:123456:0:0:root:/root:/bin/bash
+root:ubuntu:0:0:root:/root:/bin/bash
+root:ubuntu123:0:0:root:/root:/bin/bash
+root:admin123:0:0:root:/root:/bin/bash
+admin:admin:1000:1000:admin:/home/admin:/bin/bash
+admin:password:1000:1000:admin:/home/admin:/bin/bash
+admin:admin123:1000:1000:admin:/home/admin:/bin/bash
+ubuntu:ubuntu:1000:1000:ubuntu:/home/ubuntu:/bin/bash
+ubuntu:ubuntu123:1000:1000:ubuntu:/home/ubuntu:/bin/bash
+ubuntu:password:1000:1000:ubuntu:/home/ubuntu:/bin/bash
+user:user:1001:1001:user:/home/user:/bin/bash
+user:password:1001:1001:user:/home/user:/bin/bash
+test:test:1002:1002:test:/home/test:/bin/bash
+test:test123:1002:1002:test:/home/test:/bin/bash
+oracle:oracle:1003:1003:oracle:/home/oracle:/bin/bash
+centos:centos:1004:1004:centos:/home/centos:/bin/bash
+ec2-user:ec2-user:1005:1005:ec2-user:/home/ec2-user:/bin/bash
+azureuser:azureuser:1006:1006:azureuser:/home/azureuser:/bin/bash
+gcp-user:gcp-user:1007:1007:gcp-user:/home/gcp-user:/bin/bash
+admin:P@ssw0rd:1000:1000:admin:/home/admin:/bin/bash
+root:P@ssw0rd:0:0:root:/root:/bin/bash
+ubuntu:P@ssw0rd:1000:1000:ubuntu:/home/ubuntu:/bin/bash

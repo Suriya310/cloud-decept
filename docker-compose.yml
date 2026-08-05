@@ -1,0 +1,316 @@
+version: '3.8'
+
+services:
+  # =============== DATABASES (Stage 1) ===============
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: clickhouse
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./config/clickhouse:/etc/clickhouse-server
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      - CLICKHOUSE_DB=deception
+      - CLICKHOUSE_USER=deception
+      - CLICKHOUSE_PASSWORD=deception123
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    networks:
+      - deception-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    environment:
+      - POSTGRES_DB=deception
+      - POSTGRES_USER=deception
+      - POSTGRES_PASSWORD=deception123
+    ports:
+      - "5432:5432"
+    networks:
+      - deception-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deception"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - deception-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =============== BACKEND SERVICES (Stage 2) ===============
+  event-collector:
+    build: ./backend/collector
+    container_name: event-collector
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=INFO
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - deception-net
+    restart: unless-stopped
+
+  llm-gateway:
+    build: ./backend/gateway
+    container_name: llm-gateway
+    ports:
+      - "8003:8003"
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - LLM_PROVIDER=ollama
+      - LOG_LEVEL=INFO
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - deception-net
+    restart: unless-stopped
+
+  backend-api:
+    build: ./backend/api
+    container_name: backend-api
+    ports:
+      - "8004:8000"
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=deception
+      - CLICKHOUSE_USER=deception
+      - CLICKHOUSE_PASSWORD=deception123
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=deception
+      - POSTGRES_USER=deception
+      - POSTGRES_PASSWORD=deception123
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=INFO
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - deception-net
+    restart: unless-stopped
+
+  # =============== HONEYPOTS (Stage 2) ===============
+  cowrie-ssh:
+    build: ./config/cowrie
+    container_name: cowrie-ssh
+    ports:
+      - "2222:2222"
+    volumes:
+      - ./config/cowrie/cowrie.cfg:/cowrie/etc/cowrie.cfg:ro
+      - ./honeypot_data:/cowrie/honeypot
+      - ./config/cowrie/userdb.txt:/cowrie/etc/userdb.txt:ro
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=9000
+      - CLICKHOUSE_DB=deception
+      - CLICKHOUSE_USER=deception
+      - CLICKHOUSE_PASSWORD=deception123
+      - EVENT_COLLECTOR_URL=http://event-collector:8000
+      - ADAPTIVE_ENGINE_URL=http://adaptive-engine:8002
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      event-collector:
+        condition: service_started
+      adaptive-engine:
+        condition: service_started
+    networks:
+      - deception-net
+    restart: unless-stopped
+
+  cloud-api-mock:
+    build: ./apps/cloud-api-mock
+    container_name: cloud-api-mock
+    ports:
+      - "8080:8080"
+    environment:
+      - EVENT_COLLECTOR_URL=http://event-collector:8000
+      - ADAPTIVE_ENGINE_URL=http://adaptive-engine:8002
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=9000
+      - CLICKHOUSE_DB=deception
+      - CLICKHOUSE_USER=deception
+      - CLICKHOUSE_PASSWORD=deception123
+      - ORG_PROFILE=northbridge-healthcare
+      - CLOUD_PROVIDER=aws
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      event-collector:
+        condition: service_started
+      adaptive-engine:
+        condition: service_started
+    networks:
+      - deception-net
+    restart: unless-stopped
+
+  # =============== AI SERVICES (Stage 3) ===============
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_ORIGINS=*
+    ports:
+      - "11434:11434"
+    networks:
+      - deception-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G
+
+  intent-engine:
+    build: ./services/intent-engine
+    container_name: intent-engine
+    ports:
+      - "8001:8001"
+    environment:
+      - LLM_GATEWAY_URL=http://llm-gateway:8003
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - LOG_LEVEL=INFO
+    depends_on:
+      redis:
+        condition: service_healthy
+      llm-gateway:
+        condition: service_healthy
+    networks:
+      - deception-net
+    restart: unless-stopped
+
+  adaptive-engine:
+    build: ./services/adaptive-engine
+    container_name: adaptive-engine
+    ports:
+      - "8002:8002"
+    environment:
+      - INTENT_ENGINE_URL=http://intent-engine:8001
+      - EVENT_COLLECTOR_URL=http://event-collector:8000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - LOG_LEVEL=INFO
+    depends_on:
+      - intent-engine
+      - redis
+      - event-collector
+    networks:
+      - deception-net
+    restart: unless-stopped
+
+  threat-intel:
+    build: ./services/threat-intel
+    container_name: threat-intel
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=9000
+      - CLICKHOUSE_DB=deception
+      - CLICKHOUSE_USER=deception
+      - CLICKHOUSE_PASSWORD=deception123
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=deception
+      - POSTGRES_USER=deception
+      - POSTGRES_PASSWORD=deception123
+      - LLM_GATEWAY_URL=http://llm-gateway:8003
+      - EVENT_COLLECTOR_URL=http://event-collector:8000
+      - LOG_LEVEL=INFO
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      llm-gateway:
+        condition: service_healthy
+      event-collector:
+        condition: service_started
+    networks:
+      - deception-net
+    restart: unless-stopped
+
+  # =============== DASHBOARD (Stage 4) ===============
+  dashboard:
+    build: ./apps/dashboard
+    container_name: dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=deception
+      - POSTGRES_USER=deception
+      - POSTGRES_PASSWORD=deception123
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=deception
+      - CLICKHOUSE_USER=deception
+      - CLICKHOUSE_PASSWORD=deception123
+      - BACKEND_API_URL=http://backend-api:8000
+      - INTENT_ENGINE_URL=http://intent-engine:8001
+      - ADAPTIVE_ENGINE_URL=http://adaptive-engine:8002
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      backend-api:
+        condition: service_healthy
+      intent-engine:
+        condition: service_started
+      adaptive-engine:
+        condition: service_started
+    networks:
+      - deception-net
+    restart: unless-stopped
+
+networks:
+  deception-net:
+    driver: bridge
+
+volumes:
+  clickhouse_data:
+  postgres_data:
+  redis_data:
+  ollama_data:
+  honeypot_data:

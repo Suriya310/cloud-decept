@@ -314,7 +314,6 @@ services:
         condition: service_healthy
       cloud-api-mock:
         condition: service_healthy
-      start_period: 30s
     networks:
       - clouddecept-network
 

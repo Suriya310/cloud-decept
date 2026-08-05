@@ -83,7 +83,7 @@ services:
     container_name: clouddecept-collector
     restart: unless-stopped
     ports:
-      - "8002:8000"
+      - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379
       - REDIS_STREAM_MAXLEN=10000
@@ -107,7 +107,7 @@ services:
     container_name: clouddecept-api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8004:8004"
     environment:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_PORT=8123
@@ -129,7 +129,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -144,7 +144,7 @@ services:
     container_name: clouddecept-llm-gateway
     restart: unless-stopped
     ports:
-      - "8001:8000"
+      - "8003:8003"
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -154,7 +154,7 @@ services:
     depends_on:
       - ollama
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -173,9 +173,9 @@ services:
     container_name: clouddecept-intent
     restart: unless-stopped
     ports:
-      - "8003:8000"
+      - "8001:8001"
     environment:
-      - LLM_GATEWAY_URL=http://llm-gateway:8000
+      - LLM_GATEWAY_URL=http://llm-gateway:8003
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=INFO
     depends_on:
@@ -184,7 +184,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -199,9 +199,9 @@ services:
     container_name: clouddecept-adaptive
     restart: unless-stopped
     ports:
-      - "8004:8000"
+      - "8002:8002"
     environment:
-      - LLM_GATEWAY_URL=http://llm-gateway:8000
+      - LLM_GATEWAY_URL=http://llm-gateway:8003
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=INFO
     depends_on:
@@ -210,7 +210,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -225,9 +225,9 @@ services:
     container_name: clouddecept-threat-intel
     restart: unless-stopped
     ports:
-      - "8005:8000"
+      - "8005:8005"
     environment:
-      - LLM_GATEWAY_URL=http://llm-gateway:8000
+      - LLM_GATEWAY_URL=http://llm-gateway:8003
       - REDIS_URL=redis://redis:6379
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
@@ -243,7 +243,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -262,11 +262,11 @@ services:
     container_name: clouddecept-cloud-mock
     restart: unless-stopped
     ports:
-      - "8080:8000"
+      - "8080:8080"
     environment:
-      - INTENT_ENGINE_URL=http://intent-engine:8000
-      - ADAPTIVE_ENGINE_URL=http://adaptive-engine:8000
-      - THREAT_INTEL_URL=http://threat-intel:8000
+      - INTENT_ENGINE_URL=http://intent-engine:8001
+      - ADAPTIVE_ENGINE_URL=http://adaptive-engine:8002
+      - THREAT_INTEL_URL=http://threat-intel:8005
       - EVENT_COLLECTOR_URL=http://event-collector:8000
       - LOG_LEVEL=INFO
     depends_on:
@@ -279,7 +279,7 @@ services:
       event-collector:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -299,7 +299,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - EVENT_COLLECTOR_URL=http://event-collector:8000
-      - CLOUD_API_MOCK_URL=http://cloud-api-mock:8000
+      - CLOUD_API_MOCK_URL=http://cloud-api-mock:8080
       - COWRIE_CONFIG=/cowrie/etc/cowrie.cfg
       - LOG_LEVEL=INFO
     volumes:
@@ -314,11 +314,6 @@ services:
         condition: service_healthy
       cloud-api-mock:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
       start_period: 30s
     networks:
       - clouddecept-network
@@ -356,8 +351,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://backend-api:8000
-      - NEXT_PUBLIC_WS_URL=ws://backend-api:8000
+      - NEXT_PUBLIC_API_URL=http://backend-api:8004
+      - NEXT_PUBLIC_WS_URL=ws://backend-api:8004
       - NODE_ENV=production
     depends_on:
       backend-api:

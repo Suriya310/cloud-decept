@@ -28,9 +28,9 @@ async def init_databases():
     clickhouse_client = clickhouse_connect.get_client(
         host=os.getenv("CLICKHOUSE_HOST", "clickhouse"),
         port=int(os.getenv("CLICKHOUSE_PORT", "8123")),
-        username=os.getenv("CLICKHOUSE_USER", "deception"),
+        username=os.getenv("CLICKHOUSE_USER", "default"),
         password=os.getenv("CLICKHOUSE_PASSWORD", ""),
-        database=os.getenv("CLICKHOUSE_DB", "deception"),
+        database=os.getenv("CLICKHOUSE_DB", "clouddecept"),
     )
 
     # PostgreSQL (using psycopg2)
@@ -41,9 +41,9 @@ async def init_databases():
         1, 10,
         host=os.getenv("POSTGRES_HOST", "postgres"),
         port=int(os.getenv("POSTGRES_PORT", "5432")),
-        user=os.getenv("POSTGRES_USER", "deception"),
+        user=os.getenv("POSTGRES_USER", "clouddecept"),
         password=os.getenv("POSTGRES_PASSWORD", ""),
-        database=os.getenv("POSTGRES_DB", "deception"),
+        database=os.getenv("POSTGRES_DB", "clouddecept"),
     )
 
     # Redis

@@ -321,3 +321,7 @@ class ConsumerGroups:
     THREAT_INTEL = "threat_intel"
     DASHBOARD = "dashboard"
     BACKEND_API = "backend_api"
+
+
+# Alias for backward compatibility
+EventTypes = EVENT_TYPES

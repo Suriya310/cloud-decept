@@ -37,7 +37,9 @@ export default function AdaptationsPage() {
     fetchSessions({ limit: 200 });
   }, [fetchSessions]);
 
-  const mockAdaptations = sessions.flatMap((session) =>
+  const sessionsArray = sessions ?? [];
+
+  const mockAdaptations = sessionsArray.flatMap((session) =>
     session.intent_history.map((intent, idx) => ({
       id: `adapt-${session.session_id}-${idx}`,
       session_id: session.session_id,

@@ -61,19 +61,48 @@ async def init_schemas():
     """Create database tables if they don't exist"""
 
     # ClickHouse migrations: convert DateTime -> DateTime64(6) for microsecond support
-    ch_migrations = [
-        "ALTER TABLE IF EXISTS sessions MODIFY COLUMN start_time DateTime64(6)",
-        "ALTER TABLE IF EXISTS sessions MODIFY COLUMN end_time DateTime64(6)",
-        "ALTER TABLE IF EXISTS commands MODIFY COLUMN timestamp DateTime64(6)",
-        "ALTER TABLE IF EXISTS auth_attempts MODIFY COLUMN timestamp DateTime64(6)",
-        "ALTER TABLE IF EXISTS cloud_api_requests MODIFY COLUMN timestamp DateTime64(6)",
-    ]
+    # Check which tables exist first, then run ALTER TABLE only for existing tables
+    tables_to_check = ["sessions", "commands", "auth_attempts", "cloud_api_requests"]
+    existing_tables = set()
 
-    for migration_sql in ch_migrations:
+    try:
+        result = clickhouse_client.query(
+            "SELECT name FROM system.tables WHERE database = currentDatabase() AND name IN ({})".format(
+                ",".join(f"'{t}'" for t in tables_to_check)
+            )
+        )
+        existing_tables = {row[0] for row in result.result_rows}
+    except Exception as e:
+        print(f"Warning: Could not check existing tables: {e}")
+
+    if "sessions" in existing_tables:
         try:
-            clickhouse_client.command(migration_sql)
+            clickhouse_client.command("ALTER TABLE sessions MODIFY COLUMN start_time DateTime64(6)")
+            clickhouse_client.command("ALTER TABLE sessions MODIFY COLUMN end_time DateTime64(6)")
+            print("Migrated sessions.start_time and sessions.end_time to DateTime64(6)")
         except Exception as e:
-            print(f"Warning: Could not run migration {migration_sql}: {e}")
+            print(f"Warning: Could not migrate sessions table: {e}")
+
+    if "commands" in existing_tables:
+        try:
+            clickhouse_client.command("ALTER TABLE commands MODIFY COLUMN timestamp DateTime64(6)")
+            print("Migrated commands.timestamp to DateTime64(6)")
+        except Exception as e:
+            print(f"Warning: Could not migrate commands table: {e}")
+
+    if "auth_attempts" in existing_tables:
+        try:
+            clickhouse_client.command("ALTER TABLE auth_attempts MODIFY COLUMN timestamp DateTime64(6)")
+            print("Migrated auth_attempts.timestamp to DateTime64(6)")
+        except Exception as e:
+            print(f"Warning: Could not migrate auth_attempts table: {e}")
+
+    if "cloud_api_requests" in existing_tables:
+        try:
+            clickhouse_client.command("ALTER TABLE cloud_api_requests MODIFY COLUMN timestamp DateTime64(6)")
+            print("Migrated cloud_api_requests.timestamp to DateTime64(6)")
+        except Exception as e:
+            print(f"Warning: Could not migrate cloud_api_requests table: {e}")
 
     # ClickHouse tables
     ch_tables = [

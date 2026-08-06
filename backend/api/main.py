@@ -65,35 +65,6 @@ async def init_databases():
 async def init_schemas():
     """Create database tables if they don't exist"""
 
-    # ClickHouse migrations: convert DateTime -> DateTime64(6) for microsecond support
-    # Check which tables exist first, then run ALTER TABLE only for existing tables
-    tables_to_check = ["sessions", "commands", "auth_attempts", "cloud_api_requests"]
-    existing_tables = set()
-
-    result = clickhouse_client.query(
-        "SELECT name FROM system.tables WHERE database = currentDatabase() AND name IN ({})".format(
-            ",".join(f"'{t}'" for t in tables_to_check)
-        )
-    )
-    existing_tables = {row[0] for row in result.result_rows}
-
-    if "sessions" in existing_tables:
-        clickhouse_client.command("ALTER TABLE sessions MODIFY COLUMN start_time DateTime64(6)")
-        clickhouse_client.command("ALTER TABLE sessions MODIFY COLUMN end_time DateTime64(6)")
-        print("Migrated sessions.start_time and sessions.end_time to DateTime64(6)")
-
-    if "commands" in existing_tables:
-        clickhouse_client.command("ALTER TABLE commands MODIFY COLUMN timestamp DateTime64(6)")
-        print("Migrated commands.timestamp to DateTime64(6)")
-
-    if "auth_attempts" in existing_tables:
-        clickhouse_client.command("ALTER TABLE auth_attempts MODIFY COLUMN timestamp DateTime64(6)")
-        print("Migrated auth_attempts.timestamp to DateTime64(6)")
-
-    if "cloud_api_requests" in existing_tables:
-        clickhouse_client.command("ALTER TABLE cloud_api_requests MODIFY COLUMN timestamp DateTime64(6)")
-        print("Migrated cloud_api_requests.timestamp to DateTime64(6)")
-
     # ClickHouse tables - CREATE TABLE IF NOT EXISTS with DateTime64(6)
     ch_tables = [
         """

@@ -41,8 +41,8 @@ export default function SessionsPage() {
     const matchesSearch =
       session.session_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
       session.src_ip.includes(searchQuery) ||
-      (session.src_country?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false) ||
-      session.username?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false;
+      (session.src_country?.toLowerCase() ?? '').includes(searchQuery.toLowerCase()) ||
+      (session.username?.toLowerCase() ?? '').includes(searchQuery.toLowerCase());
 
     const matchesIntent =
       filters.intent === 'all' ||

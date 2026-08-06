@@ -39,7 +39,7 @@ export default function CommandsPage() {
   const filteredCommands = commands.filter((cmd) => {
     const matchesSearch =
       cmd.command.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (cmd.output?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false);
+      (cmd.output?.toLowerCase() ?? '').includes(searchQuery.toLowerCase());
     return matchesSearch;
   });
 

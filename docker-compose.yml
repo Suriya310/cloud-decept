@@ -343,16 +343,17 @@ services:
     build:
       context: ./apps/dashboard
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_BACKEND_URL: http://backend-api:8004
+        NEXT_PUBLIC_COLLECTOR_URL: http://event-collector:8000
+        NEXT_PUBLIC_THREAT_INTEL_URL: http://threat-intel:8005
+        NEXT_PUBLIC_ADAPTIVE_URL: http://adaptive-engine:8002
+        NEXT_PUBLIC_INTENT_URL: http://intent-engine:8001
     container_name: clouddecept-dashboard
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_BACKEND_URL=http://backend-api:8004
-      - NEXT_PUBLIC_COLLECTOR_URL=http://event-collector:8000
-      - NEXT_PUBLIC_THREAT_INTEL_URL=http://threat-intel:8005
-      - NEXT_PUBLIC_ADAPTIVE_URL=http://adaptive-engine:8002
-      - NEXT_PUBLIC_INTENT_URL=http://intent-engine:8001
       - NODE_ENV=production
     depends_on:
       backend-api:

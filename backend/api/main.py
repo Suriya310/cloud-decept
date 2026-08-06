@@ -1,25 +1,24 @@
 # Backend API Service - Provides REST API for dashboard and external consumers.
 # Queries ClickHouse (analytics), PostgreSQL (threat intel), Redis (cache/state).
-"""
-    from __future__ import annotations
+from __future__ import annotations
 
-    import os
-    from contextlib import asynccontextmanager
-    from datetime import datetime, timedelta
-    from typing import Any, Optional
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+from typing import Any, Optional
 
-    import clickhouse_connect
-    import redis.asyncio as redis
-    from fastapi import FastAPI, HTTPException, Query
-    from pydantic import BaseModel, Field, ConfigDict
+import clickhouse_connect
+import redis.asyncio as redis
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field, ConfigDict
 
-    # Database connections
-    clickhouse_client = None
-    postgres_pool = None
-    redis_client = None
+# Database connections
+clickhouse_client = None
+postgres_pool = None
+redis_client = None
 
 
-    async def init_databases():
+async def init_databases():
         """Initialize all database connections"""
         global clickhouse_client, postgres_pool, redis_client
 
@@ -61,7 +60,7 @@
         await init_schemas()
 
 
-    async def init_schemas():
+async def init_schemas():
         """Create database tables if they don't exist. Raises on failure."""
 
         # ClickHouse tables - create with DateTime64(6) for microsecond precision
@@ -201,27 +200,27 @@
         print("PostgreSQL schema initialized")
 
 
-    async def close_databases():
-        """Close all database connections"""
-        global clickhouse_client, postgres_pool, redis_client
+async def close_databases():
+    """Close all database connections"""
+    global clickhouse_client, postgres_pool, redis_client
 
-        if clickhouse_client:
-            clickhouse_client.close()
-        if postgres_pool:
-            postgres_pool.closeall()
-        if redis_client:
-            await redis_client.close()
-
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        await init_databases()
-        yield
-        await close_databases()
+    if clickhouse_client:
+        clickhouse_client.close()
+    if postgres_pool:
+        postgres_pool.closeall()
+    if redis_client:
+        await redis_client.close()
 
 
-    app = FastAPI(
-        title="CloudDecept Backend API",
-        version="1.0.0",
-        lifespan=lifespan,
-    )
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_databases()
+    yield
+    await close_databases()
+
+
+app = FastAPI(
+    title="CloudDecept Backend API",
+    version="1.0.0",
+    lifespan=lifespan,
+)

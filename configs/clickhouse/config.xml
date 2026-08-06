@@ -12,7 +12,6 @@
     <interserver_http_port>9009</interserver_http_port>
     <listen_host>::</listen_host>
     <max_concurrent_queries>100</max_concurrent_queries>
-    <max_concurrent_queries_for_user>50</max_concurrent_queries_for_user>
     <mark_cache_size>134217728</mark_cache_size>
     <uncompressed_cache_size>536870912</uncompressed_cache_size>
     <path>/var/lib/clickhouse/</path>

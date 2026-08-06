@@ -8,6 +8,7 @@
             <!-- CloudDecept: Reduced memory limits for Oracle Free Tier (12GB total) -->
             <max_memory_usage>8000000000</max_memory_usage>
             <max_bytes_before_external_group_by>8000000000</max_bytes_before_external_group_by>
+            <max_concurrent_queries_for_user>50</max_concurrent_queries_for_user>
             <!-- <async_insert>1</async_insert> -->
         </default>
 

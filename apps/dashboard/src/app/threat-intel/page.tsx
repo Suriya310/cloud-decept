@@ -222,7 +222,7 @@ export default function ThreatIntelPage() {
               <h2 className="text-lg font-semibold text-gray-900">Recent Threat Activity</h2>
             </div>
             <div className="p-4 space-y-3 max-h-96 overflow-y-auto">
-              {sessions
+              {sessionsArray
                 .filter((s) => s.threat_score > 0)
                 .sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime())
                 .slice(0, 10)
@@ -266,7 +266,7 @@ export default function ThreatIntelPage() {
                     </div>
                   </Link>
                 ))}
-              {sessions.filter((s) => s.threat_score > 0).length === 0 && (
+              {sessionsArray.filter((s) => s.threat_score > 0).length === 0 && (
                 <div className="text-center py-8 text-gray-500">
                   <Shield className="w-12 h-12 mx-auto mb-4 text-gray-300" />
                   <p>No threat activity detected yet</p>

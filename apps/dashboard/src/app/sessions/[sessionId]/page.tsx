@@ -1,6 +1,6 @@
 'use client';
 
-import { cn, formatTimestamp, getIntentColor, getRiskColor, formatDuration } from '@/lib/utils';
+import { cn, formatTimestamp, getIntentColor, getRiskColor, getSeverityColor, formatDuration } from '@/lib/utils';
 import { useDashboardStore } from '@/lib/store';
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
@@ -242,7 +242,7 @@ export default function SessionDetailPage() {
                             <ChevronDown className="w-5 h-5 text-gray-400" />
                           )}
                         </div>
-                      </div>
+                      </button>
 
                       {expandedCommands.has(cmd.id) && (
                         <div className="border-t border-gray-200 p-4 bg-white">
@@ -267,7 +267,7 @@ export default function SessionDetailPage() {
                                   {cmd.output}
                                 </div>
                                 <button
-                                  onClick={() => copyToClipboard(cmd.output)}
+                                  onClick={() => copyToClipboard(cmd.output ?? '')}
                                   className="mt-2 text-xs text-primary-600 hover:text-primary-700 flex items-center gap-1"
                                 >
                                   <Copy className="w-3 h-3" />

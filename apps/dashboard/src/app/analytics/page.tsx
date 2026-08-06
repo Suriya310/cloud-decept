@@ -138,7 +138,7 @@ export default function AnalyticsPage() {
                       boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
                     }}
                   />
-                  <Bar dataKey="sessions" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarWidth={40} />
+                  <Bar dataKey="sessions" fill="#3b82f6" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -209,7 +209,7 @@ export default function AnalyticsPage() {
                         boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
                       }}
                     />
-                    <Bar dataKey="value" fill="#8b5cf6" radius={[0, 4, 4, 0]} maxBarWidth={30} />
+                    <Bar dataKey="value" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               ) : (

@@ -1,8 +1,8 @@
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-const COLLECTOR_BASE = process.env.NEXT_PUBLIC_COLLECTOR_URL || 'http://localhost:8000';
-const THREAT_INTEL_BASE = process.env.NEXT_PUBLIC_THREAT_INTEL_URL || 'http://localhost:8005';
-const ADAPTIVE_BASE = process.env.NEXT_PUBLIC_ADAPTIVE_URL || 'http://localhost:8002';
-const INTENT_BASE = process.env.NEXT_PUBLIC_INTENT_URL || 'http://localhost:8001';
+const API_BASE = "/api/backend";
+const COLLECTOR_BASE = "/api/collector";
+const THREAT_INTEL_BASE = "/api/threat-intel";
+const ADAPTIVE_BASE = "/api/adaptive";
+const INTENT_BASE = "/api/intent";
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {

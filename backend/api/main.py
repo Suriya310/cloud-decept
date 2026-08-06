@@ -60,6 +60,21 @@ async def init_databases():
 async def init_schemas():
     """Create database tables if they don't exist"""
 
+    # ClickHouse migrations: convert DateTime -> DateTime64(6) for microsecond support
+    ch_migrations = [
+        "ALTER TABLE IF EXISTS sessions MODIFY COLUMN start_time DateTime64(6)",
+        "ALTER TABLE IF EXISTS sessions MODIFY COLUMN end_time DateTime64(6)",
+        "ALTER TABLE IF EXISTS commands MODIFY COLUMN timestamp DateTime64(6)",
+        "ALTER TABLE IF EXISTS auth_attempts MODIFY COLUMN timestamp DateTime64(6)",
+        "ALTER TABLE IF EXISTS cloud_api_requests MODIFY COLUMN timestamp DateTime64(6)",
+    ]
+
+    for migration_sql in ch_migrations:
+        try:
+            clickhouse_client.command(migration_sql)
+        except Exception as e:
+            print(f"Warning: Could not run migration {migration_sql}: {e}")
+
     # ClickHouse tables
     ch_tables = [
         """

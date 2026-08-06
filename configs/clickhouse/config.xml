@@ -15,7 +15,7 @@
     <listen_host>::</listen_host>
     
     <max_concurrent_queries>100</max_concurrent_queries>
-    <max_concurrent_queries_for_user>50</max_concurrent_queries>
+    <max_concurrent_queries_for_user>50</max_concurrent_queries_for_user>
     
     <query_log>
         <database>system</database>

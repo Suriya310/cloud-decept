@@ -9,7 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip check && \
+    python -c "import uvicorn; print('uvicorn version:', uvicorn.__version__)"
 
 # Runtime stage
 FROM python:3.11-slim-bookworm
@@ -23,6 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Verify uvicorn is available in runtime
+RUN python -c "import uvicorn; print('uvicorn version:', uvicorn.__version__)"
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
 

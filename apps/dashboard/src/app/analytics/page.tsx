@@ -74,9 +74,8 @@ export default function AnalyticsPage() {
   const threatColors = { Critical: '#ef4444', High: '#dc2626', Medium: '#f59e0b', Low: '#22c55e' };
 
   return (
-    <div className="lg:ml-64 pt-16 min-h-screen bg-gray-50">
-      <main className="p-6 space-y-6">
-        <div>
+    <main className="p-6 space-y-6">
+      <div>
           <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
           <p className="text-gray-500 mt-1">Session trends, geographic distribution, and attack patterns</p>
         </div>
@@ -323,6 +322,5 @@ export default function AnalyticsPage() {
           </div>
         </div>
       </main>
-    </div>
   );
 }

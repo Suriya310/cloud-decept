@@ -45,13 +45,13 @@ export default function SessionDetailPage() {
 
   if (!selectedSession || selectedSession.session_id !== sessionId) {
     return (
-      <div className="lg:ml-64 pt-16 min-h-screen bg-gray-50 flex items-center justify-center">
+      <main className="p-6 min-h-screen flex items-center justify-center">
         <div className="text-center p-8">
           <AlertTriangle className="w-12 h-12 text-gray-300 mx-auto mb-4" />
           <h2 className="text-xl font-semibold text-gray-900">Loading session...</h2>
           <p className="text-gray-500 mt-2">Fetching session details from backend</p>
         </div>
-      </div>
+      </main>
     );
   }
 
@@ -74,9 +74,8 @@ export default function SessionDetailPage() {
   };
 
   return (
-    <div className="lg:ml-64 pt-16 min-h-screen bg-gray-50">
-      <main className="p-6 space-y-6">
-        <div className="flex items-center gap-4">
+    <main className="p-6 space-y-6">
+      <div className="flex items-center gap-4">
           <Link
             href="/sessions"
             className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
@@ -462,6 +461,5 @@ export default function SessionDetailPage() {
           </div>
         </div>
       </main>
-    </div>
   );
 }

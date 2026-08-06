@@ -389,20 +389,22 @@ async def get_stats(
 ):
     """Get high-level statistics for dashboard"""
     since = datetime.utcnow() - timedelta(hours=hours)
+    since_str = since.strftime('%Y-%m-%d %H:%M:%S')
+    recent_str = (datetime.utcnow() - timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
 
     # Total sessions
     total_sessions = clickhouse_client.command(
-        f"SELECT count() FROM sessions WHERE start_time >= '{since.isoformat()}'"
+        f"SELECT count() FROM sessions WHERE start_time >= '{since_str}'"
     )
 
     # Unique attackers
     unique_attackers = clickhouse_client.command(
-        f"SELECT uniq(attacker_ip) FROM sessions WHERE start_time >= '{since.isoformat()}'"
+        f"SELECT uniq(attacker_ip) FROM sessions WHERE start_time >= '{since_str}'"
     )
 
     # Total commands
     total_commands = clickhouse_client.command(
-        f"SELECT count() FROM commands WHERE timestamp >= '{since.isoformat()}'"
+        f"SELECT count() FROM commands WHERE timestamp >= '{since_str}'"
     )
 
     # Top intents
@@ -410,7 +412,7 @@ async def get_stats(
         f"""
         SELECT intent, count() as cnt
         FROM sessions
-        WHERE start_time >= '{since.isoformat()}' AND intent != ''
+        WHERE start_time >= '{since_str}' AND intent != ''
         GROUP BY intent
         ORDER BY cnt DESC
         LIMIT 10
@@ -422,7 +424,7 @@ async def get_stats(
         f"""
         SELECT country, count() as cnt
         FROM sessions
-        WHERE start_time >= '{since.isoformat()}' AND country != ''
+        WHERE start_time >= '{since_str}' AND country != ''
         GROUP BY country
         ORDER BY cnt DESC
         LIMIT 10
@@ -432,7 +434,7 @@ async def get_stats(
     # Recent sessions (last hour)
     recent_sessions = clickhouse_client.command(
         f"""SELECT count() FROM sessions
-        WHERE start_time >= '{(datetime.utcnow() - timedelta(hours=1)).isoformat()}'"""
+        WHERE start_time >= '{recent_str}'"""
     )
 
     return StatsResponse(
@@ -454,8 +456,9 @@ async def list_sessions(
 ):
     """List recent sessions with filters"""
     since = datetime.utcnow() - timedelta(hours=hours)
+    since_str = since.strftime('%Y-%m-%d %H:%M:%S')
 
-    where_clauses = [f"start_time >= '{since.isoformat()}'"]
+    where_clauses = [f"start_time >= '{since_str}'"]
     if intent:
         where_clauses.append(f"intent = '{intent}'")
 
@@ -645,6 +648,7 @@ async def top_attackers(
 ):
     """Get top attackers by session count"""
     since = datetime.utcnow() - timedelta(hours=hours)
+    since_str = since.strftime('%Y-%m-%d %H:%M:%S')
 
     results = clickhouse_client.query(
         f"""
@@ -652,7 +656,7 @@ async def top_attackers(
                uniq(session_id) as unique_sessions,
                max(start_time) as last_seen
         FROM sessions
-        WHERE start_time >= '{since.isoformat()}'
+        WHERE start_time >= '{since_str}'
         GROUP BY attacker_ip, country
         ORDER BY sessions DESC
         LIMIT {limit}
@@ -669,13 +673,14 @@ async def top_commands(
 ):
     """Get most executed commands"""
     since = datetime.utcnow() - timedelta(hours=hours)
+    since_str = since.strftime('%Y-%m-%d %H:%M:%S')
 
     results = clickhouse_client.query(
         f"""
         SELECT command, count() as executions,
                uniq(session_id) as unique_sessions
         FROM commands
-        WHERE timestamp >= '{since.isoformat()}'
+        WHERE timestamp >= '{since_str}'
         GROUP BY command
         ORDER BY executions DESC
         LIMIT {limit}

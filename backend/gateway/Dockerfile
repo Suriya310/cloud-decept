@@ -31,6 +31,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY backend/gateway/ ./backend/gateway/
 COPY backend/schemas/ ./backend/schemas/
 
+ENV PYTHONPATH=/app
+
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash appuser && \
     chown -R appuser:appuser /app

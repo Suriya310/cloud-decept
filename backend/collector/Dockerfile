@@ -26,6 +26,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY backend/collector/ ./backend/collector/
 COPY backend/schemas/ ./backend/schemas/
 
+ENV PYTHONPATH=/app
+
 RUN useradd --create-home --shell /bin/bash appuser && \
     chown -R appuser:appuser /app
 USER appuser

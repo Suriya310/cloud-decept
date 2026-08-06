@@ -27,8 +27,10 @@ export default function ThreatIntelPage() {
     fetchSessions({ limit: 200 });
   }, [fetchSessions]);
 
-  const allTechniques = sessions.flatMap((s) =>
-    s.intent_history.map((intent, idx) => ({
+  const sessionsArray = sessions ?? [];
+
+  const allTechniques = sessionsArray.flatMap((s) =>
+    (s.intent_history ?? []).map((intent, idx) => ({
       session_id: s.session_id,
       src_ip: s.src_ip,
       intent,
@@ -37,12 +39,12 @@ export default function ThreatIntelPage() {
     }))
   );
 
-  const threatSessions = sessions.filter((s) => s.threat_score > 0);
-  const highThreatSessions = sessions.filter((s) => s.threat_score >= 70);
-  const mediumThreatSessions = sessions.filter((s) => s.threat_score >= 40 && s.threat_score < 70);
-  const lowThreatSessions = sessions.filter((s) => s.threat_score > 0 && s.threat_score < 40);
+  const threatSessions = sessionsArray.filter((s) => (s.threat_score ?? 0) > 0);
+  const highThreatSessions = sessionsArray.filter((s) => (s.threat_score ?? 0) >= 70);
+  const mediumThreatSessions = sessionsArray.filter((s) => (s.threat_score ?? 0) >= 40 && (s.threat_score ?? 0) < 70);
+  const lowThreatSessions = sessionsArray.filter((s) => (s.threat_score ?? 0) > 0 && (s.threat_score ?? 0) < 40);
 
-  const intentCounts = sessions.flatMap((s) => s.intent_history).reduce((acc, intent) => {
+  const intentCounts = sessionsArray.flatMap((s) => s.intent_history ?? []).reduce((acc, intent) => {
     acc[intent] = (acc[intent] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);

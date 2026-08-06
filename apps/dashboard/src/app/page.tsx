@@ -34,18 +34,21 @@ export default function OverviewPage() {
     return unsubscribe;
   }, [fetchStats, fetchSessions, subscribeToEvents]);
 
-  const activeSessions = sessions.filter((s) => s.status === 'active').length;
+  const sessionsArray = sessions ?? [];
+  const realTimeEventsArray = realTimeEvents ?? [];
+
+  const activeSessions = sessionsArray.filter((s) => s.status === 'active').length;
   const totalCommands = stats?.total_commands || 0;
   const uniqueAttackers = stats?.unique_attackers || 0;
   const avgThreatScore =
-    sessions.length > 0
-      ? Math.round(sessions.reduce((acc, s) => acc + s.threat_score, 0) / sessions.length)
+    sessionsArray.length > 0
+      ? Math.round(sessionsArray.reduce((acc, s) => acc + (s.threat_score || 0), 0) / sessionsArray.length)
       : 0;
 
-  const recentSessions = sessions.slice(0, 5);
-  const topIntents = stats?.top_intents || [];
-  const topCountries = stats?.top_countries || [];
-  const threatDistribution = stats?.threat_distribution || [];
+  const recentSessions = sessionsArray.slice(0, 5);
+  const topIntents = stats?.top_intents ?? [];
+  const topCountries = stats?.top_countries ?? [];
+  const threatDistribution = stats?.threat_distribution ?? [];
 
   return (
     <main className="p-6 space-y-6">
@@ -311,7 +314,7 @@ export default function OverviewPage() {
           </button>
         </div>
         <div className="p-4 max-h-96 overflow-y-auto scrollbar-thin">
-          {realTimeEvents.length === 0 ? (
+          {realTimeEventsArray.length === 0 ? (
             <p className="text-center text-gray-500 py-8">
               {isConnected ? 'Waiting for events...' : 'Connect to event stream to see live activity'}
             </p>

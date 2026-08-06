@@ -5,6 +5,7 @@ Produces to: Redis Streams (honeypot:events, honeypot:commands, etc.)
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ from typing import Any, Optional
 import httpx
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict
 
 from backend.schemas.events import (
@@ -334,6 +336,81 @@ async def list_consumer_groups():
         except Exception as e:
             groups[stream] = {"error": str(e)}
     return groups
+
+
+@app.get("/events/stream")
+async def event_stream(
+    request: Request,
+    streams: str = "honeypot:events",
+    last_id: str = "0",
+    limit: int = 100,
+):
+    """
+    Server-Sent Events endpoint for real-time event streaming.
+
+    Query params:
+    - streams: comma-separated list of stream names (default: honeypot:events)
+    - last_id: resume from this message ID (default: "0" for all)
+    - limit: max events per poll (default: 100)
+    """
+    stream_list = [s.strip() for s in streams.split(",") if s.strip()]
+
+    if not stream_list:
+        stream_list = [StreamNames.HONEYPOT_EVENTS]
+
+    async def event_generator():
+        # Send initial connection event
+        yield f"data: {json.dumps({'type': 'connected', 'streams': stream_list})}\n\n"
+
+        # Track last message ID per stream to avoid replaying
+        last_ids = {stream: last_id for stream in stream_list}
+
+        try:
+            while True:
+                # Check if client disconnected
+                if await request.is_disconnected():
+                    logger.debug("Client disconnected from SSE stream")
+                    break
+
+                # Read from all requested streams
+                streams_dict = {stream: last_ids[stream] for stream in stream_list}
+
+                try:
+                    results = await collector.redis.xread(
+                        streams_dict, count=limit, block=5000
+                    )
+
+                    for stream_name, messages in results:
+                        for msg_id, msg_data in messages:
+                            try:
+                                yield f"data: {msg_data['data']}\n\n"
+                            except Exception as e:
+                                logger.error(f"Failed to yield event {msg_id}: {e}")
+                            last_ids[stream_name] = msg_id
+
+                except redis.ResponseError as e:
+                    logger.error(f"Error reading from streams: {e}")
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                    await asyncio.sleep(1)
+
+                # Small delay to prevent tight loop
+                await asyncio.sleep(0.1)
+
+        except asyncio.CancelledError:
+            logger.debug("SSE stream cancelled")
+        except Exception as e:
+            logger.error(f"SSE stream error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )
 
 
 if __name__ == "__main__":

@@ -31,8 +31,10 @@ export default function AnalyticsPage() {
     fetchSessions({ limit: 500 });
   }, [fetchStats, fetchSessions]);
 
+  const sessionsArray = sessions ?? [];
+
   const intentData = Object.entries(
-    sessions.flatMap((s) => s.intent_history).reduce((acc, intent) => {
+    sessionsArray.flatMap((s) => s.intent_history ?? []).reduce((acc, intent) => {
       acc[intent] = (acc[intent] || 0) + 1;
       return acc;
     }, {} as Record<string, number>)
@@ -41,7 +43,7 @@ export default function AnalyticsPage() {
     .map(([name, value], index) => ({ name: name.replace(/_/g, ' '), value, color: COLORS[index % COLORS.length] }));
 
   const countryData = Object.entries(
-    sessions.reduce((acc, s) => {
+    sessionsArray.reduce((acc, s) => {
       if (s.src_country) acc[s.src_country] = (acc[s.src_country] || 0) + 1;
       return acc;
     }, {} as Record<string, number>)
@@ -52,7 +54,7 @@ export default function AnalyticsPage() {
 
   const hourlyData = Array.from({ length: 24 }, (_, i) => {
     const hour = i.toString().padStart(2, '0');
-    const count = sessions.filter((s) => new Date(s.start_time).getHours() === i).length;
+    const count = sessionsArray.filter((s) => new Date(s.start_time).getHours() === i).length;
     return { hour: `${hour}:00`, sessions: count };
   });
 
@@ -60,11 +62,11 @@ export default function AnalyticsPage() {
     const date = new Date();
     date.setDate(date.getDate() - (6 - i));
     const dateStr = date.toISOString().split('T')[0];
-    const count = sessions.filter((s) => s.start_time.startsWith(dateStr)).length;
+    const count = sessionsArray.filter((s) => s.start_time.startsWith(dateStr)).length;
     return { date: format(date, 'MMM d'), sessions: count, dateStr };
   });
 
-  const threatDistribution = stats?.threat_distribution || [
+  const threatDistribution = stats?.threat_distribution ?? [
     { level: 'Critical', count: 0 },
     { level: 'High', count: 0 },
     { level: 'Medium', count: 0 },

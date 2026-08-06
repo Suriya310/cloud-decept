@@ -199,7 +199,7 @@ export default function SessionDetailPage() {
                     <p className="text-gray-500">No commands recorded yet</p>
                   </div>
                 ) : (
-                  commands.map((cmd) => (
+                  (commands ?? []).map((cmd) => (
                     <div
                       key={cmd.id}
                       className={cn(
@@ -279,7 +279,7 @@ export default function SessionDetailPage() {
                             <div className="mt-4">
                               <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">MITRE ATT&CK Techniques</p>
                               <div className="flex flex-wrap gap-2">
-                                {cmd.mitre_techniques.map((tech: string) => (
+                                {(cmd.mitre_techniques ?? []).map((tech: string) => (
                                   <span key={tech} className="px-2 py-1 text-xs bg-blue-50 text-blue-700 rounded font-mono">
                                     {tech}
                                   </span>
@@ -339,7 +339,7 @@ export default function SessionDetailPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {threatIntel.iocs.map((ioc, index) => (
+                          {(threatIntel.iocs ?? []).map((ioc, index) => (
                             <tr key={index}>
                               <td>
                                 <span className="badge bg-blue-100 text-blue-800">{ioc.type}</span>
@@ -379,7 +379,7 @@ export default function SessionDetailPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {threatIntel.techniques.map((tech, index) => (
+                          {(threatIntel.techniques ?? []).map((tech, index) => (
                             <tr key={index}>
                               <td className="font-mono text-sm">{tech.technique_id}</td>
                               <td className="font-medium text-gray-900">{tech.name}</td>
@@ -415,7 +415,7 @@ export default function SessionDetailPage() {
                       Defensive Recommendations
                     </h3>
                     <ul className="space-y-2">
-                      {threatIntel.summary.defensive_recommendations.map((rec, index) => (
+                      {(threatIntel.summary.defensive_recommendations ?? []).map((rec, index) => (
                         <li key={index} className="text-sm text-green-700 flex items-start gap-2">
                           <span className="text-green-500">→</span>
                           {rec}

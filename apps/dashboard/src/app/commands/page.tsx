@@ -34,9 +34,12 @@ export default function CommandsPage() {
     }
   }, [selectedSessionId, fetchSessionCommands]);
 
-  const sessionOptions = sessions.filter((s) => s.command_count > 0);
+  const sessionsArray = sessions ?? [];
+  const commandsArray = commands ?? [];
 
-  const filteredCommands = commands.filter((cmd) => {
+  const sessionOptions = sessionsArray.filter((s) => s.command_count > 0);
+
+  const filteredCommands = commandsArray.filter((cmd) => {
     const matchesSearch =
       cmd.command.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (cmd.output?.toLowerCase() ?? '').includes(searchQuery.toLowerCase());
@@ -72,7 +75,7 @@ export default function CommandsPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Commands</h1>
             <p className="text-gray-500 mt-1">
-              {commands.length} commands across {sessionOptions.length} sessions
+              {commandsArray.length} commands across {sessionOptions.length} sessions
             </p>
           </div>
           <div className="flex items-center gap-3 w-full sm:w-auto">

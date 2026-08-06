@@ -37,7 +37,9 @@ export default function SessionsPage() {
     fetchSessions({ status: filters.status, limit: 100 });
   }, [fetchSessions, filters.status]);
 
-  const filteredSessions = sessions.filter((session) => {
+  const sessionsArray = sessions ?? [];
+
+  const filteredSessions = sessionsArray.filter((session) => {
     const matchesSearch =
       session.session_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
       session.src_ip.includes(searchQuery) ||
@@ -46,7 +48,7 @@ export default function SessionsPage() {
 
     const matchesIntent =
       filters.intent === 'all' ||
-      session.intent_history.some((i) => i.toLowerCase() === filters.intent.toLowerCase());
+      (session.intent_history ?? []).some((i) => i.toLowerCase() === filters.intent.toLowerCase());
 
     const matchesCountry =
       filters.country === 'all' || session.src_country === filters.country;
@@ -61,10 +63,10 @@ export default function SessionsPage() {
   );
 
   const uniqueIntents = [
-    ...new Set(sessions.flatMap((s) => s.intent_history)),
+    ...new Set(sessionsArray.flatMap((s) => s.intent_history ?? [])),
   ].filter(Boolean);
   const uniqueCountries = [
-    ...new Set(sessions.map((s) => s.src_country).filter(Boolean)),
+    ...new Set(sessionsArray.map((s) => s.src_country).filter(Boolean)),
   ];
 
   const handleRowClick = (session: any) => {
@@ -78,7 +80,7 @@ export default function SessionsPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Sessions</h1>
           <p className="text-gray-500 mt-1">
-            {sessions.length} total sessions · {sessions.filter((s) => s.status === 'active').length} active
+            {sessionsArray.length} total sessions · {sessionsArray.filter((s) => s.status === 'active').length} active
           </p>
         </div>
         <div className="flex items-center gap-3">

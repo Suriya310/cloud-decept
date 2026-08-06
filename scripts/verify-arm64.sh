@@ -22,7 +22,7 @@ IMAGES=(
     "postgres:postgres:16-alpine"
     "redis:redis:7-alpine"
     "ollama:ollama/ollama:latest"
-    "cowrie-ssh:cowrie/cowrie:latest"
+    "cowrie-ssh:local build (configs/cowrie/cowrie)"
     "cloud-api-mock:local build (cloud-api-mock)"
     "intent-engine:local build (intent-engine)"
     "adaptive-engine:local build (adaptive-engine)"
@@ -36,7 +36,6 @@ ARM64_IMAGES=(
     "postgres:16-alpine"
     "redis:7-alpine"
     "ollama/ollama:latest"
-    "cowrie/cowrie:latest"
     "node:20-alpine"
     "python:3.11-slim"
 )
@@ -156,7 +155,10 @@ main() {
     check_local_build "adaptive-engine" "Dockerfile" "services/adaptive-engine" && ((passed++)) || ((failed++))
     check_local_build "threat-intel" "Dockerfile" "services/threat-intel" && ((passed++)) || ((failed++))
     check_local_build "dashboard" "Dockerfile" "apps/dashboard" && ((passed++)) || ((failed++))
-    check_local_build "cowrie-ssh" "Dockerfile" "configs/cowrie" && ((passed++)) || ((failed++))
+    check_local_build "cowrie-ssh" "Dockerfile" "configs/cowrie/cowrie" && ((passed++)) || ((failed++))
+    check_local_build "event-collector" "Dockerfile" "backend/collector" && ((passed++)) || ((failed++))
+    check_local_build "backend-api" "Dockerfile" "backend/api" && ((passed++)) || ((failed++))
+    check_local_build "llm-gateway" "Dockerfile" "backend/gateway" && ((passed++)) || ((failed++))
 
     # Summary
     echo ""

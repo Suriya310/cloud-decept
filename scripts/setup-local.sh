@@ -61,7 +61,6 @@ pull_images() {
     docker pull postgres:16-alpine
     docker pull redis:7-alpine
     docker pull ollama/ollama:latest
-    docker pull cowrie/cowrie:latest
     docker pull node:20-alpine
     docker pull python:3.11-slim
 

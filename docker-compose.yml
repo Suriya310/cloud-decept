@@ -348,11 +348,22 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://backend-api:8004
-      - NEXT_PUBLIC_WS_URL=ws://backend-api:8004
+      - NEXT_PUBLIC_BACKEND_URL=http://backend-api:8004
+      - NEXT_PUBLIC_COLLECTOR_URL=http://event-collector:8000
+      - NEXT_PUBLIC_THREAT_INTEL_URL=http://threat-intel:8005
+      - NEXT_PUBLIC_ADAPTIVE_URL=http://adaptive-engine:8002
+      - NEXT_PUBLIC_INTENT_URL=http://intent-engine:8001
       - NODE_ENV=production
     depends_on:
       backend-api:
+        condition: service_healthy
+      event-collector:
+        condition: service_healthy
+      threat-intel:
+        condition: service_healthy
+      adaptive-engine:
+        condition: service_healthy
+      intent-engine:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000"]

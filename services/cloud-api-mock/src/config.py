@@ -23,9 +23,9 @@ class Settings(BaseSettings):
 
     CLICKHOUSE_HOST: str = "clickhouse"
     CLICKHOUSE_PORT: int = 9000
-    CLICKHOUSE_DB: str = "deception"
-    CLICKHOUSE_USER: str = "deception"
-    CLICKHOUSE_PASSWORD: str = "deception123"
+    CLICKHOUSE_DB: str = "clouddecept"
+    CLICKHOUSE_USER: str = "default"
+    CLICKHOUSE_PASSWORD: str = "changeme"
 
     # Deception profiles
     DEFAULT_ORG_PROFILE: str = "tech-startup-aws"

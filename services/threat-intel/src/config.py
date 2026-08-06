@@ -22,15 +22,15 @@ class Settings(BaseSettings):
     # Databases
     CLICKHOUSE_HOST: str = "clickhouse"
     CLICKHOUSE_PORT: int = 9000
-    CLICKHOUSE_DB: str = "deception"
-    CLICKHOUSE_USER: str = "deception"
-    CLICKHOUSE_PASSWORD: str = "deception123"
+    CLICKHOUSE_DB: str = "clouddecept"
+    CLICKHOUSE_USER: str = "default"
+    CLICKHOUSE_PASSWORD: str = "changeme"
 
     POSTGRES_HOST: str = "postgres"
     POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "deception"
-    POSTGRES_USER: str = "deception"
-    POSTGRES_PASSWORD: str = "deception123"
+    POSTGRES_DB: str = "clouddecept"
+    POSTGRES_USER: str = "clouddecept"
+    POSTGRES_PASSWORD: str = "changeme"
 
     # Event Collector
     EVENT_COLLECTOR_URL: str = "http://event-collector:8000"

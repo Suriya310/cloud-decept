@@ -65,8 +65,8 @@ async def init_schemas():
         """
         CREATE TABLE IF NOT EXISTS sessions (
             session_id String,
-            start_time DateTime,
-            end_time DateTime,
+            start_time DateTime64(6),
+            end_time DateTime64(6),
             duration_seconds UInt32,
             attacker_ip String,
             country String,
@@ -86,7 +86,7 @@ async def init_schemas():
         CREATE TABLE IF NOT EXISTS commands (
             event_id String,
             session_id String,
-            timestamp DateTime,
+            timestamp DateTime64(6),
             command String,
             arguments Array(String),
             output String,
@@ -102,7 +102,7 @@ async def init_schemas():
         CREATE TABLE IF NOT EXISTS auth_attempts (
             event_id String,
             session_id String,
-            timestamp DateTime,
+            timestamp DateTime64(6),
             username String,
             password String,
             success UInt8,
@@ -115,7 +115,7 @@ async def init_schemas():
         CREATE TABLE IF NOT EXISTS cloud_api_requests (
             event_id String,
             session_id String,
-            timestamp DateTime,
+            timestamp DateTime64(6),
             cloud_provider String,
             http_method String,
             endpoint String,

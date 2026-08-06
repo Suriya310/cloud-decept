@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies globally (without --user)
-COPY requirements.txt .
+COPY backend/gateway/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Runtime stage
@@ -28,7 +28,8 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application
-COPY . .
+COPY backend/gateway/ ./backend/gateway/
+COPY backend/schemas/ ./backend/schemas/
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash appuser && \
@@ -41,4 +42,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 
 EXPOSE 8003
 
+WORKDIR /app/backend/gateway
 CMD ["python", "main.py"]

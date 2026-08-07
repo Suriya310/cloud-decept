@@ -279,6 +279,15 @@ class EventCollector:
         if not self.clickhouse_client or not events:
             return
 
+        def parse_dt(value: Any) -> datetime:
+            """Parse ISO datetime string to datetime object"""
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, str):
+                # Handle ISO format with Z or without
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return datetime.utcnow()
+
         # Group events by stream/type
         sessions = []
         commands = []
@@ -296,7 +305,7 @@ class EventCollector:
                     # SessionStartEvent
                     sessions.append((
                         payload.get("session_id", ""),
-                        payload.get("timestamp", datetime.utcnow().isoformat()),
+                        parse_dt(payload.get("timestamp", datetime.utcnow())),
                         None,  # end_time
                         0,     # duration_seconds
                         payload.get("client_ip", payload.get("attacker_ip", "")),
@@ -318,7 +327,7 @@ class EventCollector:
                     commands.append((
                         payload.get("event_id", str(uuid.uuid4())),
                         payload.get("session_id", ""),
-                        payload.get("timestamp", datetime.utcnow().isoformat()),
+                        parse_dt(payload.get("timestamp", datetime.utcnow())),
                         payload.get("command", ""),
                         payload.get("arguments", []),
                         payload.get("output", ""),
@@ -331,7 +340,7 @@ class EventCollector:
                     auth_attempts.append((
                         payload.get("event_id", str(uuid.uuid4())),
                         payload.get("session_id", ""),
-                        payload.get("timestamp", datetime.utcnow().isoformat()),
+                        parse_dt(payload.get("timestamp", datetime.utcnow())),
                         payload.get("username", ""),
                         payload.get("password", ""),
                         1 if payload.get("success", False) else 0,
@@ -341,7 +350,7 @@ class EventCollector:
                     cloud_api.append((
                         payload.get("event_id", str(uuid.uuid4())),
                         payload.get("session_id", ""),
-                        payload.get("timestamp", datetime.utcnow().isoformat()),
+                        parse_dt(payload.get("timestamp", datetime.utcnow())),
                         payload.get("cloud_provider", ""),
                         payload.get("http_method", ""),
                         payload.get("endpoint", ""),

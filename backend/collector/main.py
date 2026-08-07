@@ -2,6 +2,7 @@
 Event Collector Service - Normalizes events from all sources into Redis Streams.
 Consumes from: Cowrie (SSH/Telnet), Cloud API Mock, Internal services
 Produces to: Redis Streams (honeypot:events, honeypot:commands, etc.)
+Also consumes from Redis Streams and writes to ClickHouse for analytics.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Optional
 
+import clickhouse_connect
 import httpx
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException, Request
@@ -42,24 +44,36 @@ logger = logging.getLogger("event-collector")
 
 
 class EventCollector:
-    """Main event collector managing Redis Streams"""
+    """Main event collector managing Redis Streams and ClickHouse sync"""
 
     def __init__(self):
         self.redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
         self.redis: Optional[redis.Redis] = None
         self.running = False
+        self.consumer_task: Optional[asyncio.Task] = None
+
+        # ClickHouse configuration
+        self.clickhouse_host = os.getenv("CLICKHOUSE_HOST", "clickhouse")
+        self.clickhouse_port = int(os.getenv("CLICKHOUSE_PORT", "8123"))
+        self.clickhouse_user = os.getenv("CLICKHOUSE_USER", "default")
+        self.clickhouse_password = os.getenv("CLICKHOUSE_PASSWORD", "")
+        self.clickhouse_db = os.getenv("CLICKHOUSE_DB", "clouddecept")
+        self.clickhouse_client = None
 
     async def initialize(self):
-        """Initialize Redis connection"""
+        """Initialize Redis and ClickHouse connections"""
+        # Redis
         self.redis = redis.from_url(
             self.redis_url,
             encoding="utf-8",
             decode_responses=True,
             max_connections=20,
         )
-        # Test connection
         await self.redis.ping()
         logger.info("Redis connection established")
+
+        # ClickHouse
+        await self._init_clickhouse()
 
         # Create consumer groups
         await self._create_consumer_groups()
@@ -86,9 +100,21 @@ class EventCollector:
                     logger.warning(f"Could not create group for {stream}: {e}")
 
     async def close(self):
-        """Close Redis connection"""
+        """Close Redis and ClickHouse connections"""
+        self.running = False
+
+        # Cancel consumer task
+        if self.consumer_task:
+            self.consumer_task.cancel()
+            try:
+                await self.consumer_task
+            except asyncio.CancelledError:
+                pass
+
         if self.redis:
             await self.redis.close()
+        if self.clickhouse_client:
+            self.clickhouse_client.close()
 
     async def publish_event(self, event: BaseEvent) -> str:
         """Publish event to appropriate Redis Stream"""
@@ -159,6 +185,269 @@ class EventCollector:
             logger.error(f"Error consuming from {stream}: {e}")
             return []
 
+    async def _init_clickhouse(self):
+        """Initialize ClickHouse connection and create tables if needed"""
+        try:
+            self.clickhouse_client = clickhouse_connect.get_client(
+                host=self.clickhouse_host,
+                port=self.clickhouse_port,
+                username=self.clickhouse_user,
+                password=self.clickhouse_password,
+            )
+            # Create database if not exists
+            self.clickhouse_client.command(f"CREATE DATABASE IF NOT EXISTS {self.clickhouse_db}")
+            self.clickhouse_client.command(f"USE {self.clickhouse_db}")
+            logger.info(f"ClickHouse connected to database '{self.clickhouse_db}'")
+
+            # Create tables with DateTime64(6) to match backend-api schema
+            tables = [
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id String,
+                    start_time DateTime64(6),
+                    end_time DateTime64(6),
+                    duration_seconds UInt32,
+                    attacker_ip String,
+                    country String,
+                    asn String,
+                    protocol String,
+                    commands_executed UInt32,
+                    files_transferred UInt32,
+                    credentials_tried UInt32,
+                    intent String,
+                    skill_level UInt8,
+                    disconnection_reason String
+                ) ENGINE = MergeTree() ORDER BY (start_time, session_id)
+                PARTITION BY toYYYYMM(start_time)
+                TTL start_time + INTERVAL 90 DAY
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS commands (
+                    event_id String,
+                    session_id String,
+                    timestamp DateTime64(6),
+                    command String,
+                    arguments Array(String),
+                    output String,
+                    exit_code Int32,
+                    duration_ms UInt32,
+                    intent String,
+                    mitre_techniques Array(String)
+                ) ENGINE = MergeTree() ORDER BY (timestamp, session_id)
+                PARTITION BY toYYYYMM(timestamp)
+                TTL timestamp + INTERVAL 90 DAY
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS auth_attempts (
+                    event_id String,
+                    session_id String,
+                    timestamp DateTime64(6),
+                    username String,
+                    password String,
+                    success UInt8,
+                    auth_method String
+                ) ENGINE = MergeTree() ORDER BY (timestamp, session_id)
+                PARTITION BY toYYYYMM(timestamp)
+                TTL timestamp + INTERVAL 90 DAY
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS cloud_api_requests (
+                    event_id String,
+                    session_id String,
+                    timestamp DateTime64(6),
+                    cloud_provider String,
+                    http_method String,
+                    endpoint String,
+                    path String,
+                    response_status UInt16,
+                    duration_ms UInt32
+                ) ENGINE = MergeTree() ORDER BY (timestamp, session_id)
+                PARTITION BY toYYYYMM(timestamp)
+                TTL timestamp + INTERVAL 90 DAY
+                """,
+            ]
+            for table_sql in tables:
+                self.clickhouse_client.command(table_sql)
+            logger.info("ClickHouse tables verified/created")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize ClickHouse: {e}")
+            raise
+
+    async def _write_events_to_clickhouse(self, events: list[dict]):
+        """Write parsed events to ClickHouse tables"""
+        if not self.clickhouse_client or not events:
+            return
+
+        # Group events by stream/type
+        sessions = []
+        commands = []
+        auth_attempts = []
+        cloud_api = []
+
+        for ev in events:
+            data = ev.get("data", {})
+            payload = data.get("payload", {})
+            event_type = data.get("event_type", "")
+            stream = ev.get("stream", "")
+
+            try:
+                if event_type == "session_start" or stream == StreamNames.SESSION_EVENTS:
+                    # SessionStartEvent
+                    sessions.append((
+                        payload.get("session_id", ""),
+                        payload.get("timestamp", datetime.utcnow().isoformat()),
+                        None,  # end_time
+                        0,     # duration_seconds
+                        payload.get("client_ip", payload.get("attacker_ip", "")),
+                        payload.get("country", ""),
+                        payload.get("asn", ""),
+                        payload.get("protocol", "ssh"),
+                        0,  # commands_executed
+                        0,  # files_transferred
+                        0,  # credentials_tried
+                        "", # intent
+                        0,  # skill_level
+                        "", # disconnection_reason
+                    ))
+                elif event_type == "session_end" or stream == StreamNames.SESSION_EVENTS:
+                    # SessionEndEvent - we'd need to update existing session, for now skip
+                    # Could implement upsert logic later
+                    pass
+                elif event_type == "command" or stream == StreamNames.COMMAND_EVENTS:
+                    commands.append((
+                        payload.get("event_id", str(uuid.uuid4())),
+                        payload.get("session_id", ""),
+                        payload.get("timestamp", datetime.utcnow().isoformat()),
+                        payload.get("command", ""),
+                        payload.get("arguments", []),
+                        payload.get("output", ""),
+                        payload.get("exit_code", 0),
+                        payload.get("duration_ms", 0),
+                        payload.get("intent", ""),
+                        payload.get("mitre_techniques", []),
+                    ))
+                elif event_type == "auth" or stream == StreamNames.AUTH_EVENTS:
+                    auth_attempts.append((
+                        payload.get("event_id", str(uuid.uuid4())),
+                        payload.get("session_id", ""),
+                        payload.get("timestamp", datetime.utcnow().isoformat()),
+                        payload.get("username", ""),
+                        payload.get("password", ""),
+                        1 if payload.get("success", False) else 0,
+                        payload.get("auth_method", "password"),
+                    ))
+                elif event_type == "cloud_api" or stream == StreamNames.CLOUD_API_EVENTS:
+                    cloud_api.append((
+                        payload.get("event_id", str(uuid.uuid4())),
+                        payload.get("session_id", ""),
+                        payload.get("timestamp", datetime.utcnow().isoformat()),
+                        payload.get("cloud_provider", ""),
+                        payload.get("http_method", ""),
+                        payload.get("endpoint", ""),
+                        payload.get("path", ""),
+                        payload.get("response_status", 0),
+                        payload.get("duration_ms", 0),
+                    ))
+            except Exception as e:
+                logger.error(f"Failed to prepare event for ClickHouse: {e}")
+
+        # Batch insert
+        try:
+            if sessions:
+                self.clickhouse_client.insert(
+                    "sessions",
+                    sessions,
+                    column_names=[
+                        "session_id", "start_time", "end_time", "duration_seconds",
+                        "attacker_ip", "country", "asn", "protocol",
+                        "commands_executed", "files_transferred", "credentials_tried",
+                        "intent", "skill_level", "disconnection_reason"
+                    ]
+                )
+                logger.debug(f"Inserted {len(sessions)} sessions to ClickHouse")
+
+            if commands:
+                self.clickhouse_client.insert(
+                    "commands",
+                    commands,
+                    column_names=[
+                        "event_id", "session_id", "timestamp", "command",
+                        "arguments", "output", "exit_code", "duration_ms",
+                        "intent", "mitre_techniques"
+                    ]
+                )
+                logger.debug(f"Inserted {len(commands)} commands to ClickHouse")
+
+            if auth_attempts:
+                self.clickhouse_client.insert(
+                    "auth_attempts",
+                    auth_attempts,
+                    column_names=[
+                        "event_id", "session_id", "timestamp", "username",
+                        "password", "success", "auth_method"
+                    ]
+                )
+                logger.debug(f"Inserted {len(auth_attempts)} auth attempts to ClickHouse")
+
+            if cloud_api:
+                self.clickhouse_client.insert(
+                    "cloud_api_requests",
+                    cloud_api,
+                    column_names=[
+                        "event_id", "session_id", "timestamp", "cloud_provider",
+                        "http_method", "endpoint", "path", "response_status",
+                        "duration_ms"
+                    ]
+                )
+                logger.debug(f"Inserted {len(cloud_api)} cloud API requests to ClickHouse")
+
+        except Exception as e:
+            logger.error(f"Failed to insert events to ClickHouse: {e}")
+
+    async def _consumer_loop(self):
+        """Background task that consumes from Redis streams and writes to ClickHouse"""
+        logger.info("Starting ClickHouse consumer loop")
+        self.running = True
+
+        # Streams to consume from with their consumer group
+        streams_to_consume = [
+            (StreamNames.SESSION_EVENTS, "sessions"),
+            (StreamNames.COMMAND_EVENTS, "commands"),
+            (StreamNames.AUTH_EVENTS, "auth"),
+            (StreamNames.CLOUD_API_EVENTS, "cloud_api"),
+        ]
+
+        consumer_name = f"clickhouse-writer-{uuid.uuid4().hex[:8]}"
+
+        while self.running:
+            try:
+                all_events = []
+                for stream, _ in streams_to_consume:
+                    events = await self.consume_events(
+                        stream=stream,
+                        group=ConsumerGroups.EVENT_COLLECTOR,
+                        consumer=consumer_name,
+                        count=50,
+                        block_ms=2000,
+                    )
+                    all_events.extend(events)
+
+                if all_events:
+                    await self._write_events_to_clickhouse(all_events)
+                    logger.info(f"Processed {len(all_events)} events to ClickHouse")
+
+                await asyncio.sleep(1)  # Small delay between batches
+
+            except asyncio.CancelledError:
+                logger.info("Consumer loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in consumer loop: {e}")
+                await asyncio.sleep(5)  # Back off on error
+
+        logger.info("Consumer loop stopped")
+
 
 # --- FastAPI Application ---
 
@@ -169,7 +458,13 @@ collector = EventCollector()
 async def lifespan(app: FastAPI):
     # Startup
     await collector.initialize()
+
+    # Start ClickHouse consumer task
+    collector.consumer_task = asyncio.create_task(collector._consumer_loop())
+    logger.info("ClickHouse consumer task started")
+
     yield
+
     # Shutdown
     await collector.close()
 
@@ -203,11 +498,27 @@ class IngestResponse(BaseModel):
 
 @app.get("/health")
 async def health():
+    checks = {"redis": "unknown", "clickhouse": "unknown"}
+
+    # Check Redis
     try:
         await collector.redis.ping()
-        return {"status": "healthy", "redis": "connected"}
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Redis unavailable: {e}")
+        checks["redis"] = "healthy"
+    except Exception:
+        checks["redis"] = "unhealthy"
+
+    # Check ClickHouse
+    try:
+        if collector.clickhouse_client:
+            collector.clickhouse_client.command("SELECT 1")
+            checks["clickhouse"] = "healthy"
+        else:
+            checks["clickhouse"] = "not_initialized"
+    except Exception:
+        checks["clickhouse"] = "unhealthy"
+
+    overall = "healthy" if all(v == "healthy" for v in checks.values()) else "degraded"
+    return {"status": overall, **checks}
 
 
 @app.post("/ingest", response_model=IngestResponse)

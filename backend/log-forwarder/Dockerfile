@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir \
     pyyaml==6.0.1
 
 # Copy forwarder script
-COPY --chown=root:root forwarder.py /app/forwarder.py
+COPY --chown=root:root backend/log-forwarder/forwarder.py /app/forwarder.py
 
 USER root
 

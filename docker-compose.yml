@@ -88,8 +88,15 @@ services:
       - REDIS_URL=redis://redis:6379
       - REDIS_STREAM_MAXLEN=10000
       - LOG_LEVEL=INFO
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DB=clouddecept
     depends_on:
       redis:
+        condition: service_healthy
+      clickhouse:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -318,8 +325,8 @@ services:
 
   log-forwarder:
     build:
-      context: ./backend/log-forwarder
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/log-forwarder/Dockerfile
     container_name: clouddecept-log-forwarder
     restart: unless-stopped
     environment:

@@ -303,10 +303,11 @@ class EventCollector:
             try:
                 if event_type == "session_start" or stream == StreamNames.SESSION_EVENTS:
                     # SessionStartEvent
+                    start_time = parse_dt(payload.get("timestamp", datetime.utcnow()))
                     sessions.append((
                         payload.get("session_id", ""),
-                        parse_dt(payload.get("timestamp", datetime.utcnow())),
-                        None,  # end_time
+                        start_time,
+                        start_time,  # end_time placeholder (updated on session_end)
                         0,     # duration_seconds
                         payload.get("client_ip", payload.get("attacker_ip", "")),
                         payload.get("country", ""),

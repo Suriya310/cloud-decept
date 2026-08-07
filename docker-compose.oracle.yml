@@ -396,6 +396,7 @@ services:
     volumes:
       - cowrie_tty:/cowrie/tty
       - cowrie_dl:/cowrie/dl
+      - cowrie_logs:/cowrie/var/log/cowrie
     depends_on:
       redis:
         condition: service_healthy
@@ -412,6 +413,37 @@ services:
         reservations:
           cpus: "0.25"
           memory: 256M
+    networks:
+      - clouddecept-network
+
+  log-forwarder:
+    build:
+      context: ./backend/log-forwarder
+      dockerfile: Dockerfile
+    container_name: clouddecept-log-forwarder
+    restart: unless-stopped
+    environment:
+      - COWRIE_LOG_PATH=/cowrie/var/log/cowrie/cowrie.json
+      - EVENT_COLLECTOR_URL=http://event-collector:8000
+      - BATCH_SIZE=10
+      - BATCH_TIMEOUT=1.0
+      - FORWARDER_SOURCE=cowrie_ssh
+    volumes:
+      - cowrie_logs:/cowrie/var/log/cowrie:ro
+    depends_on:
+      event-collector:
+        condition: service_healthy
+      cowrie-ssh:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+          memswap_limit: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
     networks:
       - clouddecept-network
 
@@ -500,6 +532,7 @@ volumes:
   ollama_data:
   cowrie_tty:
   cowrie_dl:
+  cowrie_logs:
 
 networks:
   clouddecept-network:

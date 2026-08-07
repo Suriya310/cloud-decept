@@ -97,6 +97,7 @@ class EventCollector:
 
         # Determine stream based on event type
         stream_name = self._get_stream_for_event(event)
+        logger.debug(f"Event {event.event_id} type={event.__class__.__name__} -> stream={stream_name}")
         envelope = EventEnvelope(
             event_type=event.__class__.__name__.replace("Event", "").lower(),
             payload=event,
@@ -109,7 +110,7 @@ class EventCollector:
 
         # Publish to stream
         msg_id = await self.redis.xadd(stream_name, {"data": event_data})
-        logger.debug(f"Published event {event.event_id} to {stream_name} ({msg_id})")
+        logger.info(f"XADD success: stream={stream_name} msg_id={msg_id} event_id={event.event_id}")
         return msg_id
 
     def _get_stream_for_event(self, event: BaseEvent) -> str:
@@ -212,6 +213,7 @@ async def health():
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest_event(request: IngestRequest):
     """Ingest event from external source (Cowrie, Cloud API Mock, etc.)"""
+    logger.info(f"Received single ingest: source={request.source}, type={request.event_type}, session={request.session_id}")
     try:
         event = _create_event_from_request(request)
         msg_id = await collector.publish_event(event)
@@ -223,7 +225,7 @@ async def ingest_event(request: IngestRequest):
             success=True,
         )
     except Exception as e:
-        logger.error(f"Failed to ingest event: {e}")
+        logger.error(f"Failed to ingest event: {e}", exc_info=True)
         return IngestResponse(
             event_id="",
             stream="",
@@ -236,11 +238,15 @@ async def ingest_event(request: IngestRequest):
 @app.post("/ingest/batch", response_model=list[IngestResponse])
 async def ingest_batch(requests: list[IngestRequest]):
     """Ingest multiple events at once"""
+    logger.info(f"Received batch ingest: {len(requests)} events")
     results = []
-    for req in requests:
+    for i, req in enumerate(requests):
         try:
+            logger.debug(f"Processing event {i}: source={req.source}, type={req.event_type}, session={req.session_id}")
             event = _create_event_from_request(req)
+            logger.debug(f"Created event: {event.__class__.__name__}, event_id={event.event_id}")
             msg_id = await collector.publish_event(event)
+            logger.info(f"Published event {event.event_id} to stream (msg_id={msg_id})")
             results.append(IngestResponse(
                 event_id=event.event_id,
                 stream=collector._get_stream_for_event(event),
@@ -248,6 +254,7 @@ async def ingest_batch(requests: list[IngestRequest]):
                 success=True,
             ))
         except Exception as e:
+            logger.error(f"Failed to ingest event {i}: {e}", exc_info=True)
             results.append(IngestResponse(
                 event_id="",
                 stream="",
@@ -255,11 +262,14 @@ async def ingest_batch(requests: list[IngestRequest]):
                 success=False,
                 error=str(e),
             ))
+    success_count = sum(1 for r in results if r.success)
+    logger.info(f"Batch complete: {success_count}/{len(requests)} succeeded")
     return results
 
 
 def _create_event_from_request(request: IngestRequest) -> BaseEvent:
     """Create appropriate event object from ingest request"""
+    logger.debug(f"_create_event_from_request: event_type={request.event_type}, payload_keys={list(request.payload.keys())}")
     base_kwargs = {
         "source": request.source,
         "session_id": request.session_id,
@@ -284,7 +294,10 @@ def _create_event_from_request(request: IngestRequest) -> BaseEvent:
 
     # Merge base kwargs with payload
     kwargs = {**base_kwargs, **request.payload}
-    return event_class(**kwargs)
+    logger.debug(f"Creating {event_class.__name__} with kwargs: {list(kwargs.keys())}")
+    event = event_class(**kwargs)
+    logger.debug(f"Created event: {event.__class__.__name__} event_id={event.event_id}")
+    return event
 
 
 @app.get("/streams")

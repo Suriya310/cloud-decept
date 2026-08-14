@@ -42,7 +42,7 @@ export default function SessionsPage() {
   const filteredSessions = sessionsArray.filter((session) => {
     const matchesSearch =
       session.session_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      session.src_ip.includes(searchQuery) ||
+      (session.src_ip ?? session.attacker_ip ?? '').includes(searchQuery) ||
       (session.src_country?.toLowerCase() ?? '').includes(searchQuery.toLowerCase()) ||
       (session.username?.toLowerCase() ?? '').includes(searchQuery.toLowerCase());
 
@@ -206,7 +206,7 @@ export default function SessionsPage() {
                     </td>
                     <td>
                       <div className="flex flex-wrap gap-1">
-                        {session.intent_history.slice(0, 3).map((intent) => (
+                        {(session.intent_history ?? []).slice(0, 3).map((intent) => (
                           <span
                             key={intent}
                             className={cn('badge text-xs', getIntentColor(intent))}
@@ -214,9 +214,9 @@ export default function SessionsPage() {
                             {intent.replace(/_/g, ' ')}
                           </span>
                         ))}
-                        {session.intent_history.length > 3 && (
+                        {(session.intent_history ?? []).length > 3 && (
                           <span className="badge bg-gray-100 text-gray-600 text-xs">
-                            +{session.intent_history.length - 3}
+                            +{(session.intent_history ?? []).length - 3}
                           </span>
                         )}
                       </div>
@@ -229,12 +229,12 @@ export default function SessionsPage() {
                       <span
                         className={cn(
                           'badge font-mono',
-                          session.threat_score >= 70 ? 'bg-red-100 text-red-800' :
-                          session.threat_score >= 40 ? 'bg-yellow-100 text-yellow-800' :
+                          (session.threat_score ?? 0) >= 70 ? 'bg-red-100 text-red-800' :
+                          (session.threat_score ?? 0) >= 40 ? 'bg-yellow-100 text-yellow-800' :
                           'bg-green-100 text-green-800'
                         )}
                       >
-                        {session.threat_score}/100
+                        {(session.threat_score ?? 0)}/100
                       </span>
                     </td>
                     <td>

@@ -184,22 +184,22 @@ export default function ThreatIntelPage() {
                       </td>
                       <td>
                         <div className="flex flex-wrap gap-1">
-                          {session.intent_history.slice(0, 2).map((intent) => (
+                          {(session.intent_history ?? []).slice(0, 2).map((intent) => (
                             <span key={intent} className={cn('badge text-xs', getIntentColor(intent))}>
                               {intent.replace(/_/g, ' ')}
                             </span>
                           ))}
-                          {session.intent_history.length > 2 && (
+                          {(session.intent_history ?? []).length > 2 && (
                             <span className="badge bg-gray-100 text-gray-600 text-xs">
-                              +{session.intent_history.length - 2}
+                              +{(session.intent_history ?? []).length - 2}
                             </span>
                           )}
                         </div>
                       </td>
-                      <td>{session.command_count}</td>
+                      <td>{session.command_count ?? 0}</td>
                       <td>
                         <span className={cn('badge font-mono bg-red-100 text-red-800')}>
-                          {session.threat_score}/100
+                          {(session.threat_score ?? 0)}/100
                         </span>
                       </td>
                       <td className="text-sm text-gray-500">{formatTimestamp(session.start_time)}</td>
@@ -223,7 +223,7 @@ export default function ThreatIntelPage() {
             </div>
             <div className="p-4 space-y-3 max-h-96 overflow-y-auto">
               {sessionsArray
-                .filter((s) => s.threat_score > 0)
+                .filter((s) => (s.threat_score ?? 0) > 0)
                 .sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime())
                 .slice(0, 10)
                 .map((session) => (
@@ -236,15 +236,15 @@ export default function ThreatIntelPage() {
                       <div
                         className={cn(
                           'w-10 h-10 rounded-lg flex items-center justify-center',
-                          session.threat_score >= 70 ? 'bg-red-100' :
-                          session.threat_score >= 40 ? 'bg-yellow-100' : 'bg-green-100'
+                          (session.threat_score ?? 0) >= 70 ? 'bg-red-100' :
+                          (session.threat_score ?? 0) >= 40 ? 'bg-yellow-100' : 'bg-green-100'
                         )}
                       >
                         <AlertTriangle
                           className={cn(
                             'w-5 h-5',
-                            session.threat_score >= 70 ? 'text-red-600' :
-                            session.threat_score >= 40 ? 'text-yellow-600' : 'text-green-600'
+                            (session.threat_score ?? 0) >= 70 ? 'text-red-600' :
+                            (session.threat_score ?? 0) >= 40 ? 'text-yellow-600' : 'text-green-600'
                           )}
                         />
                       </div>
@@ -257,16 +257,16 @@ export default function ThreatIntelPage() {
                     </div>
                     <div className="text-right">
                       <span className={cn('badge font-mono', getSeverityColor(
-                        session.threat_score >= 70 ? 'critical' :
-                        session.threat_score >= 40 ? 'high' : 'low'
+                        (session.threat_score ?? 0) >= 70 ? 'critical' :
+                        (session.threat_score ?? 0) >= 40 ? 'high' : 'low'
                       ))}>
-                        {session.threat_score}/100
+                        {(session.threat_score ?? 0)}/100
                       </span>
                       <p className="text-xs text-gray-500 mt-1">{formatTimestamp(session.start_time)}</p>
                     </div>
                   </Link>
                 ))}
-              {sessionsArray.filter((s) => s.threat_score > 0).length === 0 && (
+              {sessionsArray.filter((s) => (s.threat_score ?? 0) > 0).length === 0 && (
                 <div className="text-center py-8 text-gray-500">
                   <Shield className="w-12 h-12 mx-auto mb-4 text-gray-300" />
                   <p>No threat activity detected yet</p>

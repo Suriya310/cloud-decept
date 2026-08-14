@@ -1,18 +1,30 @@
 export interface Session {
   session_id: string;
-  src_ip: string;
-  src_country?: string;
+  attacker_ip: string;
+  country?: string;
   start_time: string;
   end_time?: string;
   duration_seconds?: number;
   username?: string;
   password?: string;
   auth_success: boolean;
-  status: 'active' | 'closed';
-  command_count: number;
-  intent_history: string[];
-  threat_score: number;
-  tactics: string[];
+  protocol?: string;
+  commands_executed: number;
+  files_transferred?: number;
+  credentials_tried?: number;
+  intent?: string;
+  skill_level?: number;
+  asn?: string;
+  disconnection_reason?: string;
+
+  // Computed/derived fields for UI compatibility
+  src_ip?: string;
+  src_country?: string;
+  command_count?: number;
+  intent_history?: string[];
+  threat_score?: number;
+  tactics?: string[];
+  status?: 'active' | 'closed';
 }
 
 export interface Command {
@@ -94,6 +106,7 @@ export interface Stats {
   top_countries: { country: string; count: number }[];
   recent_sessions: Session[];
   threat_distribution: { level: string; count: number }[];
+  sessions_per_hour?: { hour: string; count: number }[];
 }
 
 export interface RealTimeEvent {

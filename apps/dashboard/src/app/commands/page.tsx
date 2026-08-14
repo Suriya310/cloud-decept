@@ -37,7 +37,7 @@ export default function CommandsPage() {
   const sessionsArray = sessions ?? [];
   const commandsArray = commands ?? [];
 
-  const sessionOptions = sessionsArray.filter((s) => s.command_count > 0);
+  const sessionOptions = sessionsArray.filter((s) => (s.command_count ?? 0) > 0);
 
   const filteredCommands = commandsArray.filter((cmd) => {
     const matchesSearch =
@@ -69,8 +69,7 @@ export default function CommandsPage() {
   };
 
   return (
-    <div className="lg:ml-64 pt-16 min-h-screen bg-gray-50">
-      <main className="p-6 space-y-6">
+    <main className="p-6 space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Commands</h1>
@@ -286,6 +285,5 @@ export default function CommandsPage() {
           )}
         </div>
       </main>
-    </div>
   );
 }

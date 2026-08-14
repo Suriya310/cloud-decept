@@ -8,12 +8,7 @@ export function Header() {
   const { isConnected, fetchStats } = useDashboardStore();
 
   return (
-    <header
-      className={cn(
-        'fixed top-0 right-0 z-30 h-16 bg-white border-b border-gray-200 flex items-center px-4 transition-all duration-300',
-        'lg:ml-64'
-      )}
-    >
+    <header className={cn('fixed top-0 right-0 z-30 h-16 bg-white border-b border-gray-200 flex items-center px-4 transition-all duration-300 w-full')}>
       <div className="flex-1 flex items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <div className="relative">

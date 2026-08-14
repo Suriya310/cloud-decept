@@ -161,17 +161,17 @@ export default function OverviewPage() {
                           {session.status}
                         </span>
                       </td>
-                      <td>{session.command_count}</td>
+                      <td>{session.command_count ?? 0}</td>
                       <td>
                         <span
                           className={cn(
                             'badge',
-                            session.threat_score >= 70 ? 'bg-red-100 text-red-800' :
-                            session.threat_score >= 40 ? 'bg-yellow-100 text-yellow-800' :
+                            (session.threat_score ?? 0) >= 70 ? 'bg-red-100 text-red-800' :
+                            (session.threat_score ?? 0) >= 40 ? 'bg-yellow-100 text-yellow-800' :
                             'bg-green-100 text-green-800'
                           )}
                         >
-                          {session.threat_score}/100
+                          {(session.threat_score ?? 0)}/100
                         </span>
                       </td>
                       <td>

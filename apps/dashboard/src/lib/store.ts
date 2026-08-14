@@ -33,6 +33,21 @@ const defaultFilters = {
   dateRange: [undefined, undefined] as [Date | undefined, Date | undefined],
 };
 
+// Transform backend session data to include UI-compatible fields
+function transformSession(s: any): Session {
+  return {
+    ...s,
+    // Map backend fields to UI-expected fields
+    src_ip: s.attacker_ip,
+    src_country: s.country,
+    command_count: s.commands_executed,
+    intent_history: s.intent ? [s.intent] : [],
+    threat_score: s.skill_level ? Math.min(s.skill_level * 10, 100) : 0,
+    tactics: [],
+    status: s.end_time ? 'closed' : 'active',
+  };
+}
+
 export const useDashboardStore = create<DashboardState & DashboardActions>((set, get) => ({
   // State
   sessions: [],
@@ -48,7 +63,8 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   fetchSessions: async (params) => {
     try {
       const data = await api.getSessions(params);
-      set({ sessions: data.sessions });
+      const transformed = (data.sessions || []).map(transformSession);
+      set({ sessions: transformed });
     } catch (error) {
       console.error('Failed to fetch sessions:', error);
       set({ sessions: [] });
@@ -58,7 +74,7 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   fetchSession: async (sessionId) => {
     try {
       const session = await api.getSession(sessionId);
-      set({ selectedSession: session });
+      set({ selectedSession: transformSession(session) });
     } catch (error) {
       console.error('Failed to fetch session:', error);
       set({ selectedSession: null });

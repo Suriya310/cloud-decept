@@ -91,22 +91,22 @@ export default function SessionDetailPage() {
             <span
               className={cn(
                 'px-3 py-1 rounded-full text-sm font-medium',
-                session.status === 'active'
+                (session.status ?? 'closed') === 'active'
                   ? 'bg-green-100 text-green-800 animate-pulse'
                   : 'bg-gray-100 text-gray-800'
               )}
             >
-              {session.status.toUpperCase()}
+              {(session.status ?? 'closed').toUpperCase()}
             </span>
             <span
               className={cn(
                 'px-3 py-1 rounded-full text-sm font-mono',
-                session.threat_score >= 70 ? 'bg-red-100 text-red-800' :
-                session.threat_score >= 40 ? 'bg-yellow-100 text-yellow-800' :
+                (session.threat_score ?? 0) >= 70 ? 'bg-red-100 text-red-800' :
+                (session.threat_score ?? 0) >= 40 ? 'bg-yellow-100 text-yellow-800' :
                 'bg-green-100 text-green-800'
               )}
             >
-              Threat: {session.threat_score}/100
+              Threat: {(session.threat_score ?? 0)}/100
             </span>
           </div>
         </div>

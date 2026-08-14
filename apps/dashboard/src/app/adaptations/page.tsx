@@ -40,7 +40,7 @@ export default function AdaptationsPage() {
   const sessionsArray = sessions ?? [];
 
   const mockAdaptations = sessionsArray.flatMap((session) =>
-    session.intent_history.map((intent, idx) => ({
+    (session.intent_history ?? []).map((intent, idx) => ({
       id: `adapt-${session.session_id}-${idx}`,
       session_id: session.session_id,
       timestamp: new Date(new Date(session.start_time).getTime() + idx * 30000).toISOString(),

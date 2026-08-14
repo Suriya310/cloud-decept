@@ -108,3 +108,40 @@
     background-color: theme('colors.gray.400');
   }
 }
+
+/* Additional color utilities for components */
+@layer utilities {
+  .bg-orange-100 { background-color: #ffedd5; }
+  .text-orange-800 { color: #9a3412; }
+  .bg-orange-500 { background-color: #f97316; }
+
+  .bg-pink-100 { background-color: #fce7f3; }
+  .text-pink-800 { color: #9d174d; }
+
+  .bg-indigo-100 { background-color: #e0e7ff; }
+  .text-indigo-800 { color: #3730a3; }
+
+  .bg-green-100 { background-color: #dcfce7; }
+  .text-green-800 { color: #166534; }
+  .bg-green-500 { background-color: #22c55e; }
+
+  .bg-blue-100 { background-color: #dbeafe; }
+  .text-blue-800 { color: #1e40af; }
+  .bg-blue-500 { background-color: #3b82f6; }
+
+  .bg-purple-100 { background-color: #f3e8ff; }
+  .text-purple-800 { color: #6b21a8; }
+  .bg-purple-500 { background-color: #8b5cf6; }
+
+  .bg-yellow-100 { background-color: #fef3c7; }
+  .text-yellow-800 { color: #92400e; }
+  .bg-yellow-500 { background-color: #f59e0b; }
+
+  .bg-red-100 { background-color: #fee2e2; }
+  .text-red-800 { color: #991b1b; }
+  .bg-red-500 { background-color: #ef4444; }
+
+  .bg-gray-100 { background-color: #f3f4f6; }
+  .text-gray-800 { color: #1f2937; }
+  .bg-gray-500 { background-color: #9ca3af; }
+}

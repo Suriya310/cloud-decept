@@ -297,12 +297,25 @@ class SessionSummaryDetail(BaseModel):
 
 
 class StatsResponse(BaseModel):
+    # All-time totals (no time filter)
     total_sessions: int
-    unique_attackers: int
     total_commands: int
+    unique_attackers: int
+
+    # Recent window (default 24h)
+    recent_sessions: int
+    recent_commands: int
+    recent_unique_attackers: int
+
+    # Active sessions (no end_time)
+    active_sessions: int
+
+    # Aggregated data for charts
     top_intents: list[dict]
     top_countries: list[dict]
-    recent_sessions: int
+    threat_distribution: list[dict]
+    sessions_per_hour: list[dict]
+    commands_per_day: list[dict]
 
 
 class HealthResponse(BaseModel):
@@ -356,65 +369,151 @@ async def health():
 
 @app.get("/stats", response_model=StatsResponse)
 async def get_stats(
-    hours: int = Query(24, ge=1, le=168),
+    hours: int = Query(24, ge=1, le=87600),  # Allow up to 10 years for "all time"
 ):
     """Get high-level statistics for dashboard"""
-    since = datetime.utcnow() - timedelta(hours=hours)
+    now = datetime.utcnow()
+    since = now - timedelta(hours=hours)
     since_str = since.strftime('%Y-%m-%d %H:%M:%S')
-    recent_str = (datetime.utcnow() - timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
+    recent_str = (now - timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
+    day_ago_str = (now - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+    week_ago_str = (now - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
 
-    # Total sessions
-    total_sessions = clickhouse_client.command(
+    # ============================================================
+    # ALL-TIME TOTALS (no time filter) - primary fields
+    # ============================================================
+    total_sessions = clickhouse_client.command("SELECT count() FROM sessions")
+    total_commands = clickhouse_client.command("SELECT count() FROM commands")
+    unique_attackers = clickhouse_client.command("SELECT uniq(attacker_ip) FROM sessions")
+
+    # ============================================================
+    # RECENT WINDOW STATS (respects hours parameter)
+    # ============================================================
+    recent_sessions = clickhouse_client.command(
         f"SELECT count() FROM sessions WHERE start_time >= '{since_str}'"
     )
-
-    # Unique attackers
-    unique_attackers = clickhouse_client.command(
+    recent_commands = clickhouse_client.command(
+        f"SELECT count() FROM commands WHERE timestamp >= '{since_str}'"
+    )
+    recent_unique_attackers = clickhouse_client.command(
         f"SELECT uniq(attacker_ip) FROM sessions WHERE start_time >= '{since_str}'"
     )
 
-    # Total commands
-    total_commands = clickhouse_client.command(
-        f"SELECT count() FROM commands WHERE timestamp >= '{since_str}'"
+    # ============================================================
+    # ACTIVE SESSIONS (no end_time)
+    # ============================================================
+    active_sessions = clickhouse_client.command(
+        "SELECT count() FROM sessions WHERE end_time = '1970-01-01 00:00:00' OR end_time IS NULL OR end_time = ''"
     )
 
-    # Top intents
+    # ============================================================
+    # TOP INTENTS (all-time)
+    # ============================================================
     top_intents = clickhouse_client.query(
-        f"""
+        """
         SELECT intent, count() as cnt
         FROM sessions
-        WHERE start_time >= '{since_str}' AND intent != ''
+        WHERE intent != '' AND intent IS NOT NULL
         GROUP BY intent
         ORDER BY cnt DESC
         LIMIT 10
         """
     ).named_results()
 
-    # Top countries
+    # ============================================================
+    # TOP COUNTRIES (all-time)
+    # ============================================================
     top_countries = clickhouse_client.query(
-        f"""
+        """
         SELECT country, count() as cnt
         FROM sessions
-        WHERE start_time >= '{since_str}' AND country != ''
+        WHERE country != '' AND country IS NOT NULL
         GROUP BY country
         ORDER BY cnt DESC
         LIMIT 10
         """
     ).named_results()
 
-    # Recent sessions (last hour)
-    recent_sessions = clickhouse_client.command(
-        f"""SELECT count() FROM sessions
-        WHERE start_time >= '{recent_str}'"""
-    )
+    # ============================================================
+    # THREAT DISTRIBUTION (based on skill_level)
+    # ============================================================
+    # skill_level: 1-10, map to threat levels
+    # 1-2: Low, 3-4: Medium, 5-7: High, 8-10: Critical
+    threat_dist = clickhouse_client.query(
+        """
+        SELECT
+            sum(if(skill_level >= 8, 1, 0)) as critical,
+            sum(if(skill_level >= 5 AND skill_level < 8, 1, 0)) as high,
+            sum(if(skill_level >= 3 AND skill_level < 5, 1, 0)) as medium,
+            sum(if(skill_level < 3 AND skill_level > 0, 1, 0)) as low
+        FROM sessions
+        WHERE skill_level IS NOT NULL
+        """
+    ).named_results()
+
+    threat_distribution = []
+    if threat_dist:
+        row = threat_dist[0]
+        threat_distribution = [
+            {"level": "Critical", "count": row["critical"] or 0},
+            {"level": "High", "count": row["high"] or 0},
+            {"level": "Medium", "count": row["medium"] or 0},
+            {"level": "Low", "count": row["low"] or 0},
+        ]
+
+    # ============================================================
+    # SESSIONS PER HOUR (last 24 hours)
+    # ============================================================
+    sessions_per_hour = clickhouse_client.query(
+        f"""
+        SELECT
+            toStartOfHour(start_time) as hour,
+            count() as cnt
+        FROM sessions
+        WHERE start_time >= '{day_ago_str}'
+        GROUP BY hour
+        ORDER BY hour
+        """
+    ).named_results()
+
+    sessions_per_hour_formatted = [
+        {"hour": r["hour"][-8:-3] if isinstance(r["hour"], str) else str(r["hour"])[-5:], "count": r["cnt"]}
+        for r in sessions_per_hour
+    ]
+
+    # ============================================================
+    # COMMANDS PER DAY (last 7 days)
+    # ============================================================
+    commands_per_day = clickhouse_client.query(
+        f"""
+        SELECT
+            toDate(timestamp) as day,
+            count() as cnt
+        FROM commands
+        WHERE timestamp >= '{week_ago_str}'
+        GROUP BY day
+        ORDER BY day
+        """
+    ).named_results()
+
+    commands_per_day_formatted = [
+        {"date": r["day"][:10] if isinstance(r["day"], str) else str(r["day"])[:10], "count": r["cnt"]}
+        for r in commands_per_day
+    ]
 
     return StatsResponse(
         total_sessions=total_sessions,
-        unique_attackers=unique_attackers,
         total_commands=total_commands,
+        unique_attackers=unique_attackers,
+        recent_sessions=recent_sessions,
+        recent_commands=recent_commands,
+        recent_unique_attackers=recent_unique_attackers,
+        active_sessions=active_sessions,
         top_intents=[{"intent": r["intent"], "count": r["cnt"]} for r in top_intents],
         top_countries=[{"country": r["country"], "count": r["cnt"]} for r in top_countries],
-        recent_sessions=recent_sessions,
+        threat_distribution=threat_distribution,
+        sessions_per_hour=sessions_per_hour_formatted,
+        commands_per_day=commands_per_day_formatted,
     )
 
 

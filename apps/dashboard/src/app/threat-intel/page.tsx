@@ -18,14 +18,15 @@ import {
 import Link from 'next/link';
 
 export default function ThreatIntelPage() {
-  const { sessions, fetchSessions, stats } = useDashboardStore();
+  const { sessions, fetchSessions, stats, connectionStatus, fetchConnectionStatus } = useDashboardStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSeverity, setSelectedSeverity] = useState('all');
   const [viewMode, setViewMode] = useState<'overview' | 'iocs' | 'techniques'>('overview');
 
   useEffect(() => {
     fetchSessions({ limit: 200 });
-  }, [fetchSessions]);
+    fetchConnectionStatus();
+  }, [fetchSessions, fetchConnectionStatus]);
 
   const sessionsArray = sessions ?? [];
 
@@ -48,6 +49,13 @@ export default function ThreatIntelPage() {
     acc[intent] = (acc[intent] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
+
+  // Connection status
+  const isApiHealthy = connectionStatus?.connected ?? false;
+  const apiStatus = connectionStatus?.status ?? 'unknown';
+  const clickhouseStatus = connectionStatus?.clickhouse ?? 'unknown';
+  const postgresStatus = connectionStatus?.postgres ?? 'unknown';
+  const redisStatus = connectionStatus?.redis ?? 'unknown';
 
   return (
     <main className="p-6 space-y-6">
@@ -78,6 +86,36 @@ export default function ThreatIntelPage() {
               <option value="medium">Medium</option>
               <option value="low">Low</option>
             </select>
+          </div>
+        </div>
+
+        {/* Connection status bar */}
+        <div className="card p-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4 text-sm">
+              <span className={cn('flex items-center gap-1.5', isApiHealthy ? 'text-green-600' : 'text-red-600')}>
+                <span className={cn('w-2 h-2 rounded-full', isApiHealthy ? 'bg-green-500' : 'bg-red-500')} />
+                API: {apiStatus}
+              </span>
+              <span className={cn('flex items-center gap-1.5', clickhouseStatus === 'healthy' ? 'text-green-600' : 'text-red-600')}>
+                <span className={cn('w-2 h-2 rounded-full', clickhouseStatus === 'healthy' ? 'bg-green-500' : 'bg-red-500')} />
+                CH: {clickhouseStatus}
+              </span>
+              <span className={cn('flex items-center gap-1.5', postgresStatus === 'healthy' ? 'text-green-600' : 'text-red-600')}>
+                <span className={cn('w-2 h-2 rounded-full', postgresStatus === 'healthy' ? 'bg-green-500' : 'bg-red-500')} />
+                PG: {postgresStatus}
+              </span>
+              <span className={cn('flex items-center gap-1.5', redisStatus === 'healthy' ? 'text-green-600' : 'text-red-600')}>
+                <span className={cn('w-2 h-2 rounded-full', redisStatus === 'healthy' ? 'bg-green-500' : 'bg-red-500')} />
+                RD: {redisStatus}
+              </span>
+            </div>
+            <button
+              onClick={() => fetchConnectionStatus()}
+              className="text-xs text-primary-600 hover:text-primary-700"
+            >
+              Refresh
+            </button>
           </div>
         </div>
 
@@ -176,7 +214,7 @@ export default function ThreatIntelPage() {
                       <td>
                         <div className="flex items-center gap-2">
                           <MapPin className="w-3 h-3 text-gray-400" />
-                          <span>{session.src_ip}</span>
+                          <span>{session.src_ip ?? session.attacker_ip ?? 'unknown'}</span>
                           {session.src_country && (
                             <span className="text-xs text-gray-500">({session.src_country})</span>
                           )}
@@ -252,7 +290,7 @@ export default function ThreatIntelPage() {
                         <p className="font-medium text-gray-900 text-sm">
                           {session.session_id.slice(0, 12)}...
                         </p>
-                        <p className="text-xs text-gray-500">{session.src_ip}</p>
+                        <p className="text-xs text-gray-500">{session.src_ip ?? session.attacker_ip ?? 'unknown'}</p>
                       </div>
                     </div>
                     <div className="text-right">

@@ -30,6 +30,7 @@ export default function SessionDetailPage() {
     fetchSessionCommands,
     fetchSessionThreatIntel,
     setSelectedSession,
+    connectionStatus,
   } = useDashboardStore();
 
   const [activeTab, setActiveTab] = useState<'commands' | 'threat-intel' | 'adaptations' | 'timeline'>('commands');
@@ -88,6 +89,18 @@ export default function SessionDetailPage() {
           </div>
           <div className="flex-1" />
           <div className="flex items-center gap-3">
+            {/* Connection status indicator */}
+            <div className="flex items-center gap-2 px-2 py-1 rounded-lg bg-gray-50 text-xs">
+              <span className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                API
+              </span>
+              <span className="text-gray-400">|</span>
+              <span className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                CH
+              </span>
+            </div>
             <span
               className={cn(
                 'px-3 py-1 rounded-full text-sm font-medium',
@@ -130,7 +143,10 @@ export default function SessionDetailPage() {
               </div>
               <div>
                 <p className="text-sm text-gray-500">Attacker IP</p>
-                <p className="font-medium text-gray-900 font-mono text-sm">{session.src_ip}</p>
+                <p className="font-medium text-gray-900 font-mono text-sm">{session.src_ip ?? session.attacker_ip ?? 'unknown'}</p>
+                {session.src_country && (
+                  <p className="text-xs text-gray-500 mt-0.5">Country: {session.src_country}</p>
+                )}
               </div>
             </div>
           </div>

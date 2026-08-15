@@ -13,6 +13,10 @@ import {
   Clock,
   Shield,
   TrendingUp,
+  Database,
+  Wifi,
+  WifiOff,
+  Server,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -20,35 +24,44 @@ export default function OverviewPage() {
   const {
     stats,
     fetchStats,
+    fetchAllTimeStats,
     sessions,
     fetchSessions,
-    isConnected,
+    connectionStatus,
+    fetchConnectionStatus,
     subscribeToEvents,
     realTimeEvents,
   } = useDashboardStore();
 
   useEffect(() => {
-    fetchStats();
+    // Fetch all-time stats for accurate totals
+    fetchAllTimeStats();
     fetchSessions({ limit: 10 });
+    fetchConnectionStatus();
     const unsubscribe = subscribeToEvents();
     return unsubscribe;
-  }, [fetchStats, fetchSessions, subscribeToEvents]);
+  }, [fetchStats, fetchAllTimeStats, fetchSessions, fetchConnectionStatus, subscribeToEvents]);
 
   const sessionsArray = sessions ?? [];
   const realTimeEventsArray = realTimeEvents ?? [];
 
-  const activeSessions = sessionsArray.filter((s) => s.status === 'active').length;
-  const totalCommands = stats?.total_commands || 0;
-  const uniqueAttackers = stats?.unique_attackers || 0;
-  const avgThreatScore =
-    sessionsArray.length > 0
-      ? Math.round(sessionsArray.reduce((acc, s) => acc + (s.threat_score || 0), 0) / sessionsArray.length)
-      : 0;
+  // Use authoritative backend stats - all-time totals
+  const totalSessions = stats?.total_sessions ?? 0;
+  const activeSessions = stats?.active_sessions ?? 0;
+  const totalCommands = stats?.total_commands ?? 0;
+  const uniqueAttackers = stats?.unique_attackers ?? 0;
+  const recentSessionsCount = stats?.recent_sessions ?? 0;
 
   const recentSessions = sessionsArray.slice(0, 5);
   const topIntents = stats?.top_intents ?? [];
   const topCountries = stats?.top_countries ?? [];
   const threatDistribution = stats?.threat_distribution ?? [];
+
+  // Connection status - use detailed status
+  const isApiHealthy = connectionStatus?.connected ?? false;
+  const clickhouseStatus = connectionStatus?.clickhouse ?? 'unknown';
+  const postgresStatus = connectionStatus?.postgres ?? 'unknown';
+  const redisStatus = connectionStatus?.redis ?? 'unknown';
 
   return (
     <main className="p-6 space-y-6">
@@ -57,53 +70,108 @@ export default function OverviewPage() {
           <h1 className="text-2xl font-bold text-gray-900">Dashboard Overview</h1>
           <p className="text-gray-500 mt-1">Real-time monitoring of adaptive cloud honeypot activity</p>
         </div>
-        <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              'px-2 py-1 rounded-full text-xs font-medium',
-              isConnected ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-            )}
+        <div className="flex items-center gap-3">
+          {/* Connection status with detailed breakdown */}
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                'px-2 py-1 rounded-full text-xs font-medium',
+                isApiHealthy ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+              )}
+            >
+              {isApiHealthy ? '● API Connected' : '○ API Offline'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Connection health indicators */}
+      <div className="card p-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-gray-900">System Health</h2>
+          <button
+            onClick={() => fetchConnectionStatus()}
+            className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
           >
-            {isConnected ? '● Live' : '○ Offline'}
-          </span>
+            <Server className="w-4 h-4" />
+            Refresh
+          </button>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mt-3">
+          <div className={cn('p-3 rounded-lg flex items-center gap-3', isApiHealthy ? 'bg-green-50' : 'bg-red-50')}>
+            <div className={cn('w-8 h-8 rounded-full flex items-center justify-center', isApiHealthy ? 'bg-green-100' : 'bg-red-100')}>
+              <Server className={cn('w-4 h-4', isApiHealthy ? 'text-green-600' : 'text-red-600')} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-900">API Gateway</p>
+              <p className="text-xs text-gray-500">{isApiHealthy ? 'Healthy' : 'Offline'}</p>
+            </div>
+          </div>
+          <div className={cn('p-3 rounded-lg flex items-center gap-3', clickhouseStatus === 'healthy' ? 'bg-green-50' : 'bg-red-50')}>
+            <div className={cn('w-8 h-8 rounded-full flex items-center justify-center', clickhouseStatus === 'healthy' ? 'bg-green-100' : 'bg-red-100')}>
+              <Database className={cn('w-4 h-4', clickhouseStatus === 'healthy' ? 'text-green-600' : 'text-red-600')} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-900">ClickHouse</p>
+              <p className="text-xs text-gray-500 capitalize">{clickhouseStatus}</p>
+            </div>
+          </div>
+          <div className={cn('p-3 rounded-lg flex items-center gap-3', postgresStatus === 'healthy' ? 'bg-green-50' : 'bg-red-50')}>
+            <div className={cn('w-8 h-8 rounded-full flex items-center justify-center', postgresStatus === 'healthy' ? 'bg-green-100' : 'bg-red-100')}>
+              <Database className={cn('w-4 h-4', postgresStatus === 'healthy' ? 'text-green-600' : 'text-red-600')} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-900">PostgreSQL</p>
+              <p className="text-xs text-gray-500 capitalize">{postgresStatus}</p>
+            </div>
+          </div>
+          <div className={cn('p-3 rounded-lg flex items-center gap-3', redisStatus === 'healthy' ? 'bg-green-50' : 'bg-red-50')}>
+            <div className={cn('w-8 h-8 rounded-full flex items-center justify-center', redisStatus === 'healthy' ? 'bg-green-100' : 'bg-red-100')}>
+              {redisStatus === 'healthy' ? <Wifi className="w-4 h-4 text-green-600" /> : <WifiOff className="w-4 h-4 text-red-600" />}
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-900">Redis</p>
+              <p className="text-xs text-gray-500 capitalize">{redisStatus}</p>
+            </div>
+          </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title="Active Sessions"
-          value={activeSessions}
-          change={stats ? Math.round((activeSessions / Math.max(stats.total_sessions, 1)) * 100) : 0}
+          title="Total Sessions (All-Time)"
+          value={totalSessions.toLocaleString()}
+          change={recentSessionsCount > 0 ? Math.round((recentSessionsCount / Math.max(totalSessions, 1)) * 100) : 0}
           icon={<Activity className="w-6 h-6" />}
           iconBg="bg-primary-100"
           iconColor="text-primary-600"
           trend="up"
         />
         <StatCard
-          title="Total Commands"
+          title="Active Sessions"
+          value={activeSessions.toLocaleString()}
+          change={totalSessions > 0 ? Math.round((activeSessions / totalSessions) * 100) : 0}
+          icon={<Shield className="w-6 h-6" />}
+          iconBg="bg-green-100"
+          iconColor="text-green-600"
+          trend={activeSessions > 0 ? "up" : "neutral"}
+        />
+        <StatCard
+          title="Total Commands (All-Time)"
           value={totalCommands.toLocaleString()}
-          change={12}
+          change={stats?.recent_commands && stats?.total_commands ? Math.round((stats.recent_commands / Math.max(stats.total_commands, 1)) * 100) : 0}
           icon={<Terminal className="w-6 h-6" />}
           iconBg="bg-blue-100"
           iconColor="text-blue-600"
           trend="up"
         />
         <StatCard
-          title="Unique Attackers"
-          value={uniqueAttackers}
-          change={-5}
+          title="Unique Attackers (All-Time)"
+          value={uniqueAttackers.toLocaleString()}
+          change={stats?.recent_unique_attackers && stats?.unique_attackers ? Math.round((stats.recent_unique_attackers / Math.max(stats.unique_attackers, 1)) * 100) : 0}
           icon={<Users className="w-6 h-6" />}
           iconBg="bg-purple-100"
           iconColor="text-purple-600"
-          trend="down"
-        />
-        <StatCard
-          title="Avg Threat Score"
-          value={avgThreatScore}
-          change={8}
-          icon={<AlertTriangle className="w-6 h-6" />}
-          iconBg="bg-red-100"
-          iconColor="text-red-600"
           trend="up"
         />
       </div>
@@ -143,7 +211,7 @@ export default function OverviewPage() {
                       <td>
                         <div className="flex items-center gap-2">
                           <MapPin className="w-3 h-3 text-gray-400" />
-                          <span>{session.src_ip}</span>
+                          <span>{session.src_ip ?? session.attacker_ip ?? 'unknown'}</span>
                           {session.src_country && (
                             <span className="text-xs text-gray-500">({session.src_country})</span>
                           )}
@@ -158,7 +226,7 @@ export default function OverviewPage() {
                               : 'bg-gray-100 text-gray-800'
                           )}
                         >
-                          {session.status}
+                          {session.status ?? 'unknown'}
                         </span>
                       </td>
                       <td>{session.command_count ?? 0}</td>
@@ -193,7 +261,7 @@ export default function OverviewPage() {
 
         <div className="card">
           <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">Top Attack Intents</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Top Attack Intents (All-Time)</h2>
             <Link href="/threat-intel" className="text-sm text-primary-600 hover:text-primary-700">
               View all
             </Link>
@@ -223,7 +291,7 @@ export default function OverviewPage() {
                       />
                     </div>
                     <span className="text-sm font-medium text-gray-900 w-12 text-right">
-                      {item.count}
+                      {item.count.toLocaleString()}
                     </span>
                   </div>
                 </div>
@@ -236,7 +304,7 @@ export default function OverviewPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="card lg:col-span-2">
           <div className="p-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">Geographic Distribution</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Geographic Distribution (All-Time)</h2>
           </div>
           <div className="p-4 space-y-3">
             {topCountries.length === 0 ? (
@@ -256,7 +324,7 @@ export default function OverviewPage() {
                       />
                     </div>
                     <span className="text-sm font-medium text-gray-900 w-12 text-right">
-                      {country.count}
+                      {country.count.toLocaleString()}
                     </span>
                   </div>
                 </div>
@@ -267,10 +335,10 @@ export default function OverviewPage() {
 
         <div className="card">
           <div className="p-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">Threat Level Distribution</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Threat Level Distribution (All-Time)</h2>
           </div>
           <div className="p-4 space-y-3">
-            {threatDistribution.length === 0 ? (
+            {threatDistribution.length === 0 || threatDistribution.every(t => t.count === 0) ? (
               <p className="text-center text-gray-500 py-8">No threat data available</p>
             ) : (
               threatDistribution.map((item) => (
@@ -285,15 +353,15 @@ export default function OverviewPage() {
                       <div
                         className="h-full rounded-full transition-all"
                         style={{
-                          width: `${(item.count / (threatDistribution[0]?.count || 1)) * 100}%`,
-                          backgroundColor: item.level === 'critical' ? '#ef4444' :
-                                           item.level === 'high' ? '#dc2626' :
-                                           item.level === 'medium' ? '#f59e0b' : '#22c55e'
+                          width: `${(item.count / (threatDistribution.find(t => t.count > 0)?.count || 1)) * 100}%`,
+                          backgroundColor: item.level === 'Critical' ? '#ef4444' :
+                                           item.level === 'High' ? '#dc2626' :
+                                           item.level === 'Medium' ? '#f59e0b' : '#22c55e'
                         }}
                       />
                     </div>
                     <span className="text-sm font-medium text-gray-900 w-12 text-right">
-                      {item.count}
+                      {item.count.toLocaleString()}
                     </span>
                   </div>
                 </div>
@@ -316,7 +384,7 @@ export default function OverviewPage() {
         <div className="p-4 max-h-96 overflow-y-auto scrollbar-thin">
           {realTimeEventsArray.length === 0 ? (
             <p className="text-center text-gray-500 py-8">
-              {isConnected ? 'Waiting for events...' : 'Connect to event stream to see live activity'}
+              {isApiHealthy ? 'Waiting for events...' : 'Connect to event stream to see live activity'}
             </p>
           ) : (
             <div className="space-y-2">

@@ -98,15 +98,25 @@ export interface AdaptationEvent {
 }
 
 export interface Stats {
+  // All-time totals (authoritative)
   total_sessions: number;
-  active_sessions: number;
   total_commands: number;
   unique_attackers: number;
+
+  // Recent window (configurable, default 24h)
+  recent_sessions: number;
+  recent_commands: number;
+  recent_unique_attackers: number;
+
+  // Active sessions
+  active_sessions: number;
+
+  // Aggregated data for charts
   top_intents: { intent: string; count: number }[];
   top_countries: { country: string; count: number }[];
-  recent_sessions: Session[];
   threat_distribution: { level: string; count: number }[];
-  sessions_per_hour?: { hour: string; count: number }[];
+  sessions_per_hour: { hour: string; count: number }[];
+  commands_per_day: { date: string; count: number }[];
 }
 
 export interface RealTimeEvent {

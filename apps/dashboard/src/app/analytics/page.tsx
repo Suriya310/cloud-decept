@@ -19,21 +19,37 @@ import {
   Area,
 } from 'recharts';
 import { format } from 'date-fns';
+import { cn } from '@/lib/utils';
 
 const COLORS = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 
 export default function AnalyticsPage() {
-  const { stats, fetchStats, sessions, fetchSessions } = useDashboardStore();
+  const { stats, fetchStats, fetchAllTimeStats, sessions, fetchSessions, connectionStatus, fetchConnectionStatus } = useDashboardStore();
 
   useEffect(() => {
-    fetchStats();
+    fetchAllTimeStats();
     fetchSessions({ limit: 500 });
-  }, [fetchStats, fetchSessions]);
+    fetchConnectionStatus();
+  }, [fetchStats, fetchAllTimeStats, fetchSessions, fetchConnectionStatus]);
 
   const sessionsArray = sessions ?? [];
 
-  // Safe computation of intent data
+  // Use authoritative backend stats - all-time totals
+  const totalSessions = stats?.total_sessions ?? 0;
+  const activeSessions = stats?.active_sessions ?? 0;
+  const totalCommands = stats?.total_commands ?? 0;
+  const uniqueAttackers = stats?.unique_attackers ?? 0;
+
+  // Safe computation of intent data from backend stats if available, otherwise from sessions
   const intentData = useMemo(() => {
+    if (stats?.top_intents && stats.top_intents.length > 0) {
+      return stats.top_intents.map((item, index) => ({
+        name: item.intent.replace(/_/g, ' '),
+        value: item.count,
+        color: COLORS[index % COLORS.length],
+      }));
+    }
+    // Fallback to computing from sessions
     const intentCounts: Record<string, number> = {};
     sessionsArray.forEach((s) => {
       (s.intent_history || []).forEach((intent) => {
@@ -43,10 +59,18 @@ export default function AnalyticsPage() {
     return Object.entries(intentCounts)
       .sort(([, a], [, b]) => b - a)
       .map(([name, value], index) => ({ name: name.replace(/_/g, ' '), value, color: COLORS[index % COLORS.length] }));
-  }, [sessionsArray]);
+  }, [sessionsArray, stats?.top_intents]);
 
-  // Safe computation of country data
+  // Safe computation of country data from backend stats if available, otherwise from sessions
   const countryData = useMemo(() => {
+    if (stats?.top_countries && stats.top_countries.length > 0) {
+      return stats.top_countries.slice(0, 8).map((item, index) => ({
+        name: item.country,
+        value: item.count,
+        color: COLORS[index % COLORS.length],
+      }));
+    }
+    // Fallback to computing from sessions
     const countryCounts: Record<string, number> = {};
     sessionsArray.forEach((s) => {
       const country = s.src_country || s.country;
@@ -56,10 +80,17 @@ export default function AnalyticsPage() {
       .sort(([, a], [, b]) => b - a)
       .slice(0, 8)
       .map(([name, value], index) => ({ name, value, color: COLORS[index % COLORS.length] }));
-  }, [sessionsArray]);
+  }, [sessionsArray, stats?.top_countries]);
 
-  // Safe hourly data
+  // Safe hourly data from backend if available
   const hourlyData = useMemo(() => {
+    if (stats?.sessions_per_hour && stats.sessions_per_hour.length > 0) {
+      return stats.sessions_per_hour.map((item) => ({
+        hour: item.hour,
+        sessions: item.count,
+      }));
+    }
+    // Fallback to computing from sessions
     return Array.from({ length: 24 }, (_, i) => {
       const hour = i.toString().padStart(2, '0');
       const count = sessionsArray.filter((s) => {
@@ -68,10 +99,18 @@ export default function AnalyticsPage() {
       }).length;
       return { hour: `${hour}:00`, sessions: count };
     });
-  }, [sessionsArray]);
+  }, [sessionsArray, stats?.sessions_per_hour]);
 
-  // Safe daily data
+  // Safe daily data from backend if available
   const dailyData = useMemo(() => {
+    if (stats?.commands_per_day && stats.commands_per_day.length > 0) {
+      return stats.commands_per_day.map((item) => ({
+        date: format(new Date(item.date + 'T00:00:00'), 'MMM d'),
+        sessions: item.count,
+        dateStr: item.date,
+      }));
+    }
+    // Fallback to computing from sessions
     return Array.from({ length: 7 }, (_, i) => {
       const date = new Date();
       date.setDate(date.getDate() - (6 - i));
@@ -79,7 +118,7 @@ export default function AnalyticsPage() {
       const count = sessionsArray.filter((s) => s.start_time?.startsWith(dateStr)).length;
       return { date: format(date, 'MMM d'), sessions: count, dateStr };
     });
-  }, [sessionsArray]);
+  }, [sessionsArray, stats?.commands_per_day]);
 
   const threatDistribution = useMemo(() => {
     const base = stats?.threat_distribution ?? [
@@ -93,11 +132,24 @@ export default function AnalyticsPage() {
 
   const threatColors = { Critical: '#ef4444', High: '#dc2626', Medium: '#f59e0b', Low: '#22c55e' };
 
+  // Connection status
+  const isApiHealthy = connectionStatus?.connected ?? false;
+
   return (
     <main className="p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
         <p className="text-gray-500 mt-1">Session trends, geographic distribution, and attack patterns</p>
+      </div>
+
+      {/* Connection status indicator */}
+      <div className={cn('p-3 rounded-lg flex items-center gap-3', isApiHealthy ? 'bg-green-50' : 'bg-red-50')}>
+        <div className={cn('w-8 h-8 rounded-full flex items-center justify-center', isApiHealthy ? 'bg-green-100' : 'bg-red-100')}>
+          {isApiHealthy ? <span className="w-2 h-2 rounded-full bg-green-600" /> : <span className="w-2 h-2 rounded-full bg-red-600" />}
+        </div>
+        <span className="text-sm font-medium text-gray-900">
+          {isApiHealthy ? 'Backend Connected - Using authoritative all-time stats' : 'Backend Disconnected - Showing local computations'}
+        </span>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -141,7 +193,7 @@ export default function AnalyticsPage() {
 
         <div className="card">
           <div className="p-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">Sessions by Day (Last 7 Days)</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Commands by Day (Last 7 Days)</h2>
           </div>
           <div className="p-4 h-72">
             <ResponsiveContainer width="100%" height="100%">
@@ -167,7 +219,7 @@ export default function AnalyticsPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="card">
           <div className="p-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">Top Attack Intents</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Top Attack Intents (All-Time)</h2>
           </div>
           <div className="p-4 h-80">
             {intentData.length > 0 ? (
@@ -211,7 +263,7 @@ export default function AnalyticsPage() {
 
         <div className="card">
           <div className="p-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">Top Countries</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Top Countries (All-Time)</h2>
           </div>
           <div className="p-4 h-80">
             {countryData.length > 0 ? (
@@ -219,7 +271,7 @@ export default function AnalyticsPage() {
                 <BarChart data={countryData} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                   <XAxis type="number" stroke="#9ca3af" fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis type="category" dataKey="name" stroke="#9ca3af" fontSize={11} tickLine={false} axisLine={false} width={80} />
+                  <YAxis type="category" dataKey="name" stroke="#9ca3af" fontSize={11} tickLine={false} axisLine={false} width={100} />
                   <Tooltip
                     contentStyle={{
                       backgroundColor: '#fff',
@@ -243,7 +295,7 @@ export default function AnalyticsPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="card">
           <div className="p-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">Threat Level Distribution</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Threat Level Distribution (All-Time)</h2>
           </div>
           <div className="p-4 h-64">
             {threatDistribution.some((t) => t.count > 0) ? (
@@ -288,7 +340,7 @@ export default function AnalyticsPage() {
 
         <div className="card lg:col-span-2">
           <div className="p-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">Commands Over Time (Last 7 Days)</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Sessions Over Time (Last 7 Days)</h2>
           </div>
           <div className="p-4 h-72">
             <ResponsiveContainer width="100%" height="100%">
@@ -320,24 +372,24 @@ export default function AnalyticsPage() {
 
       <div className="card">
         <div className="p-4 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">Summary Statistics</h2>
+          <h2 className="text-lg font-semibold text-gray-900">Summary Statistics (All-Time)</h2>
         </div>
         <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-gray-50 p-4 rounded-lg">
             <p className="text-sm text-gray-500">Total Sessions</p>
-            <p className="text-2xl font-bold text-gray-900">{stats?.total_sessions ?? sessionsArray.length}</p>
+            <p className="text-2xl font-bold text-gray-900">{totalSessions.toLocaleString()}</p>
           </div>
           <div className="bg-gray-50 p-4 rounded-lg">
             <p className="text-sm text-gray-500">Active Sessions</p>
-            <p className="text-2xl font-bold text-green-600">{stats?.active_sessions ?? sessionsArray.filter((s) => s.status === 'active').length}</p>
+            <p className="text-2xl font-bold text-green-600">{activeSessions.toLocaleString()}</p>
           </div>
           <div className="bg-gray-50 p-4 rounded-lg">
             <p className="text-sm text-gray-500">Total Commands</p>
-            <p className="text-2xl font-bold text-gray-900">{stats?.total_commands ?? 0}</p>
+            <p className="text-2xl font-bold text-gray-900">{totalCommands.toLocaleString()}</p>
           </div>
           <div className="bg-gray-50 p-4 rounded-lg">
             <p className="text-sm text-gray-500">Unique Attackers</p>
-            <p className="text-2xl font-bold text-gray-900">{stats?.unique_attackers ?? new Set(sessionsArray.map((s) => s.src_ip || s.attacker_ip).filter(Boolean)).size}</p>
+            <p className="text-2xl font-bold text-gray-900">{uniqueAttackers.toLocaleString()}</p>
           </div>
         </div>
       </div>

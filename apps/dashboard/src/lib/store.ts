@@ -2,6 +2,17 @@ import { create } from 'zustand';
 import { DashboardState, Session, Command, ThreatIntelligenceEvent, Stats, RealTimeEvent } from './types';
 import { api } from './api';
 
+interface ConnectionStatus {
+  connected: boolean;
+  status: string;
+  clickhouse: string;
+  postgres: string;
+  redis: string;
+  timestamp: string;
+  error?: string;
+  lastChecked: number;
+}
+
 interface DashboardActions {
   // Sessions
   fetchSessions: (params?: { status?: string; limit?: number; offset?: number }) => Promise<void>;
@@ -11,7 +22,12 @@ interface DashboardActions {
   setSelectedSession: (session: Session | null) => void;
 
   // Stats
-  fetchStats: () => Promise<void>;
+  fetchStats: (hours?: number) => Promise<void>;
+  fetchAllTimeStats: () => Promise<void>;
+
+  // Connection status (unified)
+  fetchConnectionStatus: () => Promise<ConnectionStatus>;
+  connectionStatus: ConnectionStatus | null;
 
   // Real-time events
   addRealTimeEvent: (event: RealTimeEvent) => void;
@@ -57,6 +73,7 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   stats: null,
   realTimeEvents: [],
   isConnected: false,
+  connectionStatus: null,
   filters: defaultFilters,
 
   // Actions
@@ -111,13 +128,49 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
     }
   },
 
-  fetchStats: async () => {
+  fetchStats: async (hours?: number) => {
     try {
-      const data = await api.getStats();
+      const data = await api.getStats(hours);
       set({ stats: data });
     } catch (error) {
       console.error('Failed to fetch stats:', error);
       set({ stats: null });
+    }
+  },
+
+  fetchAllTimeStats: async () => {
+    try {
+      // Use a large hours value (10 years) to get all-time stats
+      const data = await api.getStats(87600);
+      set({ stats: data });
+    } catch (error) {
+      console.error('Failed to fetch all-time stats:', error);
+      set({ stats: null });
+    }
+  },
+
+  // Unified connection status
+  fetchConnectionStatus: async () => {
+    try {
+      const status = await api.checkConnection();
+      set({
+        connectionStatus: status,
+        isConnected: status.connected,
+      });
+      return status;
+    } catch (error) {
+      const status: ConnectionStatus = {
+        connected: false,
+        status: 'error',
+        clickhouse: 'unknown',
+        postgres: 'unknown',
+        redis: 'unknown',
+        timestamp: new Date().toISOString(),
+        error: error instanceof Error ? error.message : 'Unknown error',
+        lastChecked: Date.now(),
+      };
+      set({ connectionStatus: status, isConnected: false });
+      return status;
     }
   },
 

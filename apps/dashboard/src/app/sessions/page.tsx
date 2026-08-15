@@ -69,6 +69,10 @@ export default function SessionsPage() {
     ...new Set(sessionsArray.map((s) => s.src_country).filter(Boolean)),
   ];
 
+  // Use authoritative backend stats for totals
+  const totalSessions = stats?.total_sessions ?? 0;
+  const activeSessions = stats?.active_sessions ?? 0;
+
   const handleRowClick = (session: any) => {
     setSelectedSession(session);
     fetchSession(session.session_id);
@@ -80,7 +84,7 @@ export default function SessionsPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Sessions</h1>
           <p className="text-gray-500 mt-1">
-            {sessionsArray.length} total sessions · {sessionsArray.filter((s) => s.status === 'active').length} active
+            {totalSessions.toLocaleString()} total sessions (all-time) · {activeSessions} active
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -174,7 +178,7 @@ export default function SessionsPage() {
                     <td>
                       <div className="flex items-center gap-2">
                         <MapPin className="w-3 h-3 text-gray-400" />
-                        <span>{session.src_ip}</span>
+                        <span>{session.src_ip ?? session.attacker_ip ?? 'unknown'}</span>
                         {session.src_country && (
                           <span className="text-xs text-gray-500">({session.src_country})</span>
                         )}
@@ -201,7 +205,7 @@ export default function SessionsPage() {
                             : 'bg-gray-100 text-gray-800'
                         )}
                       >
-                        {session.status}
+                        {session.status ?? 'unknown'}
                       </span>
                     </td>
                     <td>
@@ -223,7 +227,7 @@ export default function SessionsPage() {
                     </td>
                     <td>
                       <Terminal className="w-3 h-3 inline text-gray-400" />
-                      {session.command_count}
+                      {session.command_count ?? 0}
                     </td>
                     <td>
                       <span

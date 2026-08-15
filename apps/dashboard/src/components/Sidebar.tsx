@@ -15,7 +15,11 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  Server,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
+import { useDashboardStore } from '@/lib/store';
 
 const navigation = [
   { name: 'Overview', href: '/', icon: LayoutDashboard },
@@ -30,6 +34,12 @@ const navigation = [
 export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const { connectionStatus } = useDashboardStore();
+
+  const isApiHealthy = connectionStatus?.connected ?? false;
+  const clickhouseStatus = connectionStatus?.clickhouse ?? 'unknown';
+  const postgresStatus = connectionStatus?.postgres ?? 'unknown';
+  const redisStatus = connectionStatus?.redis ?? 'unknown';
 
   return (
     <aside
@@ -83,11 +93,43 @@ export function Sidebar() {
         {!collapsed && (
           <div className="space-y-2">
             <div className="px-3 py-2 text-xs text-gray-500 uppercase tracking-wider">
-              Status
+              System Status
             </div>
             <div className="flex items-center gap-2 px-3 py-2">
-              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-              <span className="text-sm text-gray-600">All Systems Operational</span>
+              <div className={cn('w-2 h-2 rounded-full', isApiHealthy ? 'bg-green-500 animate-pulse' : 'bg-red-500')} />
+              <span className="text-sm text-gray-600">{isApiHealthy ? 'All Systems Operational' : 'Degraded'}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-1 mt-2">
+              <div
+                className={cn(
+                  'p-1.5 rounded text-xs text-center',
+                  clickhouseStatus === 'healthy' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+                )}
+                title="ClickHouse"
+              >
+                <Server className="w-3 h-3 mx-auto mb-0.5" />
+                <div>CH</div>
+              </div>
+              <div
+                className={cn(
+                  'p-1.5 rounded text-xs text-center',
+                  postgresStatus === 'healthy' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+                )}
+                title="PostgreSQL"
+              >
+                <Database className="w-3 h-3 mx-auto mb-0.5" />
+                <div>PG</div>
+              </div>
+              <div
+                className={cn(
+                  'p-1.5 rounded text-xs text-center',
+                  redisStatus === 'healthy' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+                )}
+                title="Redis"
+              >
+                {redisStatus === 'healthy' ? <Wifi className="w-3 h-3 mx-auto mb-0.5" /> : <WifiOff className="w-3 h-3 mx-auto mb-0.5" />}
+                <div>RD</div>
+              </div>
             </div>
           </div>
         )}

@@ -41,11 +41,51 @@ export const api = {
     fetchJson<{ auth_events: any[] }>(`${API_BASE}/sessions/${sessionId}/auth`),
 
   // Stats
-  getStats: () =>
-    fetchJson<any>(`${API_BASE}/stats`),
+  getStats: (hours?: number) => {
+    const url = new URL(`${API_BASE}/stats`, window.location.origin);
+    if (hours) url.searchParams.set('hours', hours.toString());
+    return fetchJson<any>(url.toString());
+  },
 
-  getStatsSummary: () =>
-    fetchJson<any>(`${API_BASE}/stats/summary`),
+  // Connection health check
+  checkConnection: async () => {
+    try {
+      const response = await fetch(`${API_BASE}/health`);
+      if (!response.ok) {
+        return {
+          connected: false,
+          status: 'error',
+          clickhouse: 'unknown',
+          postgres: 'unknown',
+          redis: 'unknown',
+          timestamp: new Date().toISOString(),
+          error: `HTTP ${response.status}`,
+          lastChecked: Date.now(),
+        };
+      }
+      const data = await response.json();
+      return {
+        connected: data.status === 'healthy' || data.status === 'degraded',
+        status: data.status,
+        clickhouse: data.clickhouse,
+        postgres: data.postgres,
+        redis: data.redis,
+        timestamp: data.timestamp,
+        lastChecked: Date.now(),
+      };
+    } catch (error) {
+      return {
+        connected: false,
+        status: 'error',
+        clickhouse: 'unknown',
+        postgres: 'unknown',
+        redis: 'unknown',
+        timestamp: new Date().toISOString(),
+        error: error instanceof Error ? error.message : 'Unknown error',
+        lastChecked: Date.now(),
+      };
+    }
+  },
 
   // Threat Intelligence
   getThreatIntel: (sessionId: string) =>

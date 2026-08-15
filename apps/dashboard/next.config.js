@@ -6,7 +6,7 @@ const nextConfig = {
     return [
       {
         source: '/api/backend/:path*',
-        destination: `${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'}/:path*`,
+        destination: `${process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8004'}/:path*`,
       },
       {
         source: '/api/collector/:path*',

@@ -142,9 +142,11 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
     try {
       // Use a large hours value (10 years) to get all-time stats
       const data = await api.getStats(87600);
+      console.log('[CloudDecept] Raw stats API response:', data);
       set({ stats: data });
+      console.log('[CloudDecept] Store stats updated:', data);
     } catch (error) {
-      console.error('Failed to fetch all-time stats:', error);
+      console.error('[CloudDecept] Failed to fetch all-time stats:', error);
       set({ stats: null });
     }
   },

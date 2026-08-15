@@ -45,6 +45,9 @@ export default function OverviewPage() {
   const sessionsArray = sessions ?? [];
   const realTimeEventsArray = realTimeEvents ?? [];
 
+  // DEBUG: Log stats received by Overview page
+  console.log('[CloudDecept] Overview page stats:', stats);
+
   // Use authoritative backend stats - all-time totals
   const totalSessions = stats?.total_sessions ?? 0;
   const activeSessions = stats?.active_sessions ?? 0;

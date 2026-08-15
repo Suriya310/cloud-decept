@@ -385,6 +385,11 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
+      - NEXT_PUBLIC_BACKEND_URL=http://backend-api:8004
+      - NEXT_PUBLIC_COLLECTOR_URL=http://event-collector:8000
+      - NEXT_PUBLIC_THREAT_INTEL_URL=http://threat-intel:8005
+      - NEXT_PUBLIC_ADAPTIVE_URL=http://adaptive-engine:8002
+      - NEXT_PUBLIC_INTENT_URL=http://intent-engine:8001
     depends_on:
       backend-api:
         condition: service_healthy

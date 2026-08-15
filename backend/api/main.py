@@ -455,9 +455,12 @@ async def get_stats(
         """
     ).named_results()
 
+    # Convert generator to list for subscriptable access
+    threat_rows = list(threat_dist)
+
     threat_distribution = []
-    if threat_dist:
-        row = threat_dist[0]
+    if threat_rows:
+        row = threat_rows[0]
         threat_distribution = [
             {"level": "Critical", "count": row["critical"] or 0},
             {"level": "High", "count": row["high"] or 0},
@@ -568,10 +571,13 @@ async def get_session(session_id: str):
         """
     ).named_results()
 
-    if not result:
+    # Convert generator to list for subscriptable access and truthiness check
+    result_rows = list(result)
+
+    if not result_rows:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    return SessionSummary(**result[0])
+    return SessionSummary(**result_rows[0])
 
 
 @app.get("/sessions/{session_id}/commands", response_model=list[CommandResponse])

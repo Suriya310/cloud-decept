@@ -382,28 +382,32 @@ async def get_stats(
     # ============================================================
     # ALL-TIME TOTALS (no time filter) - primary fields
     # ============================================================
-    total_sessions = clickhouse_client.command("SELECT count() FROM sessions")
-    total_commands = clickhouse_client.command("SELECT count() FROM commands")
-    unique_attackers = clickhouse_client.command("SELECT uniq(attacker_ip) FROM sessions")
+    # Use fully qualified table names to ensure correct database
+    total_sessions = clickhouse_client.command("SELECT count() FROM clouddecept.sessions")
+    total_commands = clickhouse_client.command("SELECT count() FROM clouddecept.commands")
+    unique_attackers = clickhouse_client.command("SELECT uniq(attacker_ip) FROM clouddecept.sessions")
 
     # ============================================================
     # RECENT WINDOW STATS (respects hours parameter)
     # ============================================================
     recent_sessions = clickhouse_client.command(
-        f"SELECT count() FROM sessions WHERE start_time >= '{since_str}'"
+        f"SELECT count() FROM clouddecept.sessions WHERE start_time >= '{since_str}'"
     )
     recent_commands = clickhouse_client.command(
-        f"SELECT count() FROM commands WHERE timestamp >= '{since_str}'"
+        f"SELECT count() FROM clouddecept.commands WHERE timestamp >= '{since_str}'"
     )
     recent_unique_attackers = clickhouse_client.command(
-        f"SELECT uniq(attacker_ip) FROM sessions WHERE start_time >= '{since_str}'"
+        f"SELECT uniq(attacker_ip) FROM clouddecept.sessions WHERE start_time >= '{since_str}'"
     )
 
     # ============================================================
     # ACTIVE SESSIONS (no end_time)
     # ============================================================
+    # end_time is a non-nullable DateTime in ClickHouse.
+    # Active sessions have end_time = epoch (1970-01-01 00:00:00).
+    # Do NOT compare DateTime to empty string '' - causes CANNOT_PARSE_DATETIME.
     active_sessions = clickhouse_client.command(
-        "SELECT count() FROM sessions WHERE end_time = '1970-01-01 00:00:00' OR end_time IS NULL OR end_time = ''"
+        "SELECT count() FROM clouddecept.sessions WHERE end_time = '1970-01-01 00:00:00'"
     )
 
     # ============================================================
@@ -412,7 +416,7 @@ async def get_stats(
     top_intents = clickhouse_client.query(
         """
         SELECT intent, count() as cnt
-        FROM sessions
+        FROM clouddecept.sessions
         WHERE intent != '' AND intent IS NOT NULL
         GROUP BY intent
         ORDER BY cnt DESC
@@ -426,7 +430,7 @@ async def get_stats(
     top_countries = clickhouse_client.query(
         """
         SELECT country, count() as cnt
-        FROM sessions
+        FROM clouddecept.sessions
         WHERE country != '' AND country IS NOT NULL
         GROUP BY country
         ORDER BY cnt DESC
@@ -446,7 +450,7 @@ async def get_stats(
             sum(if(skill_level >= 5 AND skill_level < 8, 1, 0)) as high,
             sum(if(skill_level >= 3 AND skill_level < 5, 1, 0)) as medium,
             sum(if(skill_level < 3 AND skill_level > 0, 1, 0)) as low
-        FROM sessions
+        FROM clouddecept.sessions
         WHERE skill_level IS NOT NULL
         """
     ).named_results()
@@ -469,7 +473,7 @@ async def get_stats(
         SELECT
             toStartOfHour(start_time) as hour,
             count() as cnt
-        FROM sessions
+        FROM clouddecept.sessions
         WHERE start_time >= '{day_ago_str}'
         GROUP BY hour
         ORDER BY hour
@@ -489,7 +493,7 @@ async def get_stats(
         SELECT
             toDate(timestamp) as day,
             count() as cnt
-        FROM commands
+        FROM clouddecept.commands
         WHERE timestamp >= '{week_ago_str}'
         GROUP BY day
         ORDER BY day
@@ -539,7 +543,7 @@ async def list_sessions(
         SELECT session_id, start_time, end_time, duration_seconds,
                attacker_ip, country, protocol, commands_executed,
                files_transferred, credentials_tried, intent, skill_level
-        FROM sessions
+        FROM clouddecept.sessions
         WHERE {where_sql}
         ORDER BY start_time DESC
         LIMIT {limit} OFFSET {offset}
@@ -558,7 +562,7 @@ async def get_session(session_id: str):
                attacker_ip, country, protocol, commands_executed,
                files_transferred, credentials_tried, intent, skill_level,
                disconnection_reason
-        FROM sessions
+        FROM clouddecept.sessions
         WHERE session_id = '{session_id}'
         LIMIT 1
         """
@@ -580,7 +584,7 @@ async def get_session_commands(
         f"""
         SELECT event_id, session_id, timestamp, command, arguments,
                output, exit_code, duration_ms, intent, mitre_techniques
-        FROM commands
+        FROM clouddecept.commands
         WHERE session_id = '{session_id}'
         ORDER BY timestamp ASC
         LIMIT {limit}
@@ -597,7 +601,7 @@ async def get_session_auth(session_id: str):
         f"""
         SELECT event_id, session_id, timestamp, username, password,
                success, auth_method
-        FROM auth_attempts
+        FROM clouddecept.auth_attempts
         WHERE session_id = '{session_id}'
         ORDER BY timestamp ASC
         """
@@ -725,7 +729,7 @@ async def top_attackers(
         SELECT attacker_ip, country, count() as sessions,
                uniq(session_id) as unique_sessions,
                max(start_time) as last_seen
-        FROM sessions
+        FROM clouddecept.sessions
         WHERE start_time >= '{since_str}'
         GROUP BY attacker_ip, country
         ORDER BY sessions DESC
@@ -749,7 +753,7 @@ async def top_commands(
         f"""
         SELECT command, count() as executions,
                uniq(session_id) as unique_sessions
-        FROM commands
+        FROM clouddecept.commands
         WHERE timestamp >= '{since_str}'
         GROUP BY command
         ORDER BY executions DESC
@@ -770,7 +774,7 @@ async def search_sessions(
     cmd_results = clickhouse_client.query(
         f"""
         SELECT DISTINCT session_id
-        FROM commands
+        FROM clouddecept.commands
         WHERE command ILIKE '%{query}%' OR output ILIKE '%{query}%'
         LIMIT {limit}
         """
@@ -788,7 +792,7 @@ async def search_sessions(
         SELECT session_id, start_time, end_time, duration_seconds,
                attacker_ip, country, protocol, commands_executed,
                intent, skill_level
-        FROM sessions
+        FROM clouddecept.sessions
         WHERE session_id IN ({placeholders})
         ORDER BY start_time DESC
         """

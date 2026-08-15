@@ -529,7 +529,7 @@ async def list_sessions(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     intent: Optional[str] = None,
-    hours: int = Query(24, ge=1, le=168),
+    hours: int = Query(24, ge=1, le=87600),  # Allow up to ~10 years for all-time
 ):
     """List recent sessions with filters"""
     since = datetime.utcnow() - timedelta(hours=hours)

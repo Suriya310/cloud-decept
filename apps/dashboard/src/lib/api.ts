@@ -23,12 +23,14 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   // Sessions
-  getSessions: (params?: { status?: string; limit?: number; offset?: number }) => {
+  getSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number }) => {
     const search = new URLSearchParams();
     if (params?.status) search.set('status', params.status);
     if (params?.limit) search.set('limit', params.limit.toString());
     if (params?.offset) search.set('offset', params.offset.toString());
-    return fetchJson<{ sessions: any[]; total: number }>(`${API_BASE}/sessions?${search}`);
+    if (params?.hours) search.set('hours', params.hours.toString());
+    // Backend returns array directly, not { sessions: [], total: number }
+    return fetchJson<any[]>(`${API_BASE}/sessions?${search}`).then(sessions => ({ sessions, total: sessions.length }));
   },
 
   getSession: (sessionId: string) =>

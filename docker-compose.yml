@@ -335,6 +335,7 @@ services:
       - BATCH_SIZE=10
       - BATCH_TIMEOUT=1.0
       - FORWARDER_SOURCE=cowrie_ssh
+      - GEOIP_DB_PATH=/usr/share/GeoIP/GeoLite2-Country.mmdb
     volumes:
       - cowrie_logs:/cowrie/var/log/cowrie:ro
     depends_on:
@@ -361,11 +362,11 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:11434/api/tags"]
+      test: ["CMD-SHELL", "curl -f http://localhost:11434/api/tags || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 120s
     networks:
       - clouddecept-network
 
@@ -402,7 +403,7 @@ services:
       intent-engine:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3

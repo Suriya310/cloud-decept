@@ -4,6 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional
 
+import httpx
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 ioc_extractor = IOCExtractor()
 mitre_mapper = MITREMapper()
 session_summarizer: Optional[SessionSummarizer] = None
+event_collector_client: Optional[httpx.AsyncClient] = None
 
 
 # Request/Response models
@@ -76,15 +78,18 @@ class AnalysisResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global session_summarizer
+    global session_summarizer, event_collector_client
     session_summarizer = SessionSummarizer(
         llm_gateway_url=settings.LLM_GATEWAY_URL,
         model=settings.MODEL_NAME
     )
     await session_summarizer.initialize()
+    event_collector_client = httpx.AsyncClient(timeout=30.0)
     logger.info("Threat Intelligence Engine started")
     yield
     await session_summarizer.close()
+    if event_collector_client:
+        await event_collector_client.aclose()
     logger.info("Threat Intelligence Engine shutting down")
 
 
@@ -145,6 +150,32 @@ async def analyze_session(request: AnalyzeSessionRequest, background_tasks: Back
         summary_dict = await session_summarizer.summarize(session_data)
         summary = SessionSummaryResponse(**summary_dict)
 
+        # Persist skill_level and primary intent to ClickHouse via event collector
+        if event_collector_client and summary:
+            try:
+                # Use the latest intent from history, or primary_objective as intent
+                intent = request.intent_history[-1] if request.intent_history else summary.primary_objective
+                skill_level = summary.skill_level
+
+                response = await event_collector_client.post(
+                    f"{settings.EVENT_COLLECTOR_URL}/update-session",
+                    json={
+                        "session_id": request.session_id,
+                        "intent": intent,
+                        "skill_level": skill_level
+                    }
+                )
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get("success"):
+                        logger.info(f"Updated session {request.session_id} with intent={intent}, skill_level={skill_level}")
+                    else:
+                        logger.warning(f"Failed to update session {request.session_id}: {result.get('error')}")
+                else:
+                    logger.warning(f"Event collector returned {response.status_code} for session update")
+            except Exception as e:
+                logger.warning(f"Failed to persist session analysis: {e}")
+
     return AnalysisResponse(
         session_id=request.session_id,
         iocs=[IOCResponse(**ioc.__dict__) for ioc in iocs],
@@ -193,7 +224,34 @@ async def summarize(request: AnalyzeSessionRequest):
     }
 
     summary_dict = await session_summarizer.summarize(session_data)
-    return SessionSummaryResponse(**summary_dict)
+    summary = SessionSummaryResponse(**summary_dict)
+
+    # Persist skill_level and primary intent to ClickHouse via event collector
+    if event_collector_client and summary:
+        try:
+            intent = request.intent_history[-1] if request.intent_history else summary.primary_objective
+            skill_level = summary.skill_level
+
+            response = await event_collector_client.post(
+                f"{settings.EVENT_COLLECTOR_URL}/update-session",
+                json={
+                    "session_id": request.session_id,
+                    "intent": intent,
+                    "skill_level": skill_level
+                }
+            )
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("success"):
+                    logger.info(f"Updated session {request.session_id} with intent={intent}, skill_level={skill_level}")
+                else:
+                    logger.warning(f"Failed to update session {request.session_id}: {result.get('error')}")
+            else:
+                logger.warning(f"Event collector returned {response.status_code} for session update")
+        except Exception as e:
+            logger.warning(f"Failed to persist session analysis: {e}")
+
+    return summary
 
 
 @app.get("/mitre-catalog")

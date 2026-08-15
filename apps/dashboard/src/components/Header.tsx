@@ -39,15 +39,12 @@ export function Header() {
           </button>
 
           {/* Unified connection status with dropdown */}
-          <div className="relative">
+          <div className="relative group">
             <button
               className={cn(
                 'flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-50',
                 'hover:bg-gray-100 transition-colors'
               )}
-              onClick={() => {
-                // Could add dropdown logic here
-              }}
               aria-label="Connection status"
               aria-expanded="false"
             >
@@ -63,7 +60,7 @@ export function Header() {
             </button>
 
             {/* Tooltip/popover with detailed status */}
-            <div className="absolute right-0 top-full mt-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-50 hidden group-hover:block">
+            <div className="absolute right-0 top-full mt-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg p-3 z-50 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200">
               <div className="text-xs font-medium text-gray-900 mb-2">Service Status</div>
               <div className="space-y-1.5">
                 <div className={cn('flex items-center justify-between text-xs', isApiHealthy ? 'text-green-600' : 'text-red-600')}>

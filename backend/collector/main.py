@@ -325,11 +325,13 @@ class EventCollector:
                     # Could implement upsert logic later
                     pass
                 elif event_type == "command" or stream == StreamNames.COMMAND_EVENTS:
+                    cmd = payload.get("command", "")
+                    logger.debug(f"Preparing command for ClickHouse: session={payload.get('session_id')}, command={cmd[:50] if cmd else 'empty'}")
                     commands.append((
                         payload.get("event_id", str(uuid.uuid4())),
                         payload.get("session_id", ""),
                         parse_dt(payload.get("timestamp", datetime.utcnow())),
-                        payload.get("command", ""),
+                        cmd,
                         payload.get("arguments", []),
                         payload.get("output", ""),
                         payload.get("exit_code", 0),
@@ -360,7 +362,10 @@ class EventCollector:
                         payload.get("duration_ms", 0),
                     ))
             except Exception as e:
-                logger.error(f"Failed to prepare event for ClickHouse: {e}")
+                logger.error(f"Failed to prepare event for ClickHouse: {e}", exc_info=True)
+
+        # Log batch counts before insert
+        logger.info(f"Batch insert counts: sessions={len(sessions)}, commands={len(commands)}, auth={len(auth_attempts)}, cloud_api={len(cloud_api)}")
 
         # Batch insert
         try:
@@ -375,7 +380,7 @@ class EventCollector:
                         "intent", "skill_level", "disconnection_reason"
                     ]
                 )
-                logger.debug(f"Inserted {len(sessions)} sessions to ClickHouse")
+                logger.info(f"Inserted {len(sessions)} sessions to ClickHouse")
 
             if commands:
                 self.clickhouse_client.insert(
@@ -387,7 +392,9 @@ class EventCollector:
                         "intent", "mitre_techniques"
                     ]
                 )
-                logger.debug(f"Inserted {len(commands)} commands to ClickHouse")
+                logger.info(f"Inserted {len(commands)} commands to ClickHouse")
+                for cmd in commands[:3]:  # Log first 3 commands for verification
+                    logger.info(f"  CMD: session={cmd[1]}, command={cmd[3][:50] if cmd[3] else 'empty'}")
 
             if auth_attempts:
                 self.clickhouse_client.insert(
@@ -398,7 +405,7 @@ class EventCollector:
                         "password", "success", "auth_method"
                     ]
                 )
-                logger.debug(f"Inserted {len(auth_attempts)} auth attempts to ClickHouse")
+                logger.info(f"Inserted {len(auth_attempts)} auth attempts to ClickHouse")
 
             if cloud_api:
                 self.clickhouse_client.insert(
@@ -410,10 +417,10 @@ class EventCollector:
                         "duration_ms"
                     ]
                 )
-                logger.debug(f"Inserted {len(cloud_api)} cloud API requests to ClickHouse")
+                logger.info(f"Inserted {len(cloud_api)} cloud API requests to ClickHouse")
 
         except Exception as e:
-            logger.error(f"Failed to insert events to ClickHouse: {e}")
+            logger.error(f"Failed to insert events to ClickHouse: {e}", exc_info=True)
 
     async def _consumer_loop(self):
         """Background task that consumes from Redis streams and writes to ClickHouse"""
@@ -429,11 +436,12 @@ class EventCollector:
         ]
 
         consumer_name = f"clickhouse-writer-{uuid.uuid4().hex[:8]}"
+        logger.info(f"Consumer name: {consumer_name}, group: {ConsumerGroups.EVENT_COLLECTOR}")
 
         while self.running:
             try:
                 all_events = []
-                for stream, _ in streams_to_consume:
+                for stream, stream_type in streams_to_consume:
                     events = await self.consume_events(
                         stream=stream,
                         group=ConsumerGroups.EVENT_COLLECTOR,
@@ -441,6 +449,14 @@ class EventCollector:
                         count=50,
                         block_ms=2000,
                     )
+                    if events:
+                        logger.info(f"Consumed {len(events)} events from {stream} (type={stream_type})")
+                        # Log event types in this batch
+                        event_types = {}
+                        for ev in events:
+                            et = ev.get("data", {}).get("event_type", "unknown")
+                            event_types[et] = event_types.get(et, 0) + 1
+                        logger.debug(f"Event types from {stream}: {event_types}")
                     all_events.extend(events)
 
                 if all_events:
@@ -453,7 +469,7 @@ class EventCollector:
                 logger.info("Consumer loop cancelled")
                 break
             except Exception as e:
-                logger.error(f"Error in consumer loop: {e}")
+                logger.error(f"Error in consumer loop: {e}", exc_info=True)
                 await asyncio.sleep(5)  # Back off on error
 
         logger.info("Consumer loop stopped")
@@ -502,6 +518,22 @@ class IngestResponse(BaseModel):
     event_id: str
     stream: str
     message_id: str
+    success: bool
+    error: Optional[str] = None
+
+
+class SessionUpdateRequest(BaseModel):
+    """Request to update session with analysis results"""
+    session_id: str
+    intent: Optional[str] = None
+    skill_level: Optional[int] = None
+    commands_executed: Optional[int] = None
+    disconnection_reason: Optional[str] = None
+    duration_seconds: Optional[int] = None
+
+
+class SessionUpdateResponse(BaseModel):
+    session_id: str
     success: bool
     error: Optional[str] = None
 
@@ -588,6 +620,65 @@ async def ingest_batch(requests: list[IngestRequest]):
     return results
 
 
+@app.post("/update-session", response_model=SessionUpdateResponse)
+async def update_session(request: SessionUpdateRequest):
+    """Update session with analysis results (intent, skill_level, etc.)"""
+    logger.info(f"Updating session {request.session_id}: intent={request.intent}, skill_level={request.skill_level}")
+    if not collector.clickhouse_client:
+        return SessionUpdateResponse(
+            session_id=request.session_id,
+            success=False,
+            error="ClickHouse not connected"
+        )
+
+    try:
+        # Build update query
+        updates = []
+        if request.intent is not None:
+            escaped_intent = request.intent.replace("'", "''")
+            updates.append(f"intent = '{escaped_intent}'")
+        if request.skill_level is not None:
+            updates.append(f"skill_level = {request.skill_level}")
+        if request.commands_executed is not None:
+            updates.append(f"commands_executed = {request.commands_executed}")
+        if request.disconnection_reason is not None:
+            escaped_reason = request.disconnection_reason.replace("'", "''")
+            updates.append(f"disconnection_reason = '{escaped_reason}'")
+        if request.duration_seconds is not None:
+            updates.append(f"duration_seconds = {request.duration_seconds}")
+
+        if not updates:
+            return SessionUpdateResponse(
+                session_id=request.session_id,
+                success=False,
+                error="No fields to update"
+            )
+
+        # ClickHouse ALTER TABLE UPDATE
+        update_sql = f"ALTER TABLE clouddecept.sessions UPDATE {', '.join(updates)} WHERE session_id = '{request.session_id}'"
+        logger.debug(f"Executing: {update_sql}")
+        collector.clickhouse_client.command(update_sql)
+
+        # Verify update
+        count = collector.clickhouse_client.command(
+            f"SELECT count() FROM clouddecept.sessions WHERE session_id = '{request.session_id}'"
+        )
+
+        return SessionUpdateResponse(
+            session_id=request.session_id,
+            success=count > 0,
+            error=None if count > 0 else "Session not found"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to update session {request.session_id}: {e}", exc_info=True)
+        return SessionUpdateResponse(
+            session_id=request.session_id,
+            success=False,
+            error=str(e)
+        )
+
+
 def _create_event_from_request(request: IngestRequest) -> BaseEvent:
     """Create appropriate event object from ingest request"""
     logger.debug(f"_create_event_from_request: event_type={request.event_type}, payload_keys={list(request.payload.keys())}")
@@ -670,6 +761,78 @@ async def list_consumer_groups():
         except Exception as e:
             groups[stream] = {"error": str(e)}
     return groups
+
+
+@app.get("/debug/pipeline")
+async def debug_pipeline():
+    """Diagnostic endpoint to trace command/event pipeline status"""
+    result = {
+        "stream_lengths": {},
+        "consumer_groups": {},
+        "pending_messages": {},
+        "consumer_task_status": "unknown",
+        "clickhouse_counts": {},
+    }
+
+    # Stream lengths
+    streams_to_check = [
+        StreamNames.HONEYPOT_EVENTS,
+        StreamNames.AUTH_EVENTS,
+        StreamNames.COMMAND_EVENTS,
+        StreamNames.CLOUD_API_EVENTS,
+        StreamNames.FILE_EVENTS,
+        StreamNames.NETWORK_EVENTS,
+        StreamNames.SESSION_EVENTS,
+    ]
+    for stream in streams_to_check:
+        try:
+            result["stream_lengths"][stream] = await collector.redis.xlen(stream)
+        except Exception as e:
+            result["stream_lengths"][stream] = f"error: {e}"
+
+    # Consumer groups and pending messages
+    for stream in streams_to_check:
+        try:
+            groups = await collector.redis.xinfo_groups(stream)
+            result["consumer_groups"][stream] = groups
+            # Check pending messages for event_collector group
+            for group in groups:
+                if group.get("name") == ConsumerGroups.EVENT_COLLECTOR:
+                    pending = await collector.redis.xpending_range(
+                        stream, ConsumerGroups.EVENT_COLLECTOR, "-", "+", 10
+                    )
+                    result["pending_messages"][stream] = len(pending)
+        except Exception as e:
+            result["consumer_groups"][stream] = f"error: {e}"
+            result["pending_messages"][stream] = f"error: {e}"
+
+    # Consumer task status
+    if collector.consumer_task:
+        result["consumer_task_status"] = "running" if not collector.consumer_task.done() else "done/crashed"
+        if collector.consumer_task.done():
+            try:
+                collector.consumer_task.result()
+            except Exception as e:
+                result["consumer_task_error"] = str(e)
+    else:
+        result["consumer_task_status"] = "not_started"
+
+    # ClickHouse counts
+    if collector.clickhouse_client:
+        try:
+            tables = ["sessions", "commands", "auth_attempts", "cloud_api_requests"]
+            for table in tables:
+                try:
+                    count = collector.clickhouse_client.command(f"SELECT count() FROM clouddecept.{table}")
+                    result["clickhouse_counts"][table] = count
+                except Exception as e:
+                    result["clickhouse_counts"][table] = f"error: {e}"
+        except Exception as e:
+            result["clickhouse_counts"] = f"error: {e}"
+    else:
+        result["clickhouse_counts"] = "clickhouse not connected"
+
+    return result
 
 
 @app.get("/events/stream")

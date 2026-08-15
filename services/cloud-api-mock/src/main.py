@@ -104,6 +104,26 @@ async def classify_intent(session_id: str, commands: List[Dict]) -> Dict[str, An
             if session_id not in session_contexts:
                 session_contexts[session_id] = {"intents": [], "start_time": time.time()}
             session_contexts[session_id]["intents"].append(result.get("intent"))
+
+            # Persist intent to session in ClickHouse via event collector
+            if event_collector_client:
+                try:
+                    update_response = await event_collector_client.post(
+                        f"{settings.EVENT_COLLECTOR_URL}/update-session",
+                        json={
+                            "session_id": session_id,
+                            "intent": result.get("intent")
+                        }
+                    )
+                    if update_response.status_code == 200:
+                        update_result = update_response.json()
+                        if update_result.get("success"):
+                            logger.info(f"Updated session {session_id} with intent={result.get('intent')}")
+                        else:
+                            logger.warning(f"Failed to update session {session_id}: {update_result.get('error')}")
+                except Exception as e:
+                    logger.warning(f"Failed to persist session intent: {e}")
+
             return result
     except Exception as e:
         logger.warning(f"Intent classification failed: {e}")

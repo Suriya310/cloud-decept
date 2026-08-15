@@ -28,7 +28,8 @@ export default function AnalyticsPage() {
 
   useEffect(() => {
     fetchAllTimeStats();
-    fetchSessions({ limit: 500 });
+    // Use large hours window to get all historical sessions
+    fetchSessions({ limit: 1000, hours: 8760 });
     fetchConnectionStatus();
   }, [fetchStats, fetchAllTimeStats, fetchSessions, fetchConnectionStatus]);
 

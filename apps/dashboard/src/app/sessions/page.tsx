@@ -34,7 +34,8 @@ export default function SessionsPage() {
   const sessionsPerPage = 20;
 
   useEffect(() => {
-    fetchSessions({ status: filters.status, limit: 100 });
+    // Use large hours window to get all historical sessions
+    fetchSessions({ status: filters.status, limit: 500, hours: 8760 });
   }, [fetchSessions, filters.status]);
 
   const sessionsArray = sessions ?? [];

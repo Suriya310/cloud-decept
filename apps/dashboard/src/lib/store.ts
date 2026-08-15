@@ -15,7 +15,7 @@ interface ConnectionStatus {
 
 interface DashboardActions {
   // Sessions
-  fetchSessions: (params?: { status?: string; limit?: number; offset?: number }) => Promise<void>;
+  fetchSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number }) => Promise<void>;
   fetchSession: (sessionId: string) => Promise<void>;
   fetchSessionCommands: (sessionId: string) => Promise<void>;
   fetchSessionThreatIntel: (sessionId: string) => Promise<void>;

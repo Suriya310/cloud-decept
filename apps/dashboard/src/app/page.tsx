@@ -36,7 +36,8 @@ export default function OverviewPage() {
   useEffect(() => {
     // Fetch all-time stats for accurate totals
     fetchAllTimeStats();
-    fetchSessions({ limit: 10 });
+    // Fetch sessions with large hours window to get historical sessions
+    fetchSessions({ limit: 10, hours: 8760 }); // ~1 year
     fetchConnectionStatus();
     const unsubscribe = subscribeToEvents();
     return unsubscribe;

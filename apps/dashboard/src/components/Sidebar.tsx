@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -20,6 +19,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { useDashboardStore } from '@/lib/store';
+import { useSidebar } from '@/lib/SidebarContext';
 
 const navigation = [
   { name: 'Overview', href: '/', icon: LayoutDashboard },
@@ -33,7 +33,7 @@ const navigation = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
+  const { collapsed, setCollapsed } = useSidebar();
   const { connectionStatus } = useDashboardStore();
 
   const isApiHealthy = connectionStatus?.connected ?? false;

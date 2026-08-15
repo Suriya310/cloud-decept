@@ -474,7 +474,7 @@ async def get_stats(
     sessions_per_hour = clickhouse_client.query(
         f"""
         SELECT
-            toStartOfHour(start_time) as hour,
+            formatDateTime(toStartOfHour(start_time), '%H:%M') as hour,
             count() as cnt
         FROM clouddecept.sessions
         WHERE start_time >= '{day_ago_str}'
@@ -484,7 +484,7 @@ async def get_stats(
     ).named_results()
 
     sessions_per_hour_formatted = [
-        {"hour": r["hour"][-8:-3] if isinstance(r["hour"], str) else str(r["hour"])[-5:], "count": r["cnt"]}
+        {"hour": r["hour"], "count": r["cnt"]}
         for r in sessions_per_hour
     ]
 

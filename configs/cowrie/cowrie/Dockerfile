@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     curl \
     openssh-client \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder
@@ -62,10 +63,11 @@ COPY --chown=cowrie:cowrie userdb.txt /cowrie/etc/userdb.txt
 # Copy custom command implementations
 COPY --chown=cowrie:cowrie commands/ /cowrie/cowrie/commands/
 
-# Ensure directories have correct permissions
-RUN chown -R cowrie:cowrie /cowrie
+# Copy entrypoint script (runs as root to fix volume ownership)
+COPY --chmod=755 entrypoint.sh /entrypoint.sh
 
-USER cowrie
+# Ensure directories have correct permissions (build-time, for non-mounted dirs)
+RUN chown -R cowrie:cowrie /cowrie
 
 EXPOSE 2222 2323
 
@@ -73,5 +75,5 @@ EXPOSE 2222 2323
 ENV COWRIE_STDOUT=yes
 ENV PYTHONUNBUFFERED=1
 
-# Cowrie entrypoint - use the management script with stdout mode for Docker
-ENTRYPOINT ["cowrie", "start"]
+# Custom entrypoint handles runtime volume ownership, then drops to cowrie user
+ENTRYPOINT ["/entrypoint.sh", "cowrie", "start"]

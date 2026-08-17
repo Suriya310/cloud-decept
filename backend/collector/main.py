@@ -159,8 +159,10 @@ class EventCollector:
         consumer: str,
         count: int = 10,
         block_ms: int = 5000,
-    ) -> list[dict]:
-        """Consume events from a stream using consumer group"""
+    ) -> tuple[list[dict], list[str]]:
+        """Consume events from a stream using consumer group
+        Returns: (events, message_ids)
+        """
         if not self.redis:
             raise RuntimeError("Redis not initialized")
 
@@ -169,6 +171,7 @@ class EventCollector:
                 group, consumer, {stream: ">"}, count=count, block=block_ms
             )
             events = []
+            message_ids = []
             for stream_name, messages in results:
                 for msg_id, msg_data in messages:
                     try:
@@ -178,12 +181,13 @@ class EventCollector:
                             "stream": stream_name,
                             "data": envelope_data,
                         })
+                        message_ids.append(msg_id)
                     except Exception as e:
                         logger.error(f"Failed to parse event {msg_id}: {e}")
-            return events
+            return events, message_ids
         except redis.ResponseError as e:
             logger.error(f"Error consuming from {stream}: {e}")
-            return []
+            return [], []
 
     async def _init_clickhouse(self):
         """Initialize ClickHouse connection and create tables if needed"""
@@ -441,8 +445,10 @@ class EventCollector:
         while self.running:
             try:
                 all_events = []
+                all_message_ids = []  # Track message IDs for ACK
+                stream_to_ids_map = {}  # Map stream -> list of message IDs
                 for stream, stream_type in streams_to_consume:
-                    events = await self.consume_events(
+                    events, message_ids = await self.consume_events(
                         stream=stream,
                         group=ConsumerGroups.EVENT_COLLECTOR,
                         consumer=consumer_name,
@@ -457,11 +463,25 @@ class EventCollector:
                             et = ev.get("data", {}).get("event_type", "unknown")
                             event_types[et] = event_types.get(et, 0) + 1
                         logger.debug(f"Event types from {stream}: {event_types}")
-                    all_events.extend(events)
+                        all_events.extend(events)
+                        all_message_ids.extend(message_ids)
+                        if message_ids:
+                            stream_to_ids_map[stream] = message_ids
 
                 if all_events:
                     await self._write_events_to_clickhouse(all_events)
                     logger.info(f"Processed {len(all_events)} events to ClickHouse")
+
+                    # ACK all successfully processed messages
+                    for stream, message_ids in stream_to_ids_map.items():
+                        if message_ids:
+                            try:
+                                await self.redis.xack(
+                                    ConsumerGroups.EVENT_COLLECTOR, stream, *message_ids
+                                )
+                                logger.debug(f"ACKed {len(message_ids)} messages from {stream}")
+                            except Exception as e:
+                                logger.error(f"Failed to ACK messages from {stream}: {e}")
 
                 await asyncio.sleep(1)  # Small delay between batches
 

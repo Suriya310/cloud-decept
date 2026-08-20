@@ -286,7 +286,7 @@ class EventEnvelope(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
     event_type: str
-    payload: BaseEvent
+    payload: dict[str, Any]  # Use dict to preserve all payload fields including concrete type fields
     stream_name: str
     partition_key: Optional[str] = None
     version: str = "1.0"

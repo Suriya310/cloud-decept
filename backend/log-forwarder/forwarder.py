@@ -198,6 +198,7 @@ class LogForwarder:
                 "client_ip": src_ip,
                 "country": geoip_data.get("country", ""),
                 "asn": geoip_data.get("asn", ""),
+                "org": "",
             }
         elif mapped_type == "session_end":
             payload = {
@@ -205,6 +206,10 @@ class LogForwarder:
                 if cowrie_event.get("duration")
                 else 0,
                 "commands_executed": 0,  # Could track from command events
+                "files_transferred": 0,
+                "credentials_tried": 0,
+                "intent": "",
+                "skill_level": 0,
                 "disconnection_reason": cowrie_event.get("message", ""),
             }
         elif mapped_type == "auth":
@@ -223,6 +228,9 @@ class LogForwarder:
                 "arguments": [],
                 "working_directory": "/home/ubuntu",
                 "exit_code": 0 if event_type != "cowrie.command.failed" else 1,
+                "duration_ms": 0,
+                "intent": "",
+                "mitre_techniques": [],
             }
         elif mapped_type == "file_transfer":
             payload = {

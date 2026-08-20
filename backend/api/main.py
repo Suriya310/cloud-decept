@@ -85,7 +85,7 @@ async def init_schemas():
             disconnection_reason String
         ) ENGINE = MergeTree() ORDER BY (start_time, session_id)
         PARTITION BY toYYYYMM(start_time)
-        TTL start_time + INTERVAL 90 DAY
+        TTL toDateTime(start_time) + INTERVAL 90 DAY
         """,
         """
         CREATE TABLE IF NOT EXISTS commands (
@@ -101,7 +101,7 @@ async def init_schemas():
             mitre_techniques Array(String)
         ) ENGINE = MergeTree() ORDER BY (timestamp, session_id)
         PARTITION BY toYYYYMM(timestamp)
-        TTL timestamp + INTERVAL 90 DAY
+        TTL toDateTime(timestamp) + INTERVAL 90 DAY
         """,
         """
         CREATE TABLE IF NOT EXISTS auth_attempts (
@@ -114,7 +114,7 @@ async def init_schemas():
             auth_method String
         ) ENGINE = MergeTree() ORDER BY (timestamp, session_id)
         PARTITION BY toYYYYMM(timestamp)
-        TTL timestamp + INTERVAL 90 DAY
+        TTL toDateTime(timestamp) + INTERVAL 90 DAY
         """,
         """
         CREATE TABLE IF NOT EXISTS cloud_api_requests (
@@ -129,7 +129,7 @@ async def init_schemas():
             duration_ms UInt32
         ) ENGINE = MergeTree() ORDER BY (timestamp, session_id)
         PARTITION BY toYYYYMM(timestamp)
-        TTL timestamp + INTERVAL 90 DAY
+        TTL toDateTime(timestamp) + INTERVAL 90 DAY
         """,
     ]
 

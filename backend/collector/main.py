@@ -124,9 +124,11 @@ class EventCollector:
         # Determine stream based on event type
         stream_name = self._get_stream_for_event(event)
         logger.debug(f"Event {event.event_id} type={event.__class__.__name__} -> stream={stream_name}")
+        # Convert event to dict to preserve all concrete type fields
+        event_dict = event.model_dump(mode='json')
         envelope = EventEnvelope(
             event_type=event.__class__.__name__.replace("Event", "").lower(),
-            payload=event,
+            payload=event_dict,
             stream_name=stream_name,
             partition_key=event.session_id,
         )
@@ -204,6 +206,7 @@ class EventCollector:
             logger.info(f"ClickHouse connected to database '{self.clickhouse_db}'")
 
             # Create tables with DateTime64(6) to match backend-api schema
+            # TTL expressions need toDateTime() conversion for DateTime64 columns
             tables = [
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -223,7 +226,7 @@ class EventCollector:
                     disconnection_reason String
                 ) ENGINE = MergeTree() ORDER BY (start_time, session_id)
                 PARTITION BY toYYYYMM(start_time)
-                TTL start_time + INTERVAL 90 DAY
+                TTL toDateTime(start_time) + INTERVAL 90 DAY
                 """,
                 """
                 CREATE TABLE IF NOT EXISTS commands (
@@ -239,7 +242,7 @@ class EventCollector:
                     mitre_techniques Array(String)
                 ) ENGINE = MergeTree() ORDER BY (timestamp, session_id)
                 PARTITION BY toYYYYMM(timestamp)
-                TTL timestamp + INTERVAL 90 DAY
+                TTL toDateTime(timestamp) + INTERVAL 90 DAY
                 """,
                 """
                 CREATE TABLE IF NOT EXISTS auth_attempts (
@@ -252,7 +255,7 @@ class EventCollector:
                     auth_method String
                 ) ENGINE = MergeTree() ORDER BY (timestamp, session_id)
                 PARTITION BY toYYYYMM(timestamp)
-                TTL timestamp + INTERVAL 90 DAY
+                TTL toDateTime(timestamp) + INTERVAL 90 DAY
                 """,
                 """
                 CREATE TABLE IF NOT EXISTS cloud_api_requests (
@@ -267,7 +270,7 @@ class EventCollector:
                     duration_ms UInt32
                 ) ENGINE = MergeTree() ORDER BY (timestamp, session_id)
                 PARTITION BY toYYYYMM(timestamp)
-                TTL timestamp + INTERVAL 90 DAY
+                TTL toDateTime(timestamp) + INTERVAL 90 DAY
                 """,
             ]
             for table_sql in tables:
@@ -292,6 +295,29 @@ class EventCollector:
                 return datetime.fromisoformat(value.replace("Z", "+00:00"))
             return datetime.utcnow()
 
+        def safe_int(value: Any, default: int = 0) -> int:
+            """Safely convert value to int, defaulting to 0 for None/invalid"""
+            if value is None:
+                return default
+            try:
+                return int(value)
+            except (ValueError, TypeError):
+                return default
+
+        def safe_list(value: Any) -> list:
+            """Safely convert value to list, defaulting to [] for None"""
+            if value is None:
+                return []
+            if isinstance(value, list):
+                return value
+            return []
+
+        def safe_str(value: Any, default: str = "") -> str:
+            """Safely convert value to string, defaulting to empty string for None"""
+            if value is None:
+                return default
+            return str(value)
+
         # Group events by stream/type
         sessions = []
         commands = []
@@ -309,61 +335,61 @@ class EventCollector:
                     # SessionStartEvent
                     start_time = parse_dt(payload.get("timestamp", datetime.utcnow()))
                     sessions.append((
-                        payload.get("session_id", ""),
+                        safe_str(payload.get("session_id")),
                         start_time,
                         start_time,  # end_time placeholder (updated on session_end)
                         0,     # duration_seconds
-                        payload.get("client_ip", payload.get("attacker_ip", "")),
-                        payload.get("country", ""),
-                        payload.get("asn", ""),
-                        payload.get("protocol", "ssh"),
+                        safe_str(payload.get("client_ip") or payload.get("attacker_ip")),
+                        safe_str(payload.get("country")),
+                        safe_str(payload.get("asn")),
+                        safe_str(payload.get("protocol", "ssh")),
                         0,  # commands_executed
                         0,  # files_transferred
                         0,  # credentials_tried
-                        "", # intent
+                        safe_str(payload.get("intent")),
                         0,  # skill_level
-                        "", # disconnection_reason
+                        safe_str(payload.get("disconnection_reason")),
                     ))
                 elif event_type == "session_end" or stream == StreamNames.SESSION_EVENTS:
                     # SessionEndEvent - we'd need to update existing session, for now skip
                     # Could implement upsert logic later
                     pass
                 elif event_type == "command" or stream == StreamNames.COMMAND_EVENTS:
-                    cmd = payload.get("command", "")
+                    cmd = safe_str(payload.get("command"))
                     logger.debug(f"Preparing command for ClickHouse: session={payload.get('session_id')}, command={cmd[:50] if cmd else 'empty'}")
                     commands.append((
-                        payload.get("event_id", str(uuid.uuid4())),
-                        payload.get("session_id", ""),
+                        safe_str(payload.get("event_id", str(uuid.uuid4()))),
+                        safe_str(payload.get("session_id")),
                         parse_dt(payload.get("timestamp", datetime.utcnow())),
                         cmd,
-                        payload.get("arguments", []),
-                        payload.get("output", ""),
-                        payload.get("exit_code", 0),
-                        payload.get("duration_ms", 0),
-                        payload.get("intent", ""),
-                        payload.get("mitre_techniques", []),
+                        safe_list(payload.get("arguments")),
+                        safe_str(payload.get("output")),
+                        safe_int(payload.get("exit_code")),
+                        safe_int(payload.get("duration_ms")),
+                        safe_str(payload.get("intent")),
+                        safe_list(payload.get("mitre_techniques")),
                     ))
                 elif event_type == "auth" or stream == StreamNames.AUTH_EVENTS:
                     auth_attempts.append((
-                        payload.get("event_id", str(uuid.uuid4())),
-                        payload.get("session_id", ""),
+                        safe_str(payload.get("event_id", str(uuid.uuid4()))),
+                        safe_str(payload.get("session_id")),
                         parse_dt(payload.get("timestamp", datetime.utcnow())),
-                        payload.get("username", ""),
-                        payload.get("password", ""),
+                        safe_str(payload.get("username")),
+                        safe_str(payload.get("password")),
                         1 if payload.get("success", False) else 0,
-                        payload.get("auth_method", "password"),
+                        safe_str(payload.get("auth_method", "password")),
                     ))
                 elif event_type == "cloud_api" or stream == StreamNames.CLOUD_API_EVENTS:
                     cloud_api.append((
-                        payload.get("event_id", str(uuid.uuid4())),
-                        payload.get("session_id", ""),
+                        safe_str(payload.get("event_id", str(uuid.uuid4()))),
+                        safe_str(payload.get("session_id")),
                         parse_dt(payload.get("timestamp", datetime.utcnow())),
-                        payload.get("cloud_provider", ""),
-                        payload.get("http_method", ""),
-                        payload.get("endpoint", ""),
-                        payload.get("path", ""),
-                        payload.get("response_status", 0),
-                        payload.get("duration_ms", 0),
+                        safe_str(payload.get("cloud_provider")),
+                        safe_str(payload.get("http_method")),
+                        safe_str(payload.get("endpoint")),
+                        safe_str(payload.get("path")),
+                        safe_int(payload.get("response_status")),
+                        safe_int(payload.get("duration_ms")),
                     ))
             except Exception as e:
                 logger.error(f"Failed to prepare event for ClickHouse: {e}", exc_info=True)
@@ -371,9 +397,9 @@ class EventCollector:
         # Log batch counts before insert
         logger.info(f"Batch insert counts: sessions={len(sessions)}, commands={len(commands)}, auth={len(auth_attempts)}, cloud_api={len(cloud_api)}")
 
-        # Batch insert
-        try:
-            if sessions:
+        # Batch insert - each type independently so one failure doesn't block others
+        if sessions:
+            try:
                 self.clickhouse_client.insert(
                     "sessions",
                     sessions,
@@ -385,8 +411,11 @@ class EventCollector:
                     ]
                 )
                 logger.info(f"Inserted {len(sessions)} sessions to ClickHouse")
+            except Exception as e:
+                logger.error(f"Failed to insert sessions: {e}", exc_info=True)
 
-            if commands:
+        if commands:
+            try:
                 self.clickhouse_client.insert(
                     "commands",
                     commands,
@@ -399,8 +428,11 @@ class EventCollector:
                 logger.info(f"Inserted {len(commands)} commands to ClickHouse")
                 for cmd in commands[:3]:  # Log first 3 commands for verification
                     logger.info(f"  CMD: session={cmd[1]}, command={cmd[3][:50] if cmd[3] else 'empty'}")
+            except Exception as e:
+                logger.error(f"Failed to insert commands: {e}", exc_info=True)
 
-            if auth_attempts:
+        if auth_attempts:
+            try:
                 self.clickhouse_client.insert(
                     "auth_attempts",
                     auth_attempts,
@@ -410,8 +442,11 @@ class EventCollector:
                     ]
                 )
                 logger.info(f"Inserted {len(auth_attempts)} auth attempts to ClickHouse")
+            except Exception as e:
+                logger.error(f"Failed to insert auth_attempts: {e}", exc_info=True)
 
-            if cloud_api:
+        if cloud_api:
+            try:
                 self.clickhouse_client.insert(
                     "cloud_api_requests",
                     cloud_api,
@@ -422,9 +457,8 @@ class EventCollector:
                     ]
                 )
                 logger.info(f"Inserted {len(cloud_api)} cloud API requests to ClickHouse")
-
-        except Exception as e:
-            logger.error(f"Failed to insert events to ClickHouse: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"Failed to insert cloud_api_requests: {e}", exc_info=True)
 
     async def _consumer_loop(self):
         """Background task that consumes from Redis streams and writes to ClickHouse"""

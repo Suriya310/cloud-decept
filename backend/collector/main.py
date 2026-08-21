@@ -558,7 +558,7 @@ class EventCollector:
                 # - min_idle_time: only claim messages idle for at least this many ms (60 seconds)
                 # - start: '-' means start from the beginning of PEL
                 # - count: max messages to claim per stream per call
-                claimed = await self.redis.xautoclaim(
+                claimed_messages, next_start_id = await self.redis.xautoclaim(
                     stream,
                     ConsumerGroups.EVENT_COLLECTOR,
                     consumer_name,
@@ -567,13 +567,13 @@ class EventCollector:
                     count=100,
                 )
 
-                if claimed:
-                    claimed_ids = [msg_id for msg_id, _ in claimed]
+                if claimed_messages:
+                    claimed_ids = [msg_id for msg_id, _ in claimed_messages]
                     logger.info(f"XAUTOCLAIM reclaimed {len(claimed_ids)} orphaned messages from {stream}")
 
                     # Process the reclaimed messages through the same pipeline
                     reclaimed_events = []
-                    for msg_id, msg_data in claimed:
+                    for msg_id, msg_data in claimed_messages:
                         try:
                             envelope_data = json.loads(msg_data["data"])
                             reclaimed_events.append({

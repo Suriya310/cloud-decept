@@ -563,7 +563,7 @@ class EventCollector:
                     ConsumerGroups.EVENT_COLLECTOR,
                     consumer_name,
                     min_idle_time=60000,  # 60 seconds - message must be idle for at least 60s
-                    start="-",  # start from beginning of PEL
+                    start_id="-",  # start from beginning of PEL
                     count=100,
                 )
 

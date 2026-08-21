@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import socket
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -473,11 +474,23 @@ class EventCollector:
             (StreamNames.CLOUD_API_EVENTS, "cloud_api"),
         ]
 
-        consumer_name = f"clickhouse-writer-{uuid.uuid4().hex[:8]}"
+        # Use stable consumer identity based on hostname (consistent across restarts in Docker)
+        # This preserves the Pending Entries List (PEL) across container restarts
+        consumer_name = f"clickhouse-writer-{socket.gethostname()}"
         logger.info(f"Consumer name: {consumer_name}, group: {ConsumerGroups.EVENT_COLLECTOR}")
+
+        # Track when we last ran XAUTOCLAIM to reclaim orphaned messages from previous consumers
+        last_autoclaim = 0
+        autoclaim_interval_sec = 30  # Run XAUTOCLAIM every 30 seconds
 
         while self.running:
             try:
+                # Periodically reclaim orphaned messages from dead/old consumers
+                now = asyncio.get_event_loop().time()
+                if now - last_autoclaim >= autoclaim_interval_sec:
+                    await self._reclaim_orphaned_messages(streams_to_consume, consumer_name)
+                    last_autoclaim = now
+
                 all_events = []
                 all_message_ids = []  # Track message IDs for ACK
                 stream_to_ids_map = {}  # Map stream -> list of message IDs
@@ -527,6 +540,70 @@ class EventCollector:
                 await asyncio.sleep(5)  # Back off on error
 
         logger.info("Consumer loop stopped")
+
+    async def _reclaim_orphaned_messages(self, streams_to_consume: list, consumer_name: str):
+        """
+        Use XAUTOCLAIM to reclaim idle pending messages from dead/old consumers.
+        This handles messages that were delivered to previous consumers (with different names)
+        but never ACKed, which would otherwise remain pending forever.
+        """
+        if not self.redis:
+            return
+
+        for stream, stream_type in streams_to_consume:
+            try:
+                # XAUTOCLAIM parameters:
+                # - group: consumer group name
+                # - consumer: this consumer's name (claims will be assigned to us)
+                # - min_idle_time: only claim messages idle for at least this many ms (60 seconds)
+                # - start: '-' means start from the beginning of PEL
+                # - count: max messages to claim per stream per call
+                claimed = await self.redis.xautoclaim(
+                    stream,
+                    ConsumerGroups.EVENT_COLLECTOR,
+                    consumer_name,
+                    min_idle_time=60000,  # 60 seconds - message must be idle for at least 60s
+                    start="-",  # start from beginning of PEL
+                    count=100,
+                )
+
+                if claimed:
+                    claimed_ids = [msg_id for msg_id, _ in claimed]
+                    logger.info(f"XAUTOCLAIM reclaimed {len(claimed_ids)} orphaned messages from {stream}")
+
+                    # Process the reclaimed messages through the same pipeline
+                    reclaimed_events = []
+                    for msg_id, msg_data in claimed:
+                        try:
+                            envelope_data = json.loads(msg_data["data"])
+                            reclaimed_events.append({
+                                "id": msg_id,
+                                "stream": stream,
+                                "data": envelope_data,
+                            })
+                        except Exception as e:
+                            logger.error(f"Failed to parse reclaimed event {msg_id}: {e}")
+
+                    if reclaimed_events:
+                        # Insert into ClickHouse
+                        await self._write_events_to_clickhouse(reclaimed_events)
+                        logger.info(f"Processed {len(reclaimed_events)} reclaimed events to ClickHouse")
+
+                        # ACK the reclaimed messages only after successful insertion
+                        try:
+                            await self.redis.xack(
+                                ConsumerGroups.EVENT_COLLECTOR, stream, *claimed_ids
+                            )
+                            logger.debug(f"ACKed {len(claimed_ids)} reclaimed messages from {stream}")
+                        except Exception as e:
+                            logger.error(f"Failed to ACK reclaimed messages from {stream}: {e}")
+
+            except redis.ResponseError as e:
+                # NOGROUP means consumer group doesn't exist yet - that's fine
+                if "NOGROUP" not in str(e):
+                    logger.warning(f"XAUTOCLAIM error for {stream}: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error in XAUTOCLAIM for {stream}: {e}", exc_info=True)
 
 
 # --- FastAPI Application ---

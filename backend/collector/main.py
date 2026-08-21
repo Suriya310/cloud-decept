@@ -556,9 +556,10 @@ class EventCollector:
                 # - group: consumer group name
                 # - consumer: this consumer's name (claims will be assigned to us)
                 # - min_idle_time: only claim messages idle for at least this many ms (60 seconds)
-                # - start: '-' means start from the beginning of PEL
+                # - start_id: '-' means start from the beginning of PEL
                 # - count: max messages to claim per stream per call
-                claimed_messages, next_start_id = await self.redis.xautoclaim(
+                # Returns: [next_start_id, claimed_messages, deleted_ids]
+                next_start_id, claimed_messages, deleted_ids = await self.redis.xautoclaim(
                     stream,
                     ConsumerGroups.EVENT_COLLECTOR,
                     consumer_name,

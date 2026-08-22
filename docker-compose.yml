@@ -259,6 +259,49 @@ services:
       - clouddecept-network
 
   # ============================================================
+  # STAGE 3.5: STREAM PROCESSOR (AI Pipeline)
+  # ============================================================
+
+  stream-processor:
+    build:
+      context: ./services/stream-processor
+      dockerfile: Dockerfile
+    container_name: clouddecept-stream-processor
+    restart: unless-stopped
+    ports:
+      - "8006:8006"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - INTENT_ENGINE_URL=http://intent-engine:8001
+      - ADAPTIVE_ENGINE_URL=http://adaptive-engine:8002
+      - THREAT_INTEL_URL=http://threat-intel:8005
+      - LOG_LEVEL=INFO
+      - AI_PROCESSOR_ENABLED=true
+      - AI_PROCESSOR_CONSUMER_GROUP=ai_processor
+      - AI_PROCESSOR_CONSUMER_NAME=stream-processor-${HOSTNAME}
+      - AI_PROCESSOR_FROM=$
+      - AI_PROCESSOR_BATCH_SIZE=10
+      - AI_PROCESSOR_TIMEOUT_SECONDS=10
+      - AI_PROCESSOR_RETRY_COUNT=2
+    depends_on:
+      redis:
+        condition: service_healthy
+      intent-engine:
+        condition: service_healthy
+      adaptive-engine:
+        condition: service_healthy
+      threat-intel:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - clouddecept-network
+
+  # ============================================================
   # STAGE 4: CLOUD API MOCK + COWRIE HONEYPOT
   # ============================================================
 

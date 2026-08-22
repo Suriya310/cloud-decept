@@ -340,11 +340,13 @@ async def generate(request: GenerateRequest):
             max_tokens=request.max_tokens,
         )
 
+        provider_str = provider.value if isinstance(provider, LLMProvider) else (str(provider) if provider else "unknown")
+
         return GenerateResponse(
             request_id=request.request_id,
             response=response_text,
             model=model,
-            provider=provider.value,
+            provider=provider_str,
             latency_ms=token_usage.get("latency_ms", 0),
             tokens_used={
                 "prompt": token_usage.get("prompt_tokens", 0),
@@ -357,7 +359,7 @@ async def generate(request: GenerateRequest):
             request_id=request.request_id,
             response="",
             model="",
-            provider=provider.value if provider else "unknown",
+            provider=provider.value if isinstance(provider, LLMProvider) else (str(provider) if provider else "unknown"),
             latency_ms=0,
             tokens_used={},
             success=False,

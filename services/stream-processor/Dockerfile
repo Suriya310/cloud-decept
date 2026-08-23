@@ -37,11 +37,10 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 appuser && \
 
 # Copy application code
 COPY --chown=appuser:appuser src/ ./src/
-COPY --chown=appuser:appuser config.py .
 
 # Copy config
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app
 
 EXPOSE 8006
 

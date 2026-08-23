@@ -76,7 +76,7 @@ class EventProcessor:
 
     async def _process_stream(self, stream: str, stream_type: str) -> None:
         """Process a single stream."""
-        messages = await self.redis_client.read_batch(settings.INTENT_PREDICTIONS_STREAM, count=settings.batch_size)
+        messages = await self.redis_client.read_batch(stream, count=settings.batch_size)
 
         if not messages:
             return
@@ -89,7 +89,7 @@ class EventProcessor:
             # Skip if already processed (dedup)
             if msg_id in self._processed_event_ids:
                 logger.debug(f"Skipping duplicate event: {msg_id}")
-                await self.redis.ack(stream, [msg_id])
+                await self.redis_client.ack(stream, [msg_id])
                 continue
 
             try:

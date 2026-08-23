@@ -122,9 +122,18 @@ async def health_check():
 async def analyze_session(request: AnalyzeSessionRequest, background_tasks: BackgroundTasks):
     """Analyze a session for IOCs, MITRE techniques, and generate summary"""
 
+    def _safe_get(cmd: Dict[str, Any], key: str, fallback: str = "") -> str:
+        """Safely get a string value from a command dict, handling None values."""
+        val = cmd.get(key)
+        if val is None:
+            return ""
+        if isinstance(val, str):
+            return val
+        return str(val)
+
     # Extract IOCs
     all_text = " ".join([
-        cmd.get("cmd", cmd.get("command", "")) + " " + cmd.get("output", "")
+        (_safe_get(cmd, "cmd") or _safe_get(cmd, "command") or "") + " " + _safe_get(cmd, "output")
         for cmd in request.commands
     ] + request.outputs)
 
@@ -209,12 +218,21 @@ async def summarize(request: AnalyzeSessionRequest):
     if not session_summarizer:
         raise HTTPException(status_code=503, detail="Summarizer not ready")
 
+    def _safe_get(cmd: Dict[str, Any], key: str, fallback: str = "") -> str:
+        """Safely get a string value from a command dict, handling None values."""
+        val = cmd.get(key)
+        if val is None:
+            return ""
+        if isinstance(val, str):
+            return val
+        return str(val)
+
     session_data = {
         "session_id": request.session_id,
         "commands": request.commands,
         "intent_history": request.intent_history,
         "iocs": ioc_extractor.extract(" ".join([
-            cmd.get("cmd", cmd.get("command", "")) + " " + cmd.get("output", "")
+            (_safe_get(cmd, "cmd") or _safe_get(cmd, "command") or "") + " " + _safe_get(cmd, "output")
             for cmd in request.commands
         ])),
         "techniques": mitre_mapper.map_commands(request.commands),

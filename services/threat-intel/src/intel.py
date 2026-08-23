@@ -345,8 +345,16 @@ class IOCExtractor:
 
     def extract_from_session(self, commands: List[Dict], outputs: List[str]) -> List[ExtractedIOC]:
         """Extract IOCs from entire session"""
+        def _safe_get(cmd: Dict[str, Any], key: str, fallback: str = "") -> str:
+            val = cmd.get(key)
+            if val is None:
+                return ""
+            if isinstance(val, str):
+                return val
+            return str(val)
+
         all_text = " ".join([
-            cmd.get("cmd", "") + " " + cmd.get("output", "")
+            (_safe_get(cmd, "cmd") or _safe_get(cmd, "command") or "") + " " + _safe_get(cmd, "output")
             for cmd in commands
         ] + outputs)
         return self.extract(all_text)
@@ -364,7 +372,9 @@ class MITREMapper:
         seen = set()
 
         for cmd in commands:
-            command_text = (cmd.get("cmd", "") + " " + cmd.get("output", "")).lower()
+            cmd_str = cmd.get("cmd") or cmd.get("command") or ""
+            out_str = cmd.get("output") or ""
+            command_text = (cmd_str + " " + out_str).lower()
 
             for tech_id, tech_info in self.techniques.items():
                 for trigger in tech_info["triggers"]:
@@ -425,7 +435,7 @@ class SessionSummarizer:
         techniques = session_data.get("techniques", [])
 
         cmd_summary = "\n".join([
-            f"- {c.get('timestamp', '')}: {c.get('cmd', c.get('command', ''))}"
+            f"- {c.get('timestamp', '')}: {c.get('cmd') or c.get('command') or ''}"
             for c in commands[-20:]
         ])
 

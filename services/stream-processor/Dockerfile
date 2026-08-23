@@ -41,7 +41,7 @@ COPY --chown=appuser:appuser config.py .
 
 # Copy config
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app/src
 
 EXPOSE 8006
 
@@ -51,4 +51,4 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=5 --start-period=30s \
 
 USER appuser
 
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8006"]
+CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8006"]

@@ -278,7 +278,7 @@ services:
       - LOG_LEVEL=INFO
       - AI_PROCESSOR_ENABLED=true
       - AI_PROCESSOR_CONSUMER_GROUP=ai_processor
-      - AI_PROCESSOR_CONSUMER_NAME=stream-processor-${HOSTNAME}
+      - AI_PROCESSOR_CONSUMER_NAME=stream-processor-1
       - AI_PROCESSOR_FROM=$
       - AI_PROCESSOR_BATCH_SIZE=10
       - AI_PROCESSOR_TIMEOUT_SECONDS=10

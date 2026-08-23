@@ -13,11 +13,11 @@ import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from config import settings
-from redis_client import RedisClient
-from ai_clients import AIClients
-from session_state import SessionStateManager
-from processor import EventProcessor
+from src.config import settings
+from src.redis_client import RedisClient
+from src.ai_clients import AIClients
+from src.session_state import SessionStateManager
+from src.processor import EventProcessor
 
 # Configure logging
 logging.basicConfig(
@@ -133,4 +133,4 @@ async def health() -> dict:
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8006"))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("src.main:app", host="0.0.0.0", port=port, reload=False)

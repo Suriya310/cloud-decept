@@ -144,12 +144,13 @@ class EventProcessor:
         """Process session start/end events."""
         event_type = event_data.get("event_type", "")
 
-        if event_type == "session_start":
+        # Handle both with and without underscore (Cowrie uses sessionstart/sessionend)
+        if event_type in ("session_start", "sessionstart"):
             # Initialize session state
             session = self.session_manager.process_session_start(event_data)
             logger.info(f"Session initialized: {payload.get('session_id')}")
 
-        elif event_type == "session_end":
+        elif event_type in ("session_end", "sessionend"):
             # Finalize session and trigger AI processing
             session = self.session_manager.process_session_end(payload)
             if not session:
@@ -161,14 +162,43 @@ class EventProcessor:
             # Trigger AI processing for completed session
             await self._process_session_ai(session)
 
+        else:
+            logger.debug(f"Unknown session event type: {event_type}")
+
     async def _handle_command_event(self, event_data: Dict[str, Any], payload: Dict[str, Any]) -> None:
-        """Process command event - accumulate in session context."""
-        self.session_manager.add_command({"payload": payload})
+        """Process command event - accumulate in session context and trigger AI if needed."""
+        session_id = payload.get("session_id")
+        command = payload.get("command", "")
+
+        if not session_id:
+            logger.warning(f"Command event missing session_id: {payload}")
+            return
+
+        logger.debug(f"Command received: session_id={session_id}, command={command[:50]}")
+
+        session = self.session_manager.add_command({"payload": payload})
+
+        # Check if we should trigger AI processing
+        # Process when we have enough commands or specific trigger commands
+        if session and len(session.get("commands", [])) >= 3:
+            # Check if this is a trigger command or we have enough commands
+            trigger_commands = {"aws", "az", "gcloud", "kubectl", "ssh", "scp", "curl", "wget", "nc", "nmap"}
+            cmd_lower = payload.get("command", "").lower()
+            is_trigger = any(trigger in cmd_lower for trigger in trigger_commands)
+
+            if is_trigger or len(session.get("commands", [])) >= 5:
+                logger.info(f"Triggering AI processing for session {session_id} (commands: {len(session.get('commands', []))})")
+                await self._process_session_ai(session)
 
     async def _handle_auth_event(self, event_data: Dict[str, Any], payload: Dict[str, Any]) -> None:
         """Process authentication event."""
+        session_id = payload.get("session_id")
+        if not session_id:
+            logger.warning(f"Auth event missing session_id: {payload}")
+            return
+
+        logger.info(f"Auth event: session={session_id}, user={payload.get('username')}, success={payload.get('success')}")
         self.session_manager.add_auth(event_data)
-        logger.debug(f"Auth event recorded: {payload.get('username', 'unknown')} - {'success' if payload.get('success') else 'failed'}")
 
     async def _handle_file_event(self, event_data: Dict[str, Any], payload: Dict[str, Any]) -> None:
         """Process file transfer event."""

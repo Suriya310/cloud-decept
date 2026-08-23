@@ -80,7 +80,7 @@ class SessionStateManager:
     def add_command(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Add a command to session context.
-        Returns session context if command batch is ready for processing.
+        Returns session context so caller can decide if processing should be triggered.
         """
         session_id = event_data.get("payload", {}).get("session_id")
         if not session_id or session_id not in self.sessions:
@@ -104,7 +104,7 @@ class SessionStateManager:
         session["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         logger.debug(f"Added command to session {session_id}: {command_entry.get('command', '')[:50]}")
-        return None  # Don't trigger processing immediately; wait for debounce or session end
+        return session
 
     def add_auth(self, event_data: Dict[str, Any]) -> None:
         """Add authentication event to session context."""

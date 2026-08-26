@@ -408,14 +408,15 @@ class MITREMapper:
 class SessionSummarizer:
     """Generate LLM-powered session summaries using LLM Gateway"""
 
-    def __init__(self, llm_gateway_url: str = "http://llm-gateway:8003", model: str = "llama3.2:3b"):
+    def __init__(self, llm_gateway_url: str = "http://llm-gateway:8003", model: str = "qwen2.5:1.5b"):
         self.llm_gateway_url = llm_gateway_url
         self.model = model
         self.client: Optional[httpx.AsyncClient] = None
+        self._generation_timeout = 120.0  # Match Ollama/LLM Gateway timeout
 
     async def initialize(self):
-        """Initialize HTTP client"""
-        self.client = httpx.AsyncClient(timeout=60.0)
+        """Initialize HTTP client with generous timeout for LLM generation"""
+        self.client = httpx.AsyncClient(timeout=httpx.Timeout(self._generation_timeout, connect=10.0))
 
     async def close(self):
         """Close HTTP client"""
@@ -439,7 +440,7 @@ class SessionSummarizer:
             for c in commands[-20:]
         ])
 
-        prompt = f"""You are a cybersecurity analyst summarizing an attacker session in a cloud honeypot.
+        prompt = f"""You are a cybersecurity analyst. Analyze this attacker session and return ONLY a compact JSON object - no reasoning, no markdown, no extra text.
 
 SESSION DATA:
 - Session ID: {session_data.get('session_id', 'unknown')}
@@ -448,34 +449,24 @@ SESSION DATA:
 - Attacker IP: {session_data.get('attacker_ip', 'unknown')}
 - Attacker Country: {session_data.get('attacker_country', 'unknown')}
 
-COMMAND TIMELINE (last 20):
+COMMAND TIMELINE (last 10):
 {cmd_summary}
 
 INTENT PROGRESSION: {' -> '.join(intent_history) if intent_history else 'Unknown'}
 
 EXTRACTED IOCs: {len(iocs)} found
 
-MITRE TECHNIQUES OBSERVED:
-{json.dumps([{'id': t.technique_id, 'name': t.name, 'tactic': t.tactic, 'severity': t.severity} for t in techniques], indent=2) if techniques else 'None'}
+MITRE TECHNIQUES:
+{json.dumps([{'id': t.technique_id, 'name': t.name, 'tactic': t.tactic, 'severity': t.severity} for t in techniques]) if techniques else '[]'}
 
-TASK: Write a concise security incident summary covering:
-1. Attacker skill level assessment (1-10)
-2. Primary objectives
-3. Techniques used (MITRE ATT&CK)
-4. IOCs of interest
-5. Risk assessment
-6. Recommended defensive actions
-
-RESPOND IN JSON:
+RESPOND IN THIS EXACT JSON FORMAT (no extra fields, no explanations):
 {{
-    "skill_level": <1-10>,
-    "primary_objective": "<string>",
-    "techniques_summary": "<string>",
-    "iocs_of_interest": ["<list of notable IOCs>"],
-    "risk_level": "<critical|high|medium|low>",
-    "defensive_recommendations": ["<recommendations>"],
-    "narrative": "<2-3 paragraph summary>"
-}}"""
+    "threat_level": "<critical|high|medium|low>",
+    "intent": "<primary intent: cloud_recon|credential_hunting|privilege_escalation|data_access|persistence|lateral_movement|unknown>",
+    "primary_mitre_technique": "<MITRE ID e.g., T1526>",
+    "summary": "<= 30 words describing the attack>"
+}}
+"""
 
         try:
             response = await self.client.post(
@@ -493,24 +484,70 @@ RESPOND IN JSON:
                 raise Exception(f"LLM Gateway returned {response.status_code}: {response.text}")
 
             data = response.json()
-            summary = json.loads(data.get("response", "{}"))
+            summary_text = data.get("response", "{}")
+
+            try:
+                summary = json.loads(summary_text)
+            except json.JSONDecodeError:
+                # Try to extract JSON from text if it's wrapped in markdown or has extra text
+                import re
+                # Strip markdown code fences
+                cleaned_text = summary_text.strip()
+                if cleaned_text.startswith('```'):
+                    # Remove ```json or ``` fences
+                    cleaned_text = re.sub(r'^```(?:json)?\s*', '', cleaned_text)
+                    cleaned_text = re.sub(r'\s*```$', '', cleaned_text)
+                # Also strip Qwen3 thinking tokens (<think>...</think>)
+                cleaned_text = re.sub(r'<think>.*?</think>', '', cleaned_text, flags=re.DOTALL)
+                cleaned_text = re.sub(r'<think>.*', '', cleaned_text, flags=re.DOTALL)
+                cleaned_text = cleaned_text.strip()
+
+                json_match = re.search(r'\{.*\}', cleaned_text, re.DOTALL)
+                if json_match:
+                    summary = json.loads(json_match.group())
+                else:
+                    raise
+
+            # Validate and normalize the response format
+            if not isinstance(summary, dict):
+                raise ValueError("Summary is not a dict")
+
+            # Ensure required fields exist with defaults
+            result = {
+                "threat_level": summary.get("threat_level", "medium"),
+                "intent": summary.get("intent", "unknown"),
+                "primary_mitre_technique": summary.get("primary_mitre_technique", ""),
+                "summary": summary.get("summary", ""),
+            }
+
+            # Validate threat_level
+            if result["threat_level"] not in ["critical", "high", "medium", "low"]:
+                result["threat_level"] = "medium"
+
+            # Validate intent
+            valid_intents = ["cloud_recon", "credential_hunting", "privilege_escalation",
+                           "data_access", "persistence", "lateral_movement", "unknown"]
+            if result["intent"] not in valid_intents:
+                result["intent"] = "unknown"
+
+            # Truncate summary to 30 words
+            words = result["summary"].split()
+            if len(words) > 30:
+                result["summary"] = " ".join(words[:30]) + "..."
 
             # Add metadata
-            summary["generated_at"] = datetime.now(timezone.utc).isoformat()
-            summary["model"] = self.model
+            result["generated_at"] = datetime.now(timezone.utc).isoformat()
+            result["model"] = self.model
 
-            return summary
+            return result
 
         except Exception as e:
             logger.error(f"Summarization failed: {e}")
             return {
-                "skill_level": 5,
-                "primary_objective": "Unknown - summarization failed",
-                "techniques_summary": f"{len(techniques)} techniques observed",
-                "iocs_of_interest": [ioc.value for ioc in iocs[:5]],
-                "risk_level": "medium",
-                "defensive_recommendations": ["Review session manually"],
-                "narrative": "Automated summarization failed. Manual review required.",
+                "threat_level": "medium",
+                "intent": "unknown",
+                "primary_mitre_technique": "",
+                "summary": "Automated summarization failed. Manual review required.",
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "model": self.model,
                 "error": str(e)

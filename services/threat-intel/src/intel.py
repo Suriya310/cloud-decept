@@ -461,10 +461,13 @@ MITRE TECHNIQUES:
 
 RESPOND IN THIS EXACT JSON FORMAT (no extra fields, no explanations):
 {{
-    "threat_level": "<critical|high|medium|low>",
-    "intent": "<primary intent: cloud_recon|credential_hunting|privilege_escalation|data_access|persistence|lateral_movement|unknown>",
-    "primary_mitre_technique": "<MITRE ID e.g., T1526>",
-    "summary": "<= 30 words describing the attack>"
+    "skill_level": <integer 1-10>,
+    "primary_objective": "<short phrase, e.g. system discovery>",
+    "techniques_summary": "<relevant MITRE technique IDs, e.g. T1082, T1526>",
+    "iocs_of_interest": [<notable IOC strings, [] if none>],
+    "risk_level": "<critical|high|medium|low>",
+    "defensive_recommendations": [<short recommendation strings>],
+    "narrative": "<= 30 words describing the attack>"
 }}
 """
 
@@ -514,26 +517,36 @@ RESPOND IN THIS EXACT JSON FORMAT (no extra fields, no explanations):
 
             # Ensure required fields exist with defaults
             result = {
-                "threat_level": summary.get("threat_level", "medium"),
-                "intent": summary.get("intent", "unknown"),
-                "primary_mitre_technique": summary.get("primary_mitre_technique", ""),
-                "summary": summary.get("summary", ""),
+                "skill_level": summary.get("skill_level", 5),
+                "primary_objective": summary.get("primary_objective", "Unknown"),
+                "techniques_summary": summary.get("techniques_summary", ""),
+                "iocs_of_interest": summary.get("iocs_of_interest", []),
+                "risk_level": summary.get("risk_level", "medium"),
+                "defensive_recommendations": summary.get("defensive_recommendations", []),
+                "narrative": summary.get("narrative", ""),
             }
 
-            # Validate threat_level
-            if result["threat_level"] not in ["critical", "high", "medium", "low"]:
-                result["threat_level"] = "medium"
+            # Validate skill_level
+            try:
+                result["skill_level"] = int(result["skill_level"])
+            except (TypeError, ValueError):
+                result["skill_level"] = 5
+            result["skill_level"] = max(1, min(10, result["skill_level"]))
 
-            # Validate intent
-            valid_intents = ["cloud_recon", "credential_hunting", "privilege_escalation",
-                           "data_access", "persistence", "lateral_movement", "unknown"]
-            if result["intent"] not in valid_intents:
-                result["intent"] = "unknown"
+            # Validate risk_level
+            if result["risk_level"] not in ["critical", "high", "medium", "low"]:
+                result["risk_level"] = "medium"
 
-            # Truncate summary to 30 words
-            words = result["summary"].split()
+            # Validate list fields
+            if not isinstance(result["iocs_of_interest"], list):
+                result["iocs_of_interest"] = []
+            if not isinstance(result["defensive_recommendations"], list):
+                result["defensive_recommendations"] = []
+
+            # Truncate narrative to 30 words
+            words = str(result["narrative"]).split()
             if len(words) > 30:
-                result["summary"] = " ".join(words[:30]) + "..."
+                result["narrative"] = " ".join(words[:30]) + "..."
 
             # Add metadata
             result["generated_at"] = datetime.now(timezone.utc).isoformat()
@@ -544,10 +557,13 @@ RESPOND IN THIS EXACT JSON FORMAT (no extra fields, no explanations):
         except Exception as e:
             logger.error(f"Summarization failed: {e}")
             return {
-                "threat_level": "medium",
-                "intent": "unknown",
-                "primary_mitre_technique": "",
-                "summary": "Automated summarization failed. Manual review required.",
+                "skill_level": 5,
+                "primary_objective": "Unknown - summarization failed",
+                "techniques_summary": f"{len(techniques)} techniques observed",
+                "iocs_of_interest": [ioc.value for ioc in iocs[:5]] if iocs and hasattr(iocs[0], "value") else [],
+                "risk_level": "medium",
+                "defensive_recommendations": ["Review session manually"],
+                "narrative": "Automated summarization failed. Manual review required.",
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "model": self.model,
                 "error": str(e)

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # Legacy Ollama (fallback)
     OLLAMA_URL: str = "http://ollama:11434"
-    MODEL_NAME: str = "qwen3:4b-instruct-2507-q4_K_M"
+    MODEL_NAME: str = "qwen2.5:1.5b"
 
     # Databases
     CLICKHOUSE_HOST: str = "clickhouse"

@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     # Legacy Ollama (for fallback)
     OLLAMA_URL: str = "http://ollama:11434"
-    MODEL_NAME: str = "llama3.2:3b"
+    MODEL_NAME: str = "qwen2.5:1.5b"
     OLLAMA_TIMEOUT: int = 60
 
     # Redis

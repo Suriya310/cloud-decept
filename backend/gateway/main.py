@@ -71,7 +71,7 @@ class OllamaProvider(LLMProviderBase):
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-        model: str = "llama3.2:3b",
+        model: str = "qwen2.5:1.5b",
         temperature: float = 0.0,
         max_tokens: int = 512,
     ) -> tuple[str, dict[str, int]]:
@@ -327,7 +327,7 @@ async def generate(request: GenerateRequest):
         provider_instance = gateway.get_provider(provider)
 
         model = request.model or (
-            "qwen3:4b-instruct-2507-q4_K_M" if provider == LLMProvider.OLLAMA else "gpt-4o-mini"
+            "qwen2.5:1.5b" if provider == LLMProvider.OLLAMA else "gpt-4o-mini"
         )
 
         response_text, token_usage = await provider_instance.generate(
@@ -398,7 +398,7 @@ Respond with JSON: {{"intent": "...", "confidence": 0.0-1.0, "skill": 1-10, "rea
         response_text, token_usage = await gateway.generate(
             prompt=prompt,
             system_prompt="You are a cybersecurity expert classifying attacker intent from honeypot logs. Respond ONLY with valid JSON.",
-            model=model or "qwen3:4b-instruct-2507-q4_K_M",
+            model=model or "qwen2.5:1.5b",
             temperature=0.0,
             max_tokens=512,
         )

@@ -122,7 +122,7 @@ class OpenAIProvider(LLMProviderBase):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.client = httpx.AsyncClient(
-            timeout=120.0,
+            timeout=180.0,  # Increased from 120s to 180s for consistency
             headers={"Authorization": f"Bearer {api_key}"}
         )
 
@@ -176,7 +176,7 @@ class AnthropicProvider(LLMProviderBase):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.client = httpx.AsyncClient(
-            timeout=120.0,
+            timeout=180.0,  # Increased from 120s to 180s for consistency
             headers={
                 "x-api-key": api_key,
                 "anthropic-version": "2023-06-01"

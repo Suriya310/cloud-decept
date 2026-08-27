@@ -128,14 +128,14 @@ Consider:
 4. Are they exploring, stealing credentials, escalating privileges, accessing data, establishing persistence, or moving laterally?
 
 RESPOND IN VALID JSON FORMAT ONLY:
-{
+{{
     "intent": "<one of: cloud_recon, credential_hunting, privilege_escalation, data_access, persistence, lateral_movement, unknown>",
     "confidence": <float 0.0-1.0>,
     "skill_level": <int 1-10>,
     "reasoning": "<one sentence explaining your classification>",
     "secondary_intents": ["<other possible intents>"],
     "adaptation_hint": "<suggestion for how to adapt the honeypot response>"
-}
+}}
 """
 
 
@@ -159,7 +159,7 @@ CATEGORIES:
 - lateral_movement: Moving between systems (ssh, scp, ssm, run-command, compute ssh)
 
 JSON ONLY:
-{"intent": "...", "confidence": 0.0, "skill_level": 1, "reasoning": "...", "adaptation_hint": "..."}
+{{"intent": "...", "confidence": 0.0, "skill_level": 1, "reasoning": "...", "adaptation_hint": "..."}}
 """
 
 

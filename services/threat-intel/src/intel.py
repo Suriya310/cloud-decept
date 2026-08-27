@@ -525,6 +525,11 @@ RESPOND IN THIS EXACT JSON FORMAT (no extra fields, no explanations):
                 "defensive_recommendations": summary.get("defensive_recommendations", []),
                 "narrative": summary.get("narrative", ""),
             }
+            # Normalize techniques_summary
+            if isinstance(result["techniques_summary"], list):
+                result["techniques_summary"] = ", ".join(str(x) for x in result["techniques_summary"])
+            elif not isinstance(result["techniques_summary"], str):
+                result["techniques_summary"] = str(result["techniques_summary"])
 
             # Validate skill_level
             try:

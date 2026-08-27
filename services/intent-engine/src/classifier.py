@@ -40,7 +40,7 @@ class IntentClassifier:
 
     async def initialize(self):
         """Initialize HTTP client"""
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.client = httpx.AsyncClient(timeout=120.0)
         try:
             # Test connection to LLM Gateway
             resp = await self.client.get(f"{self.llm_gateway_url}/health")
@@ -149,7 +149,7 @@ class IntentClassifier:
             logger.error(f"Failed to parse LLM response: {e}")
             return RuleBasedClassifier.classify(commands)
         except Exception as e:
-            logger.error(f"Classification error: {e}")
+            logger.error(f"Classification error: {type(e).__name__}: {e}", exc_info=True)
             # Fallback to rule-based
             return RuleBasedClassifier.classify(commands)
 

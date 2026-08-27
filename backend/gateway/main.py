@@ -65,7 +65,7 @@ class OllamaProvider(LLMProviderBase):
 
     def __init__(self, base_url: str = "http://ollama:11434"):
         self.base_url = base_url.rstrip("/")
-        self.client = httpx.AsyncClient(timeout=120.0)
+        self.client = httpx.AsyncClient(timeout=180.0)  # Increased from 120s to 180s for slower models
 
     async def generate(
         self,

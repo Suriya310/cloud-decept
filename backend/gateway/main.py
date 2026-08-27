@@ -109,9 +109,7 @@ class OllamaProvider(LLMProviderBase):
 
     def get_model_list(self) -> list[str]:
         return [
-            "qwen3:4b-instruct-2507-q4_K_M",
-            "llama3.2:3b",
-            "qwen2.5:3b"
+            "qwen2.5:1.5b"
         ]
 
 

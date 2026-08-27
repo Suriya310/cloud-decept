@@ -560,7 +560,7 @@ RESPOND IN THIS EXACT JSON FORMAT (no extra fields, no explanations):
             return result
 
         except Exception as e:
-            logger.error(f"Summarization failed: {e}")
+            logger.exception("Summarization failed")
             return {
                 "skill_level": 5,
                 "primary_objective": "Unknown - summarization failed",

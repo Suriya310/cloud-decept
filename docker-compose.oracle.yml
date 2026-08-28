@@ -29,7 +29,6 @@ services:
         limits:
           cpus: "1.0"
           memory: 2G
-          memswap_limit: 3G
         reservations:
           cpus: "0.5"
           memory: 1G
@@ -60,7 +59,6 @@ services:
         limits:
           cpus: "0.5"
           memory: 1G
-          memswap_limit: 1.5G
         reservations:
           cpus: "0.25"
           memory: 512M
@@ -87,7 +85,6 @@ services:
         limits:
           cpus: "0.25"
           memory: 256M
-          memswap_limit: 384M
         reservations:
           cpus: "0.1"
           memory: 128M
@@ -131,7 +128,6 @@ services:
         limits:
           cpus: "0.5"
           memory: 512M
-          memswap_limit: 768M
         reservations:
           cpus: "0.25"
           memory: 256M
@@ -177,7 +173,6 @@ services:
         limits:
           cpus: "1.0"
           memory: 1G
-          memswap_limit: 1.5G
         reservations:
           cpus: "0.5"
           memory: 512M
@@ -211,7 +206,6 @@ services:
         limits:
           cpus: "0.5"
           memory: 512M
-          memswap_limit: 768M
         reservations:
           cpus: "0.25"
           memory: 256M
@@ -250,7 +244,6 @@ services:
         limits:
           cpus: "1.0"
           memory: 1.5G
-          memswap_limit: 2G
         reservations:
           cpus: "0.5"
           memory: 768M
@@ -285,7 +278,6 @@ services:
         limits:
           cpus: "0.5"
           memory: 512M
-          memswap_limit: 768M
         reservations:
           cpus: "0.25"
           memory: 256M
@@ -327,7 +319,6 @@ services:
         limits:
           cpus: "0.5"
           memory: 512M
-          memswap_limit: 768M
         reservations:
           cpus: "0.25"
           memory: 256M
@@ -372,7 +363,6 @@ services:
         limits:
           cpus: "1.0"
           memory: 1G
-          memswap_limit: 1.5G
         reservations:
           cpus: "0.5"
           memory: 512M
@@ -416,7 +406,6 @@ services:
         limits:
           cpus: "0.5"
           memory: 512M
-          memswap_limit: 768M
         reservations:
           cpus: "0.25"
           memory: 256M
@@ -447,7 +436,6 @@ services:
         limits:
           cpus: "0.25"
           memory: 128M
-          memswap_limit: 256M
         reservations:
           cpus: "0.1"
           memory: 64M
@@ -474,7 +462,6 @@ services:
         limits:
           cpus: "2.0"
           memory: 4G
-          memswap_limit: 6G
         reservations:
           cpus: "1.0"
           memory: 2G
@@ -519,7 +506,6 @@ services:
         limits:
           cpus: "0.5"
           memory: 512M
-          memswap_limit: 768M
         reservations:
           cpus: "0.25"
           memory: 256M

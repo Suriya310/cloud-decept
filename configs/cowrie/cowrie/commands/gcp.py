@@ -3,6 +3,7 @@
 import json
 import random
 import uuid
+import urllib.request
 from datetime import datetime, timezone
 from typing import Dict, List, Any
 
@@ -10,10 +11,39 @@ from typing import Dict, List, Any
 class GCPCommand:
     """GCP gcloud CLI command emulator"""
 
+    # Define which commands we will handle via the cloud-api-mock service
+    API_MOCK_ENDPOINTS = {
+        ('compute', 'instances', 'list'): ('/gcp/compute/instances/list', 'GET'),
+        ('storage', 'buckets', 'list'): ('/gcp/storage/buckets/list', 'GET'),
+        ('iam', 'service-accounts', 'list'): ('/gcp/iam/service-accounts/list', 'GET'),
+    }
+
     def __init__(self, session):
         self.session = session
         self.project_id = "gcp-media-studios-prod"
         self.project_number = random.randint(100000000000, 999999999999)
+
+    def _call_api_mock(self, endpoint, method='GET', body=None):
+        """Make a request to the cloud-api-mock service"""
+        try:
+            # Use the Cowrie session ID for consistency
+            session_id = getattr(self.session, 'id', 'unknown')
+            url = f"http://cloud-api-mock:8080{endpoint}"
+            headers = {
+                "Content-Type": "application/json",
+                "x-session-id": str(session_id)
+            }
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode('utf-8')
+
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+
+            with urllib.request.urlopen(req) as response:
+                return json.loads(response.read().decode())
+        except Exception as e:
+            # If the API mock is unavailable, fall back to local implementation
+            return None
 
     def get_fake_instances(self) -> List[Dict]:
         machine_types = ["n2-standard-2", "n2-standard-4", "c2-standard-8", "e2-medium"]
@@ -133,6 +163,24 @@ class GCPCommand:
             return {"error": "usage: gcloud <group> <command> [params]"}
 
         group = args[0]
+
+        # Handle version flag
+        if "--version" in args or "-v" in args:
+            return {"Google Cloud SDK": "425.0.0"}
+
+        # First, try to handle via cloud-api-mock for supported commands
+        # Build key based on args length
+        if len(args) >= 3:
+            cmd = args[1]
+            subcmd = args[2]
+            key = (group, cmd, subcmd)
+            if key in self.API_MOCK_ENDPOINTS:
+                endpoint, method = self.API_MOCK_ENDPOINTS[key]
+                result = self._call_api_mock(endpoint, method)
+                if result is not None:
+                    return result
+
+        # If API mock fails or command not in mock endpoints, fall back to local implementation
 
         if group == "compute" and len(args) > 1:
             cmd = args[1]

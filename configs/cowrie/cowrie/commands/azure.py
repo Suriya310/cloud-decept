@@ -3,6 +3,7 @@
 import json
 import random
 import uuid
+import urllib.request
 from datetime import datetime, timezone
 from typing import Dict, List, Any
 
@@ -10,9 +11,38 @@ from typing import Dict, List, Any
 class AzureCommand:
     """Azure CLI command emulator"""
 
+    # Define which commands we will handle via the cloud-api-mock service
+    API_MOCK_ENDPOINTS = {
+        ('vm', 'list'): ('/azure/vm/list', 'GET'),
+        ('storage', 'account', 'list'): ('/azure/storage/list', 'GET'),  # az storage account list
+        ('ad', 'user', 'list'): ('/azure/ad/users', 'GET'),  # az ad user list
+    }
+
     def __init__(self, session):
         self.session = session
         self.subscription_id = f"sub-{''.join(random.choices('0123456789abcdef', k=32))}"
+
+    def _call_api_mock(self, endpoint, method='GET', body=None):
+        """Make a request to the cloud-api-mock service"""
+        try:
+            # Use the Cowrie session ID for consistency
+            session_id = getattr(self.session, 'id', 'unknown')
+            url = f"http://cloud-api-mock:8080{endpoint}"
+            headers = {
+                "Content-Type": "application/json",
+                "x-session-id": str(session_id)
+            }
+            data = None
+            if body is not None:
+                data = json.dumps(body).encode('utf-8')
+
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+
+            with urllib.request.urlopen(req) as response:
+                return json.loads(response.read().decode())
+        except Exception as e:
+            # If the API mock is unavailable, fall back to local implementation
+            return None
 
     def get_fake_vms(self) -> List[Dict]:
         vm_sizes = ["Standard_D2s_v3", "Standard_D4s_v3", "Standard_E4s_v3", "Standard_B2s"]
@@ -68,6 +98,34 @@ class AzureCommand:
             return {"error": "usage: az <group> <command> [params]"}
 
         group = args[0]
+
+        # Handle version flag
+        if "--version" in args or "-v" in args:
+            return {"azure-cli": "2.55.0"}
+
+        # First, try to handle via cloud-api-mock for supported commands
+        # Build key based on args length
+        if len(args) >= 2:
+            cmd = args[1]
+            if len(args) >= 3:
+                subcmd = args[2]
+                key = (group, cmd, subcmd)
+            else:
+                key = (group, cmd)
+
+            # Special handling for az storage account list
+            if group == "storage" and cmd == "account" and len(args) > 2 and args[2] == "list":
+                endpoint, method = self.API_MOCK_ENDPOINTS.get(('storage', 'account', 'list'), (None, None))
+                if endpoint:
+                    result = self._call_api_mock(endpoint, method)
+                    if result is not None:
+                        return result
+            elif (group, cmd) in self.API_MOCK_ENDPOINTS:
+                endpoint, method = self.API_MOCK_ENDPOINTS[(group, cmd)]
+                result = self._call_api_mock(endpoint, method)
+                if result is not None:
+                    return result
+            # If API mock fails, fall back to local implementation below
 
         if group == "vm" and len(args) > 1:
             cmd = args[1]

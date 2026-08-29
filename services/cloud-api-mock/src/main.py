@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 import random
+import asyncio
 
 from config import settings
 from mock_data.profiles import (
@@ -223,23 +224,31 @@ async def aws_describe_instances(
         }]
     }
 
-    # Classify intent
-    intent_result = await classify_intent(session_id, [
-        {"cmd": "aws ec2 describe-instances", "endpoint": "/aws/ec2/describe-instances"}
-    ])
+    # Process classification, adaptation, and logging in the background to avoid blocking the response
+    async def process_background_tasks():
+        try:
+            # Classify intent
+            intent_result = await classify_intent(session_id, [
+                {"cmd": "aws ec2 describe-instances", "endpoint": "/aws/ec2/describe-instances"}
+            ])
 
-    # Adapt response
-    adapted = await adapt_response(
-        intent_result.get("intent", "cloud_recon"),
-        response,
-        session_id,
-        "/aws/ec2/describe-instances"
-    )
+            # Adapt response
+            adapted = await adapt_response(
+                intent_result.get("intent", "cloud_recon"),
+                response,
+                session_id,
+                "/aws/ec2/describe-instances"
+            )
 
-    await log_event(session_id, "api_call", "/aws/ec2/describe-instances",
-                    {}, adapted, intent_result.get("intent"), True)
+            await log_event(session_id, "api_call", "/aws/ec2/describe-instances",
+                            {}, adapted, intent_result.get("intent"), True)
+        except Exception as e:
+            logger.warning(f"Background processing failed for describe-instances: {e}")
 
-    return adapted
+    # Fire-and-forget the background tasks
+    asyncio.create_task(process_background_tasks())
+
+    return response
 
 
 @app.get("/aws/ec2/describe-volumes")

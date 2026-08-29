@@ -154,19 +154,24 @@ class CommandAWS(HoneyPotCommand):
         """Simple naming convention for resources"""
         return f"{env}-{role}-{num}"
 
-    def execute(self, args: List[str]) -> Dict[str, Any]:
+    def call(self) -> None:
         """Execute AWS CLI command"""
-        # Handle version flag
-        if "--version" in args or "-v" in args:
-            self.write("aws-cli/2.15.0 Python/3.11.6 Linux/5.15.0-1057-aws exe/x86_64.ubuntu.22\n")
-            return {}
-
-        if len(args) < 2:
+        if len(self.args) < 1:
             self.errorWrite("usage: aws <service> <operation> [params]\n")
-            return {}
+            return
 
-        service = args[0]
-        operation = args[1]
+        service = self.args[0]
+
+        # Handle version flag
+        if "--version" in self.args or "-v" in self.args:
+            self.write("aws-cli/2.15.0 Python/3.11.6 Linux/5.15.0-1057-aws exe/x86_64.ubuntu.22\n")
+            return
+
+        if len(self.args) < 2:
+            self.errorWrite("usage: aws <service> <operation> [params]\n")
+            return
+
+        operation = self.args[1]
 
         # First, try to handle via cloud-api-mock for supported commands
         if (service, operation) in self.API_MOCK_ENDPOINTS:
@@ -174,62 +179,59 @@ class CommandAWS(HoneyPotCommand):
             result = self._call_api_mock(endpoint, method)
             if result is not None:
                 self.write(json.dumps(result, indent=2) + "\n")
-                return result
+                return
             # If API mock fails, fall back to local implementation below
 
         # EC2 commands
         if service == "ec2":
             if operation == "describe-instances":
                 self.write(json.dumps({"Reservations": [{"Instances": self.get_fake_instances()}]}, indent=2) + "\n")
-                return {"Reservations": [{"Instances": self.get_fake_instances()}]}
+                return
             elif operation == "describe-volumes":
                 self.write(json.dumps({"Volumes": [
                     {"VolumeId": f"vol-{''.join(random.choices('0123456789abcdef', k=17))}", "Size": random.choice([20, 50, 100, 200]), "VolumeType": "gp3", "State": "available"}
                     for _ in range(5)
                 ]}, indent=2) + "\n")
-                return {"Volumes": [
-                    {"VolumeId": f"vol-{''.join(random.choices('0123456789abcdef', k=17))}", "Size": random.choice([20, 50, 100, 200]), "VolumeType": "gp3", "State": "available"}
-                    for _ in range(5)
-                ]}
+                return
             elif operation == "describe-vpcs":
                 self.write(json.dumps({"Vpcs": [{"VpcId": f"vpc-{''.join(random.choices('0123456789abcdef', k=17))}", "CidrBlock": f"10.{random.randint(0,255)}.0.0/16", "State": "available", "IsDefault": False}]}, indent=2) + "\n")
-                return {"Vpcs": [{"VpcId": f"vpc-{''.join(random.choices('0123456789abcdef', k=17))}", "CidrBlock": f"10.{random.randint(0,255)}.0.0/16", "State": "available", "IsDefault": False}]}
+                return
             elif operation == "describe-subnets":
                 subnets = [{"SubnetId": f"subnet-{''.join(random.choices('0123456789abcdef', k=17))}", "VpcId": f"vpc-{''.join(random.choices('0123456789abcdef', k=17))}", "CidrBlock": f"10.{random.randint(0,255)}.{random.randint(0,255)}.0/24", "AvailabilityZone": f"{self.region}{random.choice(['a','b','c'])}", "State": "available", "AvailableIpAddressCount": random.randint(100, 250)} for _ in range(6)]
                 self.write(json.dumps({"Subnets": subnets}, indent=2) + "\n")
-                return {"Subnets": subnets}
+                return
             elif operation == "describe-security-groups":
                 self.write(json.dumps({"SecurityGroups": [{"GroupId": f"sg-{''.join(random.choices('0123456789abcdef', k=17))}", "GroupName": f"default", "Description": "Default security group", "VpcId": f"vpc-{''.join(random.choices('0123456789abcdef', k=17))}"}]}, indent=2) + "\n")
-                return {"SecurityGroups": [{"GroupId": f"sg-{''.join(random.choices('0123456789abcdef', k=17))}", "GroupName": f"default", "Description": "Default security group", "VpcId": f"vpc-{''.join(random.choices('0123456789abcdef', k=17))}"}]}
+                return
             elif operation == "run-instances":
                 self.write(json.dumps({"Instances": [self.get_fake_instances()[0]]}, indent=2) + "\n")
-                return {"Instances": [self.get_fake_instances()[0]]}
+                return
             elif operation == "terminate-instances":
-                instance_id = args[args.index("--instance-ids")+1] if "--instance-ids" in args else "i-12345678"
+                instance_id = self.args[self.args.index("--instance-ids")+1] if "--instance-ids" in self.args else "i-12345678"
                 self.write(json.dumps({"TerminatingInstances": [{"InstanceId": instance_id, "CurrentState": {"Name": "shutting-down"}}]}, indent=2) + "\n")
-                return {"TerminatingInstances": [{"InstanceId": instance_id, "CurrentState": {"Name": "shutting-down"}}]}
+                return
 
         # S3 commands
         elif service == "s3":
             if operation == "ls" or operation == "list-buckets":
                 self.write(json.dumps({"Buckets": self.get_fake_buckets()}, indent=2) + "\n")
-                return {"Buckets": self.get_fake_buckets()}
+                return
             elif operation == "cp":
                 etag = f"\"{''.join(random.choices('0123456789abcdef', k=32))}\""
                 self.write(json.dumps({"ETag": etag}, indent=2) + "\n")
-                return {"ETag": etag}
+                return
 
         # IAM commands
         elif service == "iam":
             if operation == "list-users":
                 self.write(json.dumps({"Users": self.get_fake_users()}, indent=2) + "\n")
-                return {"Users": self.get_fake_users()}
+                return
             elif operation == "list-roles":
                 self.write(json.dumps({"Roles": self.get_fake_roles()}, indent=2) + "\n")
-                return {"Roles": self.get_fake_roles()}
+                return
             elif operation == "list-access-keys":
                 self.write(json.dumps({"AccessKeyMetadata": self.get_fake_access_keys()}, indent=2) + "\n")
-                return {"AccessKeyMetadata": self.get_fake_access_keys()}
+                return
             elif operation == "create-access-key":
                 access_key = {
                     "AccessKeyId": f"AKIA{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=16))}",
@@ -237,24 +239,24 @@ class CommandAWS(HoneyPotCommand):
                     "Status": "Active"
                 }
                 self.write(json.dumps({"AccessKey": access_key}, indent=2) + "\n")
-                return {"AccessKey": access_key}
+                return
 
         # STS commands
         elif service == "sts":
             if operation == "get-caller-identity":
                 self.write(json.dumps({"Account": "123456789012", "UserId": f"AIDA{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=16))}", "Arn": f"arn:aws:iam::123456789012:user/admin"}, indent=2) + "\n")
-                return {"Account": "123456789012", "UserId": f"AIDA{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=16))}", "Arn": f"arn:aws:iam::123456789012:user/admin"}
+                return
             elif operation == "assume-role":
                 # Parse arguments for role ARN and session name
                 role_arn = ""
                 role_session_name = "honeypot-session"
                 i = 0
-                while i < len(args):
-                    if args[i] == "--role-arn" and i+1 < len(args):
-                        role_arn = args[i+1]
+                while i < len(self.args):
+                    if self.args[i] == "--role-arn" and i+1 < len(self.args):
+                        role_arn = self.args[i+1]
                         i += 2
-                    elif args[i] == "--role-session-name" and i+1 < len(args):
-                        role_session_name = args[i+1]
+                    elif self.args[i] == "--role-session-name" and i+1 < len(self.args):
+                        role_session_name = self.args[i+1]
                         i += 2
                     else:
                         i += 1
@@ -278,12 +280,10 @@ class CommandAWS(HoneyPotCommand):
                     "AssumedRoleUser": assumed_role_user,
                     "PackedPolicySize": 0
                 }
-
                 self.write(json.dumps(response, indent=2) + "\n")
-                return response
+                return
 
         self.errorWrite(f"Unknown service/operation: {service} {operation}\n")
-        return {}
 
 
 # Register the command

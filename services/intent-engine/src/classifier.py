@@ -122,8 +122,29 @@ class IntentClassifier:
             data = response.json()
             result_text = data.get("response", "{}")
 
-            # Parse response
-            result = json.loads(result_text)
+            # Parse response robustly.
+            # Small local models may return markdown fences or truncated/non-JSON text.
+            try:
+                result = json.loads(result_text)
+            except json.JSONDecodeError:
+                cleaned = result_text.strip()
+
+                if cleaned.startswith("```"):
+                    lines = cleaned.splitlines()
+                    if lines and lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].strip() == "```":
+                        lines = lines[:-1]
+                    cleaned = "\n".join(lines).strip()
+
+                # Try extracting the outermost JSON object.
+                start = cleaned.find("{")
+                end = cleaned.rfind("}")
+
+                if start >= 0 and end > start:
+                    result = json.loads(cleaned[start:end + 1])
+                else:
+                    raise
 
             # Validate intent
             valid_intents = list(INTENT_CATEGORIES.keys()) + ["unknown"]

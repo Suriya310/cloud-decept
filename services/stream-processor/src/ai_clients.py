@@ -53,11 +53,13 @@ class AIClients:
 
         for attempt in range(settings.max_retries + 1):
             try:
+                logger.info(f"Calling Intent Engine for session {session_id}")
                 response = await self.client.post(
                     f"{settings.intent_engine_url}/classify",
                     json=payload,
                     timeout=settings.http_timeout_seconds,
                 )
+                logger.info(f"Intent Engine HTTP response for session {session_id}: {response.status_code}")
 
                 if response.status_code == 200:
                     data = response.json()
@@ -117,11 +119,13 @@ class AIClients:
 
         for attempt in range(settings.max_retries + 1):
             try:
+                logger.info(f"Calling Threat Intel for session {session_id}")
                 response = await self.client.post(
                     f"{settings.threat_intel_url}/analyze",
                     json=payload,
                     timeout=settings.http_timeout_seconds,
                 )
+                logger.info(f"Threat Intel HTTP response for session {session_id}: {response.status_code}")
 
                 if response.status_code == 200:
                     data = response.json()
@@ -176,11 +180,13 @@ class AIClients:
 
         for attempt in range(settings.max_retries + 1):
             try:
+                logger.info(f"Calling Adaptive Engine for intent {intent}")
                 response = await self.client.post(
                     f"{settings.adaptive_engine_url}/adapt",
                     json=payload,
                     timeout=settings.http_timeout_seconds,
                 )
+                logger.info(f"Adaptive Engine HTTP response for intent {intent}: {response.status_code}")
 
                 if response.status_code == 200:
                     data = response.json()

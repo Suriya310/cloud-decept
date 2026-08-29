@@ -281,8 +281,8 @@ services:
       - AI_PROCESSOR_CONSUMER_NAME=stream-processor-1
       - AI_PROCESSOR_FROM=$
       - AI_PROCESSOR_BATCH_SIZE=10
-      - AI_PROCESSOR_TIMEOUT_SECONDS=10
-      - AI_PROCESSOR_RETRY_COUNT=2
+      - HTTP_TIMEOUT_SECONDS=60
+      - MAX_RETRIES=1
     depends_on:
       redis:
         condition: service_healthy

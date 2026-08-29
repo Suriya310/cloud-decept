@@ -83,9 +83,31 @@ class SessionStateManager:
         Returns session context so caller can decide if processing should be triggered.
         """
         session_id = event_data.get("payload", {}).get("session_id")
-        if not session_id or session_id not in self.sessions:
-            # Session might not be initialized yet if we missed session_start
+        if not session_id:
             return None
+
+        # Commands can arrive before the session_start event.
+        # Create a minimal session so command-driven AI processing is not lost.
+        if session_id not in self.sessions:
+            self.sessions[session_id] = {
+                "session_id": session_id,
+                "attacker_ip": event_data.get("payload", {}).get("attacker_ip", "unknown"),
+                "country": event_data.get("payload", {}).get("country", ""),
+                "asn": event_data.get("payload", {}).get("asn", ""),
+                "protocol": event_data.get("payload", {}).get("protocol", "ssh"),
+                "client_version": "",
+                "start_time": event_data.get("payload", {}).get("timestamp"),
+                "commands": [],
+                "outputs": [],
+                "auth_attempts": [],
+                "file_transfers": [],
+                "intent_history": [],
+                "intent": None,
+                "skill_level": None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            logger.info(f"Created session state from command event: {session_id}")
 
         session = self.sessions[session_id]
 

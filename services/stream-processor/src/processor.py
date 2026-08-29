@@ -5,6 +5,7 @@ Consumes honeypot events from Redis streams and drives AI pipeline.
 
 import asyncio
 import logging
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -81,7 +82,7 @@ class EventProcessor:
         if not messages:
             return
 
-        logger.debug(f"Read {len(messages)} messages from {stream}")
+        logger.info(f"Read {len(messages)} messages from {stream}")
 
         processed_count = 0
 
@@ -114,6 +115,19 @@ class EventProcessor:
         """Process a single event based on its stream type."""
         event_type = event_data.get("event_type", "")
         payload = event_data.get("payload", {})
+
+        # Redis stream fields are strings; decode JSON payloads.
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                logger.error(f"Invalid JSON payload for event {msg_id}: {payload[:500]}")
+                return
+
+        if not isinstance(payload, dict):
+            logger.error(f"Invalid payload type for event {msg_id}: {type(payload).__name__}")
+            return
+
         session_id = payload.get("session_id")
 
         if not session_id:
@@ -174,7 +188,7 @@ class EventProcessor:
             logger.warning(f"Command event missing session_id: {payload}")
             return
 
-        logger.debug(f"Command received: session_id={session_id}, command={command[:50]}")
+        logger.info(f"Command received: session_id={session_id}, command={command[:80]}")
 
         session = self.session_manager.add_command({"payload": payload})
 
@@ -265,6 +279,33 @@ class EventProcessor:
                     }
                 }
                 await self._publish_intent_prediction(session_id, intent_event)
+
+                # Persist AI classification to ClickHouse through the collector.
+                try:
+                    await self.ai_clients.client.post(
+                        "http://event-collector:8000/update-session",
+                        json={
+                            "session_id": session_id,
+                            "intent": intent_result.get("intent", "unknown"),
+                            "skill_level": intent_result.get("skill_level", 1),
+                            "commands_executed": len(session.get("commands", [])),
+                            "duration_seconds": self._calculate_duration(
+                                session.get("start_time"),
+                                session.get("end_time"),
+                            ),
+                        },
+                    )
+                    logger.info(
+                        f"Persisted intent for session {session_id}: "
+                        f"{intent_result.get('intent')} "
+                        f"(skill={intent_result.get('skill_level')})"
+                    )
+                except Exception as persist_error:
+                    logger.error(
+                        f"Failed to persist intent for session {session_id}: "
+                        f"{persist_error}"
+                    )
+
                 logger.info(f"Intent predicted for session {session_id}: {intent_result.get('intent')}")
 
                 # ============================================================

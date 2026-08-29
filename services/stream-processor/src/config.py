@@ -27,8 +27,8 @@ class Settings(BaseSettings):
     threat_intel_url: str = "http://threat-intel:8005"
 
     # HTTP Client
-    http_timeout_seconds: int = 10
-    max_retries: int = 2
+    http_timeout_seconds: int = 3
+    max_retries: int = 0
     retry_backoff_seconds: float = 1.0
 
     # Session aggregation
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     max_batch_commands: int = 50
 
     # Retry settings
-    max_retries: int = 2
+    max_retries: int = 0
     retry_backoff_seconds: float = 1.0
 
     # Stream names

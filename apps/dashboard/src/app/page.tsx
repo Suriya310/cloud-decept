@@ -34,8 +34,8 @@ export default function OverviewPage() {
   } = useDashboardStore();
 
   useEffect(() => {
-    // Fetch all-time stats for accurate totals
-    fetchAllTimeStats();
+    // Fetch stats for accurate totals and recent activity
+    fetchStats();
     // Fetch sessions with large hours window to get historical sessions
     fetchSessions({ limit: 10, hours: 8760 }); // ~1 year
     fetchConnectionStatus();

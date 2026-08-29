@@ -20,14 +20,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Using cowrie[all] for all optional dependencies
 RUN pip install --no-cache-dir --prefix=/install cowrie[all]==3.0.12
 
-# Copy our custom command files to the installed cowrie package
-COPY --chown=cowrie:cowrie commands/aws.py /install/lib/python3.11/site-packages/cowrie/commands/aws.py
-COPY --chown=cowrie:cowrie commands/azure.py /install/lib/python3.11/site-packages/cowrie/commands/azure.py
-COPY --chown=cowrie:cowrie commands/gcp.py /install/lib/python3.11/site-packages/cowrie/commands/gcp.py
-
-# Update the __init__.py to include our new commands
-RUN sed -i '/command_modules = \[/a\    "aws",\n    "azure",\n    "gcp",' /install/lib/python3.11/site-packages/cowrie/commands/__init__.py
-
 # Runtime stage
 FROM python:3.11-slim-bookworm
 
@@ -44,6 +36,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy installed packages from builder
 COPY --from=builder /install /usr/local
+
+# Copy our custom command files to the ACTUAL installed Cowrie package location
+COPY --chown=cowrie:cowrie commands/aws.py /usr/local/lib/python3.11/site-packages/cowrie/commands/aws.py
+COPY --chown=cowrie:cowrie commands/azure.py /usr/local/lib/python3.11/site-packages/cowrie/commands/azure.py
+COPY --chown=cowrie:cowrie commands/gcp.py /usr/local/lib/python3.11/site-packages/cowrie/commands/gcp.py
+
+# Correctly extend Cowrie's existing command_modules list with our commands
+# We append to the existing list rather than replacing it
+RUN sed -i '/command_modules = \[/a\    "aws",\n    "azure",\n    "gcp",' /usr/local/lib/python3.11/site-packages/cowrie/commands/__init__.py
 
 # Create cowrie user
 RUN useradd --create-home --shell /bin/bash --uid 1000 cowrie && \

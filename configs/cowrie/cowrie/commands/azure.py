@@ -1,4 +1,7 @@
 # Azure CLI command emulation for Cowrie
+# Place this in /cowrie/cowrie/commands/azure.py
+
+from __future__ import annotations
 
 import json
 import random
@@ -7,9 +10,16 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Dict, List, Any
 
+from cowrie.shell.command import HoneyPotCommand
 
-class AzureCommand:
-    """Azure CLI command emulator"""
+commands = {}
+
+
+class CommandAZ(HoneyPotCommand):
+    """
+    Azure CLI command emulator for Cowrie honeypot.
+    Provides fake Azure CLI responses via cloud-api-mock service or local fallback.
+    """
 
     # Define which commands we will handle via the cloud-api-mock service
     API_MOCK_ENDPOINTS = {
@@ -18,15 +28,15 @@ class AzureCommand:
         ('ad', 'user', 'list'): ('/azure/ad/users', 'GET'),  # az ad user list
     }
 
-    def __init__(self, session):
-        self.session = session
+    def __init__(self, protocol, *args):
+        super().__init__(protocol, *args)
         self.subscription_id = f"sub-{''.join(random.choices('0123456789abcdef', k=32))}"
 
     def _call_api_mock(self, endpoint, method='GET', body=None):
         """Make a request to the cloud-api-mock service"""
         try:
             # Use the Cowrie session ID for consistency
-            session_id = getattr(self.session, 'id', 'unknown')
+            session_id = getattr(self.protocol, 'id', 'unknown')
             url = f"http://cloud-api-mock:8080{endpoint}"
             headers = {
                 "Content-Type": "application/json",
@@ -42,6 +52,7 @@ class AzureCommand:
                 return json.loads(response.read().decode())
         except Exception as e:
             # If the API mock is unavailable, fall back to local implementation
+            self.errorWrite(f"Failed to connect to cloud API mock: {e}")
             return None
 
     def get_fake_vms(self) -> List[Dict]:
@@ -93,56 +104,64 @@ class AzureCommand:
             for _ in range(random.randint(2, 5))
         ]
 
-    def execute(self, args: List[str]) -> Dict[str, Any]:
-        if len(args) < 1:
-            return {"error": "usage: az <group> <command> [params]"}
+    def call(self) -> None:
+        """Execute Azure CLI command"""
+        if len(self.args) < 1:
+            self.errorWrite("usage: az <group> <command> [params]\n")
+            return
 
-        group = args[0]
+        group = self.args[0]
 
         # Handle version flag
-        if "--version" in args or "-v" in args:
-            return {"azure-cli": "2.55.0"}
+        if "--version" in self.args or "-v" in self.args:
+            self.write("azure-cli: 2.55.0\n")
+            return
 
         # First, try to handle via cloud-api-mock for supported commands
         # Build key based on args length
-        if len(args) >= 2:
-            cmd = args[1]
-            if len(args) >= 3:
-                subcmd = args[2]
+        if len(self.args) >= 2:
+            cmd = self.args[1]
+            if len(self.args) >= 3:
+                subcmd = self.args[2]
                 key = (group, cmd, subcmd)
             else:
                 key = (group, cmd)
 
             # Special handling for az storage account list
-            if group == "storage" and cmd == "account" and len(args) > 2 and args[2] == "list":
+            if group == "storage" and cmd == "account" and len(self.args) > 2 and self.args[2] == "list":
                 endpoint, method = self.API_MOCK_ENDPOINTS.get(('storage', 'account', 'list'), (None, None))
                 if endpoint:
                     result = self._call_api_mock(endpoint, method)
                     if result is not None:
-                        return result
+                        self.write(json.dumps(result, indent=2) + "\n")
+                        return
             elif (group, cmd) in self.API_MOCK_ENDPOINTS:
                 endpoint, method = self.API_MOCK_ENDPOINTS[(group, cmd)]
                 result = self._call_api_mock(endpoint, method)
                 if result is not None:
-                    return result
+                    self.write(json.dumps(result, indent=2) + "\n")
+                    return
             # If API mock fails, fall back to local implementation below
 
-        if group == "vm" and len(args) > 1:
-            cmd = args[1]
+        if group == "vm" and len(self.args) > 1:
+            cmd = self.args[1]
             if cmd == "list":
-                return self.get_fake_vms()
+                self.write(json.dumps(self.get_fake_vms(), indent=2) + "\n")
+                return
             elif cmd == "show":
-                return self.get_fake_vms()[0]
+                self.write(json.dumps(self.get_fake_vms()[0], indent=2) + "\n")
+                return
 
-        elif group == "storage" and len(args) > 1:
-            cmd = args[1]
-            if cmd == "account" and len(args) > 2 and args[2] == "list":
-                return self.get_fake_storage()
+        elif group == "storage" and len(self.args) > 1:
+            cmd = self.args[1]
+            if cmd == "account" and len(self.args) > 2 and self.args[2] == "list":
+                self.write(json.dumps(self.get_fake_storage(), indent=2) + "\n")
+                return
 
-        elif group == "ad" and len(args) > 1:
-            cmd = args[1]
-            if cmd == "user" and len(args) > 2 and args[2] == "list":
-                return {
+        elif group == "ad" and len(self.args) > 1:
+            cmd = self.args[1]
+            if cmd == "user" and len(self.args) > 2 and self.args[2] == "list":
+                result = {
                     "value": [
                         {
                             "id": str(uuid.uuid4()),
@@ -158,37 +177,25 @@ class AzureCommand:
                         }
                     ]
                 }
+                self.write(json.dumps(result, indent=2) + "\n")
+                return
 
-        elif group == "group" and len(args) > 1 and args[1] == "list":
-            return [{"name": "rg-prod", "location": "eastus"}, {"name": "rg-dev", "location": "westus2"}]
+        elif group == "group" and len(self.args) > 1 and self.args[1] == "list":
+            self.write(json.dumps([{"name": "rg-prod", "location": "eastus"}, {"name": "rg-dev", "location": "westus2"}], indent=2) + "\n")
+            return
 
-        elif group == "account" and len(args) > 1 and args[1] == "show":
-            return {
+        elif group == "account" and len(self.args) > 1 and self.args[1] == "show":
+            self.write(json.dumps({
                 "id": self.subscription_id,
                 "name": "Production Subscription",
                 "state": "Enabled",
                 "tenantId": str(uuid.uuid4())
-            }
-
-        return {"error": f"Unknown command: {' '.join(args)}"}
-
-
-class CommandAZ:
-    """Cowrie command wrapper for Azure CLI"""
-
-    def __init__(self, protocol):
-        self.protocol = protocol
-        self.azure = AzureCommand(protocol)
-
-    def call(self, args):
-        if len(args) < 1:
-            self.protocol.terminal.write(b"usage: az <group> <command> [params]\r\n")
+            }, indent=2) + "\n")
             return
 
-        result = self.azure.execute(args)
+        self.errorWrite(f"Unknown command: {' '.join(self.args)}\n")
 
-        if "error" in result:
-            self.protocol.terminal.write(f"ERROR: {result['error']}\r\n".encode())
-        else:
-            import json
-            self.protocol.terminal.write((json.dumps(result, indent=2) + "\r\n").encode())
+
+# Register the command
+commands["/usr/bin/az"] = CommandAZ
+commands["az"] = CommandAZ

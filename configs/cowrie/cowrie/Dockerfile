@@ -20,12 +20,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Using cowrie[all] for all optional dependencies
 RUN pip install --no-cache-dir --prefix=/install cowrie[all]==3.0.12
 
-# Install CloudDecept additional dependencies
-RUN pip install --no-cache-dir --prefix=/install \
-    httpx==0.27.0 \
-    clickhouse-driver==0.2.6 \
-    redis==5.0.1 \
-    pyyaml==6.0.1
+# Copy our custom command files to the installed cowrie package
+COPY --chown=cowrie:cowrie commands/aws.py /install/lib/python3.11/site-packages/cowrie/commands/aws.py
+COPY --chown=cowrie:cowrie commands/azure.py /install/lib/python3.11/site-packages/cowrie/commands/azure.py
+COPY --chown=cowrie:cowrie commands/gcp.py /install/lib/python3.11/site-packages/cowrie/commands/gcp.py
+
+# Update the __init__.py to include our new commands
+RUN sed -i '/command_modules = \[/a\    "aws",\n    "azure",\n    "gcp",' /install/lib/python3.11/site-packages/cowrie/commands/__init__.py
 
 # Runtime stage
 FROM python:3.11-slim-bookworm
@@ -59,9 +60,6 @@ RUN ssh-keygen -t rsa -b 2048 -f /cowrie/etc/ssh_host_rsa_key -N "" && \
 # Copy configuration files
 COPY --chown=cowrie:cowrie cowrie.cfg /cowrie/etc/cowrie.cfg
 COPY --chown=cowrie:cowrie userdb.txt /cowrie/etc/userdb.txt
-
-# Copy custom command implementations
-COPY --chown=cowrie:cowrie commands/ /cowrie/cowrie/commands/
 
 # Copy entrypoint script (runs as root to fix volume ownership)
 COPY --chmod=755 entrypoint.sh /entrypoint.sh

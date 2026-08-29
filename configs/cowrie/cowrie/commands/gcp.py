@@ -1,4 +1,7 @@
 # GCP CLI command emulation for Cowrie
+# Place this in /cowrie/cowrie/commands/gcp.py
+
+from __future__ import annotations
 
 import json
 import random
@@ -7,9 +10,16 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Dict, List, Any
 
+from cowrie.shell.command import HoneyPotCommand
 
-class GCPCommand:
-    """GCP gcloud CLI command emulator"""
+commands = {}
+
+
+class CommandGCLOUD(HoneyPotCommand):
+    """
+    GCP gcloud CLI command emulator for Cowrie honeypot.
+    Provides fake gcloud CLI responses via cloud-api-mock service or local fallback.
+    """
 
     # Define which commands we will handle via the cloud-api-mock service
     API_MOCK_ENDPOINTS = {
@@ -18,8 +28,8 @@ class GCPCommand:
         ('iam', 'service-accounts', 'list'): ('/gcp/iam/service-accounts/list', 'GET'),
     }
 
-    def __init__(self, session):
-        self.session = session
+    def __init__(self, protocol, *args):
+        super().__init__(protocol, *args)
         self.project_id = "gcp-media-studios-prod"
         self.project_number = random.randint(100000000000, 999999999999)
 
@@ -27,7 +37,7 @@ class GCPCommand:
         """Make a request to the cloud-api-mock service"""
         try:
             # Use the Cowrie session ID for consistency
-            session_id = getattr(self.session, 'id', 'unknown')
+            session_id = getattr(self.protocol, 'id', 'unknown')
             url = f"http://cloud-api-mock:8080{endpoint}"
             headers = {
                 "Content-Type": "application/json",
@@ -43,6 +53,7 @@ class GCPCommand:
                 return json.loads(response.read().decode())
         except Exception as e:
             # If the API mock is unavailable, fall back to local implementation
+            self.errorWrite(f"Failed to connect to cloud API mock: {e}")
             return None
 
     def get_fake_instances(self) -> List[Dict]:
@@ -158,80 +169,75 @@ class GCPCommand:
             }
         ]
 
-    def execute(self, args: List[str]) -> Dict[str, Any]:
-        if len(args) < 1:
-            return {"error": "usage: gcloud <group> <command> [params]"}
+    def call(self) -> None:
+        """Execute gcloud CLI command"""
+        if len(self.args) < 1:
+            self.errorWrite("usage: gcloud <group> <command> [params]\n")
+            return
 
-        group = args[0]
+        group = self.args[0]
 
         # Handle version flag
-        if "--version" in args or "-v" in args:
-            return {"Google Cloud SDK": "425.0.0"}
+        if "--version" in self.args or "-v" in self.args:
+            self.write("Google Cloud SDK: 425.0.0\n")
+            return
 
         # First, try to handle via cloud-api-mock for supported commands
         # Build key based on args length
-        if len(args) >= 3:
-            cmd = args[1]
-            subcmd = args[2]
+        if len(self.args) >= 3:
+            cmd = self.args[1]
+            subcmd = self.args[2]
             key = (group, cmd, subcmd)
             if key in self.API_MOCK_ENDPOINTS:
                 endpoint, method = self.API_MOCK_ENDPOINTS[key]
                 result = self._call_api_mock(endpoint, method)
                 if result is not None:
-                    return result
+                    self.write(json.dumps(result, indent=2) + "\n")
+                    return
 
         # If API mock fails or command not in mock endpoints, fall back to local implementation
 
-        if group == "compute" and len(args) > 1:
-            cmd = args[1]
-            if cmd == "instances" and len(args) > 2 and args[2] == "list":
-                return {"items": self.get_fake_instances()}
-            elif cmd == "instances" and len(args) > 2 and args[2] == "describe":
-                return self.get_fake_instances()[0]
+        if group == "compute" and len(self.args) > 1:
+            cmd = self.args[1]
+            if cmd == "instances" and len(self.args) > 2 and self.args[2] == "list":
+                self.write(json.dumps({"items": self.get_fake_instances()}, indent=2) + "\n")
+                return
+            elif cmd == "instances" and len(self.args) > 2 and self.args[2] == "describe":
+                self.write(json.dumps(self.get_fake_instances()[0], indent=2) + "\n")
+                return
 
-        elif group == "storage" and len(args) > 1:
-            cmd = args[1]
-            if cmd == "buckets" and len(args) > 2 and args[2] == "list":
-                return {"items": self.get_fake_buckets()}
+        elif group == "storage" and len(self.args) > 1:
+            cmd = self.args[1]
+            if cmd == "buckets" and len(self.args) > 2 and self.args[2] == "list":
+                self.write(json.dumps({"items": self.get_fake_buckets()}, indent=2) + "\n")
+                return
 
-        elif group == "iam" and len(args) > 1:
-            cmd = args[1]
-            if cmd == "service-accounts" and len(args) > 2 and args[2] == "list":
-                return {"accounts": self.get_fake_service_accounts()}
+        elif group == "iam" and len(self.args) > 1:
+            cmd = self.args[1]
+            if cmd == "service-accounts" and len(self.args) > 2 and self.args[2] == "list":
+                self.write(json.dumps({"accounts": self.get_fake_service_accounts()}, indent=2) + "\n")
+                return
 
-        elif group == "config" and len(args) > 1 and args[1] == "get-value":
-            if len(args) > 2 and args[2] == "project":
-                return {"value": self.project_id}
-            elif len(args) > 2 and args[2] == "account":
-                return {"value": f"admin@{self.project_id}.iam.gserviceaccount.com"}
+        elif group == "config" and len(self.args) > 1 and self.args[1] == "get-value":
+            if len(self.args) > 2 and self.args[2] == "project":
+                self.write(json.dumps({"value": self.project_id}, indent=2) + "\n")
+                return
+            elif len(self.args) > 2 and self.args[2] == "account":
+                self.write(json.dumps({"value": f"admin@{self.project_id}.iam.gserviceaccount.com"}, indent=2) + "\n")
+                return
 
-        elif group == "auth" and len(args) > 1 and args[1] == "list":
-            return [
+        elif group == "auth" and len(self.args) > 1 and self.args[1] == "list":
+            self.write(json.dumps([
                 {
                     "account": f"admin@{self.project_id}.iam.gserviceaccount.com",
                     "status": "ACTIVE"
                 }
-            ]
-
-        return {"error": f"Unknown command: {' '.join(args)}"}
-
-
-class CommandGCLOUD:
-    """Cowrie command wrapper for GCP gcloud CLI"""
-
-    def __init__(self, protocol):
-        self.protocol = protocol
-        self.gcp = GCPCommand(protocol)
-
-    def call(self, args):
-        if len(args) < 1:
-            self.protocol.terminal.write(b"usage: gcloud <group> <command> [params]\r\n")
+            ], indent=2) + "\n")
             return
 
-        result = self.gcp.execute(args)
+        self.errorWrite(f"Unknown command: {' '.join(self.args)}\n")
 
-        if "error" in result:
-            self.protocol.terminal.write(f"ERROR: {result['error']}\r\n".encode())
-        else:
-            import json
-            self.protocol.terminal.write((json.dumps(result, indent=2) + "\r\n").encode())
+
+# Register the command
+commands["/usr/bin/gcloud"] = CommandGCLOUD
+commands["gcloud"] = CommandGCLOUD

@@ -1,18 +1,26 @@
 # AWS CLI command emulation for Cowrie
 # Place this in /cowrie/cowrie/commands/aws.py
 
+from __future__ import annotations
+
 import json
 import random
-import subprocess
-import time
 from datetime import datetime, timezone
 from typing import Dict, List, Any
+
 import urllib.request
 import urllib.error
 
+from cowrie.shell.command import HoneyPotCommand
 
-class AWSCommand:
-    """Base class for AWS CLI commands"""
+commands = {}
+
+
+class CommandAWS(HoneyPotCommand):
+    """
+    AWS CLI command emulator for Cowrie honeypot.
+    Provides fake AWS CLI responses via cloud-api-mock service or local fallback.
+    """
 
     # Define which commands we will handle via the cloud-api-mock service
     API_MOCK_ENDPOINTS = {
@@ -27,8 +35,8 @@ class AWSCommand:
         ('iam', 'list-roles'): ('/aws/iam/list-roles', 'GET'),
     }
 
-    def __init__(self, session):
-        self.session = session
+    def __init__(self, protocol, *args):
+        super().__init__(protocol, *args)
         self.profile = "default"
         self.region = "us-east-1"
         self.output = "json"
@@ -37,7 +45,7 @@ class AWSCommand:
         """Make a request to the cloud-api-mock service"""
         try:
             # Use the Cowrie session ID for consistency
-            session_id = getattr(self.session, 'id', 'unknown')
+            session_id = getattr(self.protocol, 'id', 'unknown')
             url = f"http://cloud-api-mock:8080{endpoint}"
             headers = {
                 "Content-Type": "application/json",
@@ -53,6 +61,7 @@ class AWSCommand:
                 return json.loads(response.read().decode())
         except Exception as e:
             # If the API mock is unavailable, fall back to local implementation
+            self.errorWrite(f"Failed to connect to cloud API mock: {e}")
             return None
 
     def get_fake_instances(self) -> List[Dict]:
@@ -141,14 +150,20 @@ class AWSCommand:
             }
         ]
 
+    def naming_convention(self, env='prod', role='web', num=1):
+        """Simple naming convention for resources"""
+        return f"{env}-{role}-{num}"
+
     def execute(self, args: List[str]) -> Dict[str, Any]:
         """Execute AWS CLI command"""
         # Handle version flag
         if "--version" in args or "-v" in args:
-            return {"version": "aws-cli/2.15.0 Python/3.11.6 Linux/5.15.0-1057-aws exe/x86_64.ubuntu.22"}
+            self.write("aws-cli/2.15.0 Python/3.11.6 Linux/5.15.0-1057-aws exe/x86_64.ubuntu.22\n")
+            return {}
 
         if len(args) < 2:
-            return {"error": "usage: aws <service> <operation> [params]"}
+            self.errorWrite("usage: aws <service> <operation> [params]\n")
+            return {}
 
         service = args[0]
         operation = args[1]
@@ -158,55 +173,76 @@ class AWSCommand:
             endpoint, method = self.API_MOCK_ENDPOINTS[(service, operation)]
             result = self._call_api_mock(endpoint, method)
             if result is not None:
+                self.write(json.dumps(result, indent=2) + "\n")
                 return result
             # If API mock fails, fall back to local implementation below
 
         # EC2 commands
         if service == "ec2":
             if operation == "describe-instances":
+                self.write(json.dumps({"Reservations": [{"Instances": self.get_fake_instances()}]}, indent=2) + "\n")
                 return {"Reservations": [{"Instances": self.get_fake_instances()}]}
             elif operation == "describe-volumes":
+                self.write(json.dumps({"Volumes": [
+                    {"VolumeId": f"vol-{''.join(random.choices('0123456789abcdef', k=17))}", "Size": random.choice([20, 50, 100, 200]), "VolumeType": "gp3", "State": "available"}
+                    for _ in range(5)
+                ]}, indent=2) + "\n")
                 return {"Volumes": [
                     {"VolumeId": f"vol-{''.join(random.choices('0123456789abcdef', k=17))}", "Size": random.choice([20, 50, 100, 200]), "VolumeType": "gp3", "State": "available"}
                     for _ in range(5)
                 ]}
             elif operation == "describe-vpcs":
+                self.write(json.dumps({"Vpcs": [{"VpcId": f"vpc-{''.join(random.choices('0123456789abcdef', k=17))}", "CidrBlock": f"10.{random.randint(0,255)}.0.0/16", "State": "available", "IsDefault": False}]}, indent=2) + "\n")
                 return {"Vpcs": [{"VpcId": f"vpc-{''.join(random.choices('0123456789abcdef', k=17))}", "CidrBlock": f"10.{random.randint(0,255)}.0.0/16", "State": "available", "IsDefault": False}]}
             elif operation == "describe-subnets":
-                return {"Subnets": [{"SubnetId": f"subnet-{''.join(random.choices('0123456789abcdef', k=17))}", "VpcId": f"vpc-{''.join(random.choices('0123456789abcdef', k=17))}", "CidrBlock": f"10.{random.randint(0,255)}.{random.randint(0,255)}.0/24", "AvailabilityZone": f"{self.region}{random.choice(['a','b','c'])}", "State": "available", "AvailableIpAddressCount": random.randint(100, 250)} for _ in range(6)]}
+                subnets = [{"SubnetId": f"subnet-{''.join(random.choices('0123456789abcdef', k=17))}", "VpcId": f"vpc-{''.join(random.choices('0123456789abcdef', k=17))}", "CidrBlock": f"10.{random.randint(0,255)}.{random.randint(0,255)}.0/24", "AvailabilityZone": f"{self.region}{random.choice(['a','b','c'])}", "State": "available", "AvailableIpAddressCount": random.randint(100, 250)} for _ in range(6)]
+                self.write(json.dumps({"Subnets": subnets}, indent=2) + "\n")
+                return {"Subnets": subnets}
             elif operation == "describe-security-groups":
+                self.write(json.dumps({"SecurityGroups": [{"GroupId": f"sg-{''.join(random.choices('0123456789abcdef', k=17))}", "GroupName": f"default", "Description": "Default security group", "VpcId": f"vpc-{''.join(random.choices('0123456789abcdef', k=17))}"}]}, indent=2) + "\n")
                 return {"SecurityGroups": [{"GroupId": f"sg-{''.join(random.choices('0123456789abcdef', k=17))}", "GroupName": f"default", "Description": "Default security group", "VpcId": f"vpc-{''.join(random.choices('0123456789abcdef', k=17))}"}]}
             elif operation == "run-instances":
+                self.write(json.dumps({"Instances": [self.get_fake_instances()[0]]}, indent=2) + "\n")
                 return {"Instances": [self.get_fake_instances()[0]]}
             elif operation == "terminate-instances":
                 instance_id = args[args.index("--instance-ids")+1] if "--instance-ids" in args else "i-12345678"
+                self.write(json.dumps({"TerminatingInstances": [{"InstanceId": instance_id, "CurrentState": {"Name": "shutting-down"}}]}, indent=2) + "\n")
                 return {"TerminatingInstances": [{"InstanceId": instance_id, "CurrentState": {"Name": "shutting-down"}}]}
 
         # S3 commands
         elif service == "s3":
             if operation == "ls" or operation == "list-buckets":
+                self.write(json.dumps({"Buckets": self.get_fake_buckets()}, indent=2) + "\n")
                 return {"Buckets": self.get_fake_buckets()}
             elif operation == "cp":
-                return {"ETag": f"\"{''.join(random.choices('0123456789abcdef', k=32))}\""}
+                etag = f"\"{''.join(random.choices('0123456789abcdef', k=32))}\""
+                self.write(json.dumps({"ETag": etag}, indent=2) + "\n")
+                return {"ETag": etag}
 
         # IAM commands
         elif service == "iam":
             if operation == "list-users":
+                self.write(json.dumps({"Users": self.get_fake_users()}, indent=2) + "\n")
                 return {"Users": self.get_fake_users()}
             elif operation == "list-roles":
+                self.write(json.dumps({"Roles": self.get_fake_roles()}, indent=2) + "\n")
                 return {"Roles": self.get_fake_roles()}
             elif operation == "list-access-keys":
+                self.write(json.dumps({"AccessKeyMetadata": self.get_fake_access_keys()}, indent=2) + "\n")
                 return {"AccessKeyMetadata": self.get_fake_access_keys()}
             elif operation == "create-access-key":
-                return {"AccessKey": {
+                access_key = {
                     "AccessKeyId": f"AKIA{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=16))}",
                     "SecretAccessKey": f"{''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+', k=40))}",
                     "Status": "Active"
-                }}
+                }
+                self.write(json.dumps({"AccessKey": access_key}, indent=2) + "\n")
+                return {"AccessKey": access_key}
 
         # STS commands
         elif service == "sts":
             if operation == "get-caller-identity":
+                self.write(json.dumps({"Account": "123456789012", "UserId": f"AIDA{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=16))}", "Arn": f"arn:aws:iam::123456789012:user/admin"}, indent=2) + "\n")
                 return {"Account": "123456789012", "UserId": f"AIDA{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=16))}", "Arn": f"arn:aws:iam::123456789012:user/admin"}
             elif operation == "assume-role":
                 # Parse arguments for role ARN and session name
@@ -224,41 +260,32 @@ class AWSCommand:
                         i += 1
                 if not role_arn:
                     role_arn = f"arn:aws:iam::123456789012:role/EC2Role"
-                return {
-                    "Credentials": {
-                        "AccessKeyId": f"ASIA{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=16))}",
-                        "SecretAccessKey": f"{''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+', k=40))}",
-                        "SessionToken": f"IQoJb3JpZ2luX2VjE...{''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=200))}",
-                        "Expiration": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                    },
-                    "AssumedRoleUser": {
-                        "AssumedRoleId": f"AROA{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=16))}:{role_session_name}",
-                        "Arn": role_arn
-                    },
+
+                credentials = {
+                    "AccessKeyId": f"ASIA{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=16))}",
+                    "SecretAccessKey": f"{''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+', k=40))}",
+                    "SessionToken": f"IQoJb3JpZ2luX2VjE...{''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=200))}",
+                    "Expiration": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                }
+
+                assumed_role_user = {
+                    "AssumedRoleId": f"AROA{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=16))}:{role_session_name}",
+                    "Arn": role_arn
+                }
+
+                response = {
+                    "Credentials": credentials,
+                    "AssumedRoleUser": assumed_role_user,
                     "PackedPolicySize": 0
                 }
 
-        return {"error": f"Unknown service/operation: {service} {operation}"}
+                self.write(json.dumps(response, indent=2) + "\n")
+                return response
+
+        self.errorWrite(f"Unknown service/operation: {service} {operation}\n")
+        return {}
 
 
-# For direct Cowrie integration
-class CommandAWS:
-    """Cowrie command wrapper for AWS CLI"""
-
-    def __init__(self, protocol):
-        self.protocol = protocol
-        self.aws = AWSCommand(protocol)
-
-    def call(self, args):
-        """Handle aws command"""
-        if len(args) < 1:
-            self.protocol.terminal.write(b"usage: aws <service> <operation> [params]\r\n")
-            return
-
-        # Remove 'aws' from args
-        result = self.aws.execute(args)
-
-        if "error" in result:
-            self.protocol.terminal.write(f"Error: {result['error']}\r\n".encode())
-        else:
-            self.protocol.terminal.write((json.dumps(result, indent=2) + "\r\n").encode())
+# Register the command
+commands["/usr/bin/aws"] = CommandAWS
+commands["aws"] = CommandAWS

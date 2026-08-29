@@ -13,14 +13,6 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
-    # LLM Gateway (replaces direct Ollama)
-    LLM_GATEWAY_URL: str = "http://llm-gateway:8003"
-
-    # Legacy Ollama (for fallback)
-    OLLAMA_URL: str = "http://ollama:11434"
-    MODEL_NAME: str = "qwen2.5:1.5b"
-    OLLAMA_TIMEOUT: int = 60
-
     # Redis
     REDIS_HOST: str = "redis"
     REDIS_PORT: int = 6379

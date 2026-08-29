@@ -1,20 +1,9 @@
-"""Intent classification using LLM Gateway"""
+"""Deterministic rule-based intent classifier"""
 
-import json
 import logging
 import time
-from typing import Dict, List, Optional, Any
-
-import httpx
+from typing import Dict, List, Any
 from pydantic import BaseModel, Field
-
-from config import settings
-from prompts import (
-    build_classification_prompt,
-    build_simplified_prompt,
-    INTENT_CATEGORIES,
-    FEW_SHOT_EXAMPLES
-)
 
 logger = logging.getLogger(__name__)
 
@@ -30,191 +19,77 @@ class ClassificationResult(BaseModel):
     processing_time_ms: float = Field(default=0.0, description="Classification latency")
 
 
-class IntentClassifier:
-    """LLM Gateway-based intent classifier for cloud honeypot"""
-
-    def __init__(self):
-        self.llm_gateway_url = settings.LLM_GATEWAY_URL
-        self.client: Optional[httpx.AsyncClient] = None
-        self._model_ready = False
-
-    async def initialize(self):
-        """Initialize HTTP client"""
-        self.client = httpx.AsyncClient(timeout=120.0)
-        try:
-            # Test connection to LLM Gateway
-            resp = await self.client.get(f"{self.llm_gateway_url}/health")
-            if resp.status_code == 200:
-                self._model_ready = True
-                logger.info(f"Intent classifier connected to LLM Gateway: {self.llm_gateway_url}")
-            else:
-                logger.warning(f"LLM Gateway health check failed: {resp.status_code}")
-        except Exception as e:
-            logger.warning(f"LLM Gateway not available yet: {e}")
-
-    async def close(self):
-        """Close HTTP client"""
-        if self.client:
-            await self.client.aclose()
-
-    async def classify(
-        self,
-        session_id: str,
-        organization_profile: str,
-        commands: List[Dict],
-        context: Dict
-    ) -> ClassificationResult:
-        """Classify attacker intent from command sequence via LLM Gateway"""
-
-        start_time = time.time()
-
-        if not self._model_ready:
-            await self.initialize()
-
-        if not self._model_ready:
-            # Fallback to rule-based
-            return RuleBasedClassifier.classify(commands)
-
-        # Get org profile
-        org_profiles = {
-            "tech-startup-aws": {"name": "TechStart Inc", "industry": "technology", "cloud_provider": "aws"},
-            "northbridge-healthcare": {"name": "Northbridge Healthcare", "industry": "healthcare", "cloud_provider": "aws"},
-            "azure-enterprise": {"name": "Azure Enterprise Corp", "industry": "financial-services", "cloud_provider": "azure"},
-            "gcp-media": {"name": "GCP Media Studios", "industry": "media", "cloud_provider": "gcp"},
-        }
-        org_profile = org_profiles.get(organization_profile, org_profiles["tech-startup-aws"])
-
-        # Get context
-        attacker_ip = context.get("attacker_ip", "10.0.0.1")
-        attacker_country = context.get("attacker_country")
-        session_duration = context.get("session_duration_seconds", 0)
-        previous_intents = context.get("previous_intents", [])
-
-        # Build prompt
-        prompt = build_simplified_prompt(
-            org_profile=org_profile,
-            attacker_ip=attacker_ip,
-            attacker_country=attacker_country,
-            session_duration=session_duration,
-            command_count=len(commands),
-            commands=commands
-        )
-
-        # Add few-shot examples
-        full_prompt = FEW_SHOT_EXAMPLES + "\n" + prompt
-
-        try:
-            # Call LLM Gateway
-            response = await self.client.post(
-                f"{self.llm_gateway_url}/generate",
-                json={
-                    "prompt": full_prompt,
-                    "system_prompt": "You are a cybersecurity expert classifying attacker intent from honeypot logs. Respond ONLY with valid JSON.",
-                    "model": settings.MODEL_NAME,
-                    "temperature": 0.1,
-                    "max_tokens": 512,
-                }
-            )
-
-            if response.status_code != 200:
-                raise Exception(f"LLM Gateway returned {response.status_code}: {response.text}")
-
-            data = response.json()
-            result_text = data.get("response", "{}")
-
-            # Parse response robustly.
-            # Small local models may return markdown fences or truncated/non-JSON text.
-            try:
-                result = json.loads(result_text)
-            except json.JSONDecodeError:
-                cleaned = result_text.strip()
-
-                if cleaned.startswith("```"):
-                    lines = cleaned.splitlines()
-                    if lines and lines[0].startswith("```"):
-                        lines = lines[1:]
-                    if lines and lines[-1].strip() == "```":
-                        lines = lines[:-1]
-                    cleaned = "\n".join(lines).strip()
-
-                # Try extracting the outermost JSON object.
-                start = cleaned.find("{")
-                end = cleaned.rfind("}")
-
-                if start >= 0 and end > start:
-                    result = json.loads(cleaned[start:end + 1])
-                else:
-                    raise
-
-            # Validate intent
-            valid_intents = list(INTENT_CATEGORIES.keys()) + ["unknown"]
-            if result.get("intent") not in valid_intents:
-                result["intent"] = "unknown"
-                result["confidence"] = 0.0
-
-            # Ensure required fields
-            classification = ClassificationResult(
-                intent=result.get("intent", "unknown"),
-                confidence=max(0.0, min(1.0, result.get("confidence", 0.0))),
-                skill_level=max(1, min(10, result.get("skill_level", 5))),
-                reasoning=result.get("reasoning", "No reasoning provided"),
-                secondary_intents=result.get("secondary_intents", []),
-                adaptation_hint=result.get("adaptation_hint", ""),
-                processing_time_ms=(time.time() - start_time) * 1000
-            )
-
-            logger.info(f"Classified session {session_id}: {classification.intent} (confidence: {classification.confidence:.2f})")
-            return classification
-
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse LLM response: {e}")
-            return RuleBasedClassifier.classify(commands)
-        except Exception as e:
-            logger.error(f"Classification error: {type(e).__name__}: {e}", exc_info=True)
-            # Fallback to rule-based
-            return RuleBasedClassifier.classify(commands)
-
-
 class RuleBasedClassifier:
-    """Fast rule-based fallback classifier"""
+    """Deterministic rule-based intent classifier for cloud honeypot"""
 
     # Command patterns for each intent
     PATTERNS = {
         "cloud_recon": [
             "describe-instances", "describe-volumes", "describe-vpcs", "describe-subnets",
             "describe-security-groups", "list-buckets", "list-users", "list-roles",
-            "list-vms", "list-storage", "compute instances list", "iam service-accounts list"
+            "list-vms", "list-storage", "compute instances list", "iam service-accounts list",
+            "describe-instances", "describe-images", "describe-key-pairs", "describe-addresses",
+            "aws ec2 describe", "aws s3 ls", "aws iam list", "az resource list", "az storage account list",
+            "gcloud compute instances list", "gsutil ls", "gcloud storage buckets list"
         ],
         "credential_hunting": [
             "cat ~/.aws/credentials", "cat ~/.ssh/", "env | grep", "printenv",
             "get-caller-identity", "list-access-keys", "assume-role",
-            "keyvault secret", "auth list", "gcloud auth"
+            "keyvault secret", "auth list", "gcloud auth",
+            "env | grep AWS", "env | grep AZURE", "env | grep GOOGLE",
+            "find / -name \*.pem", "find / -name \*.key", "grep -r AKIA",
+            "aws sts get-caller-identity", "aws iam list-access-keys", "aws secretsmanager list-secrets",
+            "az keyvault secret list", "az keyvault certificate list", "gcloud secrets list",
+            "gcloud iam service-accounts list"
         ],
         "privilege_escalation": [
             "attach-user-policy", "put-user-policy", "create-policy",
             "role assignment create", "add-iam-policy-binding",
-            "create-role", "attach-role-policy"
+            "create-role", "attach-role-policy",
+            "sts assume-role", "iam create-policy", "iam put-user-policy",
+            "az role assignment create", "az ad user add", "az ad group member add",
+            "gcloud projects add-iam-policy-binding", "gcloud iam roles create",
+            "sudo", "su -", "chmod 777", "chown root", "usermod -aG",
+            "aws iam attach-user-policy", "aws iam put-user-policy", "aws iam create-policy"
         ],
         "data_access": [
             "s3 cp", "s3 sync", "s3api get-object", "storage blob download",
             "storage blob list", "gsutil cp", "gsutil rsync",
-            "describe-db-instances", "dynamodb scan", "sql instances"
+            "describe-db-instances", "dynamodb scan", "sql instances",
+            "aws s3 cp", "aws s3 sync", "aws s3api get-object", "aws s3api copy-object",
+            "aws rds describe-db-instances", "aws dynamodb scan", "aws dynamodb query",
+            "az storage blob download", "az storage blob list", "az storage blob upload",
+            "az cosmosdb sql query", "az postgres flexible-server execute",
+            "gsutil cp", "gsutil rsync", "gsutil mb", "gcloud storage cp",
+            "gcloud sql instances list", "gcloud firestore export",
+            "mysqldump", "pg_dump", "mongodump", "mongodb export"
         ],
         "persistence": [
             "create-access-key", "create-user", "create-key-pair",
             "create-function", "ad sp create", "keyvault set-policy",
-            "service-accounts create", "compute ssh"
+            "service-accounts create", "compute ssh",
+            "aws iam create-access-key", "aws iam create-user", "aws iam create-login-profile",
+            "aws ec2 create-key-pair", "aws lambda create-function", "aws iam create-role",
+            "az ad sp create-for-rbac", "az keyvault set-policy", "az keyvault certificate import",
+            "gcloud iam service-accounts create", "gcloud compute ssh", "gcloud functions deploy",
+            "ssh-keygen", "crontab -e", "systemctl enable", "launchctl load", "schtasks /create",
+            "aws autoscaling create-auto-scaling-group", "aws ec2 launch-template"
         ],
         "lateral_movement": [
             "ssh ", "scp ", "rsync ", "run-instances",
             "ssm start-session", "vm run-command",
-            "compute ssh", "compute scp", "kubectl exec"
+            "compute ssh", "compute scp", "kubectl exec",
+            "aws ssm start-session", "aws ec2 run-instances", "aws ec2 terminate-instances",
+            "az vm run-command invoke", "az vm start", "az vm stop",
+            "gcloud compute ssh", "gcloud compute scp", "gcloud compute instances start",
+            "kubectl exec", "kubectl attach", "docker exec",
+            "pscopy", "psexec", "winrs", "enter-pssession"
         ]
     }
 
     @classmethod
     def classify(cls, commands: List[Dict]) -> ClassificationResult:
-        """Fast rule-based classification"""
+        """Fast deterministic rule-based classification"""
         command_strings = []
         for cmd in commands:
             c = cmd.get("cmd", cmd.get("command", "")).lower()
@@ -235,20 +110,23 @@ class RuleBasedClassifier:
                 skill_level=1,
                 reasoning="No matching patterns found",
                 adaptation_hint="No adaptation needed",
-                processing_time_ms=1.0
+                processing_time_ms=0.5  # Very fast processing
             )
 
         # Get highest scoring intent
         best_intent = max(scores, key=scores.get)
-        confidence = min(0.9, scores[best_intent] * 0.2 + 0.3)
+        # Deterministic confidence calculation based on pattern matches
+        confidence = min(0.95, 0.3 + (scores[best_intent] * 0.15))
+        # Skill level based on number and diversity of patterns matched
+        skill_level = min(10, 2 + scores[best_intent])
 
         return ClassificationResult(
             intent=best_intent,
             confidence=confidence,
-            skill_level=min(10, scores[best_intent] + 2),
+            skill_level=skill_level,
             reasoning=f"Rule-based: matched {scores[best_intent]} patterns for {best_intent}",
             adaptation_hint=cls._get_adaptation_hint(best_intent),
-            processing_time_ms=1.0
+            processing_time_ms=0.5  # Very fast processing
         )
 
     @staticmethod

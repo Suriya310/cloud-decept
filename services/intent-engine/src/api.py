@@ -10,14 +10,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from config import settings
-from classifier import IntentClassifier, RuleBasedClassifier, ClassificationResult
+from classifier import RuleBasedClassifier, ClassificationResult
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Global classifier instance
-classifier: Optional[IntentClassifier] = None
 rule_classifier = RuleBasedClassifier()
 
 # Request/Response models
@@ -53,18 +51,15 @@ start_time = time.time()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global classifier
-    classifier = IntentClassifier()
-    await classifier.initialize()
-    logger.info("Intent Engine started")
+    # No initialization needed for rule-based classifier
+    logger.info("Intent Engine started (rule-based)")
     yield
-    await classifier.close()
     logger.info("Intent Engine shutting down")
 
 
 app = FastAPI(
     title="CloudDecept Intent Prediction Engine",
-    description="AI-powered attacker intent classification for cloud honeypot (via LLM Gateway)",
+    description="Rule-based attacker intent classification for cloud honeypot",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -81,9 +76,9 @@ app.add_middleware(
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     return HealthResponse(
-        status="healthy" if classifier and classifier._model_ready else "degraded",
-        model=settings.MODEL_NAME,
-        model_ready=classifier._model_ready if classifier else False,
+        status="healthy",
+        model="rule-based",
+        model_ready=True,
         uptime_seconds=time.time() - start_time
     )
 
@@ -93,24 +88,9 @@ async def classify_intent(request: ClassifyRequest):
     """Classify attacker intent from command sequence"""
 
     start = time.time()
-    fallback_used = False
-
-    if not classifier or not classifier._model_ready:
-        # Use rule-based fallback
-        result = rule_classifier.classify(request.commands)
-        fallback_used = True
-    else:
-        try:
-            result = await classifier.classify(
-                session_id=request.session_id,
-                organization_profile=request.organization_profile,
-                commands=request.commands,
-                context=request.context
-            )
-        except Exception as e:
-            logger.error(f"LLM classification failed, using fallback: {e}")
-            result = rule_classifier.classify(request.commands)
-            fallback_used = True
+    # Use rule-based classifier directly
+    result = rule_classifier.classify(request.commands)
+    processing_time_ms = (time.time() - start) * 1000
 
     # Update session tracking
     if request.session_id not in active_sessions:
@@ -131,8 +111,8 @@ async def classify_intent(request: ClassifyRequest):
         reasoning=result.reasoning,
         secondary_intents=result.secondary_intents,
         adaptation_hint=result.adaptation_hint,
-        processing_time_ms=result.processing_time_ms,
-        fallback_used=fallback_used
+        processing_time_ms=processing_time_ms,
+        fallback_used=False
     )
 
 
@@ -155,8 +135,6 @@ async def get_session(session_id: str):
 async def clear_session(session_id: str):
     """Clear session data"""
     active_sessions.pop(session_id, None)
-    if classifier:
-        classifier.session_cache.pop(session_id, None)
     return {"status": "cleared"}
 
 
@@ -165,8 +143,8 @@ async def get_stats():
     """Get engine statistics"""
     return {
         "active_sessions": len(active_sessions),
-        "model": settings.MODEL_NAME,
-        "model_ready": classifier._model_ready if classifier else False,
+        "model": "rule-based",
+        "model_ready": True,
         "fallback_available": True,
         "uptime_seconds": time.time() - start_time
     }

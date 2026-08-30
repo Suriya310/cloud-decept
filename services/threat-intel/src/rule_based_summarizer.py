@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
-from .intel import ExtractedIOC, MappedTechnique
+from intel import ExtractedIOC, MappedTechnique
 
 logger = logging.getLogger(__name__)
 

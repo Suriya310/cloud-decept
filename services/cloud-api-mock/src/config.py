@@ -15,7 +15,6 @@ class Settings(BaseSettings):
 
     # External services (new architecture)
     EVENT_COLLECTOR_URL: str = "http://event-collector:8000"
-    LLM_GATEWAY_URL: str = "http://llm-gateway:8003"
     ADAPTIVE_ENGINE_URL: str = "http://adaptive-engine:8002"
 
     # Legacy (for backward compatibility)
@@ -33,7 +32,6 @@ class Settings(BaseSettings):
 
     # LLM Adaptation
     ADAPTATION_ENABLED: bool = True
-    LLM_ENHANCEMENT_ENABLED: bool = False
 
     model_config = {
         "env_file": ".env",

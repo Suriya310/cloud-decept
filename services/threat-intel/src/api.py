@@ -13,10 +13,10 @@ from config import settings
 from intel import (
     IOCExtractor,
     MITREMapper,
-    SessionSummarizer,
     ExtractedIOC,
     MappedTechnique
 )
+from rule_based_summarizer import RuleBasedSummarizer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Global instances
 ioc_extractor = IOCExtractor()
 mitre_mapper = MITREMapper()
-session_summarizer: Optional[SessionSummarizer] = None
+session_summarizer: Optional[RuleBasedSummarizer] = None
 event_collector_client: Optional[httpx.AsyncClient] = None
 
 
@@ -79,15 +79,10 @@ class AnalysisResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global session_summarizer, event_collector_client
-    session_summarizer = SessionSummarizer(
-        llm_gateway_url=settings.LLM_GATEWAY_URL,
-        model=settings.MODEL_NAME
-    )
-    await session_summarizer.initialize()
+    session_summarizer = RuleBasedSummarizer()
     event_collector_client = httpx.AsyncClient(timeout=30.0)
-    logger.info("Threat Intelligence Engine started")
+    logger.info("Threat Intelligence Engine started (rule-based)")
     yield
-    await session_summarizer.close()
     if event_collector_client:
         await event_collector_client.aclose()
     logger.info("Threat Intelligence Engine shutting down")
@@ -95,7 +90,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="CloudDecept Threat Intelligence Engine",
-    description="MITRE ATT&CK mapping, IOC extraction, and session summarization (via LLM Gateway)",
+    description="MITRE ATT&CK mapping, IOC extraction, and session summarization (rule-based)",
     version="1.0.0",
     lifespan=lifespan
 )

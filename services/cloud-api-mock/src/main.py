@@ -27,20 +27,20 @@ logger = logging.getLogger(__name__)
 
 # HTTP clients for backend services
 http_client: Optional[httpx.AsyncClient] = None
-llm_gateway_client: Optional[httpx.AsyncClient] = None
 event_collector_client: Optional[httpx.AsyncClient] = None
+
+# Import rule-based classifier for intent classification
+from services.intent-engine.src.classifier import RuleBasedClassifier, ClassificationResult
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global http_client, llm_gateway_client, event_collector_client
+    global http_client, event_collector_client
     http_client = httpx.AsyncClient(timeout=30.0)
-    llm_gateway_client = httpx.AsyncClient(timeout=30.0)
     event_collector_client = httpx.AsyncClient(timeout=30.0)
-    logger.info("Cloud API Mock starting up")
+    logger.info("Cloud API Mock starting up (rule-based)")
     yield
     await http_client.aclose()
-    await llm_gateway_client.aclose()
     await event_collector_client.aclose()
     logger.info("Cloud API Mock shutting down")
 
@@ -80,55 +80,52 @@ def get_org_profile(session_id: str) -> str:
 
 
 async def classify_intent(session_id: str, commands: List[Dict]) -> Dict[str, Any]:
-    """Send commands to LLM Gateway for intent classification"""
-    if not settings.ADAPTATION_ENABLED or not llm_gateway_client:
-        return {"intent": "unknown", "confidence": 0.0}
-
+    """Classify intent using rule-based classifier"""
     try:
-        profile = get_org_profile(session_id)
-        org_profile = get_profile(profile)
-        cmd_list = [c.get("cmd", str(c)) for c in commands[-10:]]
+        # Use deterministic rule-based classifier
+        result = RuleBasedClassifier.classify(commands)
 
-        response = await llm_gateway_client.post(
-            f"{settings.LLM_GATEWAY_URL}/intent/classify",
-            json={
-                "commands": cmd_list,
-                "context": {
-                    "session_duration_seconds": time.time() - session_contexts.get(session_id, {}).get("start_time", time.time()),
-                    "previous_intents": session_contexts.get(session_id, {}).get("intents", []),
-                    "org_profile": org_profile.name,
-                }
-            }
-        )
-        if response.status_code == 200:
-            result = response.json()
-            if session_id not in session_contexts:
-                session_contexts[session_id] = {"intents": [], "start_time": time.time()}
-            session_contexts[session_id]["intents"].append(result.get("intent"))
+        # Convert ClassificationResult to dict for compatibility
+        result_dict = {
+            "intent": result.intent,
+            "confidence": result.confidence,
+            "skill_level": result.skill_level,
+            "reasoning": result.reasoning,
+            "secondary_intents": result.secondary_intents,
+            "adaptation_hint": result.adaptation_hint,
+            "processing_time_ms": result.processing_time_ms
+        }
 
-            # Persist intent to session in ClickHouse via event collector
-            if event_collector_client:
-                try:
-                    update_response = await event_collector_client.post(
-                        f"{settings.EVENT_COLLECTOR_URL}/update-session",
-                        json={
-                            "session_id": session_id,
-                            "intent": result.get("intent")
-                        }
-                    )
-                    if update_response.status_code == 200:
-                        update_result = update_response.json()
-                        if update_result.get("success"):
-                            logger.info(f"Updated session {session_id} with intent={result.get('intent')}")
-                        else:
-                            logger.warning(f"Failed to update session {session_id}: {update_result.get('error')}")
-                except Exception as e:
-                    logger.warning(f"Failed to persist session intent: {e}")
+        # Update session context for consistency with existing code
+        if session_id not in session_contexts:
+            session_contexts[session_id] = {"intents": [], "start_time": time.time()}
+        session_contexts[session_id]["intents"].append(result.intent)
 
-            return result
+        # Persist intent to session in ClickHouse via event collector
+        if event_collector_client:
+            try:
+                update_response = await event_collector_client.post(
+                    f"{settings.EVENT_COLLECTOR_URL}/update-session",
+                    json={
+                        "session_id": session_id,
+                        "intent": result.intent
+                    }
+                )
+                if update_response.status_code == 200:
+                    update_result = update_response.json()
+                    if update_result.get("success"):
+                        logger.info(f"Updated session {session_id} with intent={result.intent}")
+                    else:
+                        logger.warning(f"Failed to update session {session_id}: {update_result.get('error')}")
+                else:
+                    logger.warning(f"Event collector returned {update_response.status_code} for session update")
+            except Exception as e:
+                logger.warning(f"Failed to persist session intent: {e}")
+
+        return result_dict
     except Exception as e:
         logger.warning(f"Intent classification failed: {e}")
-    return {"intent": "unknown", "confidence": 0.0}
+        return {"intent": "unknown", "confidence": 0.0}
 
 
 async def adapt_response(

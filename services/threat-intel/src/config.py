@@ -12,13 +12,6 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
-    # LLM Gateway (for summarization)
-    LLM_GATEWAY_URL: str = "http://llm-gateway:8003"
-
-    # Legacy Ollama (fallback)
-    OLLAMA_URL: str = "http://ollama:11434"
-    MODEL_NAME: str = "qwen2.5:1.5b"
-
     # Databases
     CLICKHOUSE_HOST: str = "clickhouse"
     CLICKHOUSE_PORT: int = 9000

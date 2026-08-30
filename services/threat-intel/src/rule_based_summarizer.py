@@ -385,7 +385,7 @@ class RuleBasedSummarizer:
                 if len(unique_recommendations) >= 5:  # Limit to top 5
                     break
 
-        return unique_recommendations if unique_recommendations = [
+        return unique_recommendations if unique_recommendations else [
             "Monitor for continued attacker activity",
             "Review all available logs for completeness",
             "Ensure backups and snapshots are secure"

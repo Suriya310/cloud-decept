@@ -32,9 +32,15 @@ class EventProcessor:
         self.ai_clients = ai_clients
         self.session_manager = session_manager
         self._processed_event_ids: set = set()
+        self._running = False
+        self._task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         """Start the event processing loop."""
+        if self._running:
+            logger.warning("Stream processor already running")
+            return
+        self._running = True
         logger.info("Starting Stream Processor event loop")
 
         # Streams to consume
@@ -45,7 +51,7 @@ class EventProcessor:
             (settings.honeypot_files_stream, "files"),
         ]
 
-        while True:
+        while self._running:
             try:
                 await self._process_streams()
                 await asyncio.sleep(1)  # Small delay between polling cycles
@@ -415,3 +421,10 @@ class EventProcessor:
         msg_id = await self.redis_client.publish("adaptive:actions", event)
         if msg_id:
             logger.info(f"Published adaptation for session {session_id} (msg_id: {msg_id})")
+
+    async def stop(self) -> None:
+        """Stop the event processing loop gracefully."""
+        logger.info("Stopping Stream Processor...")
+        self._running = False
+        # Give the loop a moment to exit gracefully
+        await asyncio.sleep(0.1)

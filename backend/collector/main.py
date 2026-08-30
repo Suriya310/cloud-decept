@@ -332,7 +332,7 @@ class EventCollector:
             stream = ev.get("stream", "")
 
             try:
-                if event_type == "session_start" or stream == StreamNames.SESSION_EVENTS:
+                if event_type == "session_start":
                     # SessionStartEvent
                     start_time = parse_dt(payload.get("timestamp", datetime.utcnow()))
                     sessions.append((
@@ -351,7 +351,7 @@ class EventCollector:
                         0,  # skill_level
                         safe_str(payload.get("disconnection_reason")),
                     ))
-                elif event_type == "session_end" or stream == StreamNames.SESSION_EVENTS:
+                elif event_type == "session_end":
                     # SessionEndEvent - we'd need to update existing session, for now skip
                     # Could implement upsert logic later
                     pass
@@ -402,7 +402,7 @@ class EventCollector:
         if sessions:
             try:
                 self.clickhouse_client.insert(
-                    "sessions",
+                    f"{self.clickhouse_db}.sessions",
                     sessions,
                     column_names=[
                         "session_id", "start_time", "end_time", "duration_seconds",
@@ -418,7 +418,7 @@ class EventCollector:
         if commands:
             try:
                 self.clickhouse_client.insert(
-                    "commands",
+                    f"{self.clickhouse_db}.commands",
                     commands,
                     column_names=[
                         "event_id", "session_id", "timestamp", "command",
@@ -435,7 +435,7 @@ class EventCollector:
         if auth_attempts:
             try:
                 self.clickhouse_client.insert(
-                    "auth_attempts",
+                    f"{self.clickhouse_db}.auth_attempts",
                     auth_attempts,
                     column_names=[
                         "event_id", "session_id", "timestamp", "username",
@@ -449,7 +449,7 @@ class EventCollector:
         if cloud_api:
             try:
                 self.clickhouse_client.insert(
-                    "cloud_api_requests",
+                    f"{self.clickhouse_db}.cloud_api_requests",
                     cloud_api,
                     column_names=[
                         "event_id", "session_id", "timestamp", "cloud_provider",

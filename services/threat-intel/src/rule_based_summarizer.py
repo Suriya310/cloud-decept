@@ -30,7 +30,7 @@ class RuleBasedSummarizer:
         duration_seconds = session_data.get("duration_seconds", 0)
 
         # Determine skill level based on techniques, IOCs, and command sophistication
-        skill_level = self._calculate_skill_level(techniques, iocs, commands, intent_history)
+        skill_level = self._calculate_skill_level(techniques, iocs, commands, intent_history, duration_seconds)
 
         # Determine primary objective from intent history and techniques
         primary_objective = self._determine_primary_objective(intent_history, techniques, commands)
@@ -74,7 +74,8 @@ class RuleBasedSummarizer:
         techniques: List[MappedTechnique],
         iocs: List[ExtractedIOC],
         commands: List[Dict],
-        intent_history: List[str]
+        intent_history: List[str],
+        duration_seconds: int
     ) -> int:
         """Calculate attacker skill level (1-10) based on observed behaviors"""
 

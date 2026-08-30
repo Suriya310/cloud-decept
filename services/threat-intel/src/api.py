@@ -151,7 +151,7 @@ async def analyze_session(request: AnalyzeSessionRequest, background_tasks: Back
             "attacker_country": request.attacker_country,
             "duration_seconds": request.duration_seconds
         }
-        summary_dict = await session_summarizer.summarize(session_data)
+        summary_dict = session_summarizer.summarize(session_data)
         summary = SessionSummaryResponse(**summary_dict)
 
         # Persist skill_level and primary intent to ClickHouse via event collector
@@ -236,7 +236,7 @@ async def summarize(request: AnalyzeSessionRequest):
         "duration_seconds": request.duration_seconds
     }
 
-    summary_dict = await session_summarizer.summarize(session_data)
+    summary_dict = session_summarizer.summarize(session_data)
     summary = SessionSummaryResponse(**summary_dict)
 
     # Persist skill_level and primary intent to ClickHouse via event collector

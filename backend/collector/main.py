@@ -531,10 +531,12 @@ class EventCollector:
                     await self._write_events_to_clickhouse(all_events)
                     logger.info(f"Processed {len(all_events)} events to ClickHouse")
 
-                    # ACK all successfully processed messages - FAIL FAST if XACK fails
-                    # We must NOT continue if XACK fails because messages will be reclaimed
-                    # by XAUTOCLAIM and re-processed, creating duplicates.
-                    ack_failed = False
+                    # ACK all successfully processed messages with retry logic
+                    # We track which messages failed to XACK and retry them individually
+                    # to avoid leaving successfully processed messages in PEL where they
+                    # can be reclaimed and re-processed.
+                    failed_to_ack = {}  # stream -> list of message_ids that failed XACK
+
                     for stream, message_ids in stream_to_ids_map.items():
                         if message_ids:
                             try:
@@ -544,14 +546,44 @@ class EventCollector:
                                 logger.debug(f"ACKed {len(message_ids)} messages from {stream}")
                             except Exception as e:
                                 logger.error(f"Failed to ACK messages from {stream}: {e}")
-                                ack_failed = True
+                                # Track which specific messages failed to XACK for retry
+                                failed_to_ack[stream] = message_ids
 
-                    if ack_failed:
-                        # XACK failure means messages stay in PEL.
-                        # We must back off and NOT continue the loop, otherwise we'll
-                        # re-read the same messages (they're still unacknowledged in the stream).
-                        # The exception will be caught below and we'll sleep before retrying.
-                        raise RuntimeError("XACK failed - backing off to prevent duplicate processing")
+                    # Retry failed XACKs individually with exponential backoff
+                    # This prevents successfully processed messages from staying in PEL
+                    # where they can be reclaimed by XAUTOCLAIM
+                    if failed_to_ack:
+                        max_retries = 3
+                        base_delay = 0.5  # seconds
+
+                        for attempt in range(max_retries):
+                            if not failed_to_ack:
+                                break  # All retried messages succeeded
+
+                            delay = base_delay * (2 ** attempt)  # Exponential backoff
+                            logger.info(f"Retrying failed XACKs (attempt {attempt + 1}/{max_retries}) after {delay}s delay")
+                            await asyncio.sleep(delay)
+
+                            still_failed = {}  # stream -> list of message_ids still failing
+
+                            for stream, message_ids in failed_to_ack.items():
+                                try:
+                                    await self.redis.xack(
+                                        ConsumerGroups.EVENT_COLLECTOR, stream, *message_ids
+                                    )
+                                    logger.debug(f"Retry ACKed {len(message_ids)} messages from {stream}")
+                                except Exception as e:
+                                    logger.error(f"Failed to retry ACK messages from {stream}: {e}")
+                                    still_failed[stream] = message_ids
+
+                            failed_to_ack = still_failed
+
+                        # If any messages still failed after retries, we have to accept that
+                        # they'll remain in PEL and may be reclaimed, but we've done our best
+                        if failed_to_ack:
+                            total_failed = sum(len(ids) for ids in failed_to_ack.values())
+                            logger.warning(f"{total_failed} messages failed to XACK after {max_retries} retries; "
+                                         f"they will remain in PEL and may be reclaimed by XAUTOCLAIM")
 
                 await asyncio.sleep(1)  # Small delay between batches
 

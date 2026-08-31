@@ -165,6 +165,8 @@ class EventCollector:
     ) -> tuple[list[dict], list[str]]:
         """Consume events from a stream using consumer group
         Returns: (events, message_ids)
+        Only returns message_ids for successfully parsed events - unparseable messages are NOT added to message_ids
+        so they won't be ACKed and will remain in PEL for inspection/retry.
         """
         if not self.redis:
             raise RuntimeError("Redis not initialized")
@@ -187,6 +189,8 @@ class EventCollector:
                         message_ids.append(msg_id)
                     except Exception as e:
                         logger.error(f"Failed to parse event {msg_id}: {e}")
+                        # IMPORTANT: Do NOT add msg_id to message_ids - we want it to stay in PEL
+                        # so it can be inspected/redelivered. ACKing unparseable messages loses them.
             return events, message_ids
         except redis.ResponseError as e:
             logger.error(f"Error consuming from {stream}: {e}")
@@ -208,6 +212,7 @@ class EventCollector:
 
             # Create tables with DateTime64(6) to match backend-api schema
             # TTL expressions need toDateTime() conversion for DateTime64 columns
+            # Use ReplacingMergeTree for idempotent inserts - deduplicates by event_id on merge
             tables = [
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
@@ -225,7 +230,7 @@ class EventCollector:
                     intent String,
                     skill_level UInt8,
                     disconnection_reason String
-                ) ENGINE = MergeTree() ORDER BY (start_time, session_id)
+                ) ENGINE = ReplacingMergeTree(start_time) ORDER BY (start_time, session_id)
                 PARTITION BY toYYYYMM(start_time)
                 TTL toDateTime(start_time) + INTERVAL 90 DAY
                 """,
@@ -241,7 +246,7 @@ class EventCollector:
                     duration_ms UInt32,
                     intent String,
                     mitre_techniques Array(String)
-                ) ENGINE = MergeTree() ORDER BY (timestamp, session_id)
+                ) ENGINE = ReplacingMergeTree(timestamp) ORDER BY (event_id, timestamp, session_id)
                 PARTITION BY toYYYYMM(timestamp)
                 TTL toDateTime(timestamp) + INTERVAL 90 DAY
                 """,
@@ -254,7 +259,7 @@ class EventCollector:
                     password String,
                     success UInt8,
                     auth_method String
-                ) ENGINE = MergeTree() ORDER BY (timestamp, session_id)
+                ) ENGINE = ReplacingMergeTree(timestamp) ORDER BY (event_id, timestamp, session_id)
                 PARTITION BY toYYYYMM(timestamp)
                 TTL toDateTime(timestamp) + INTERVAL 90 DAY
                 """,
@@ -269,7 +274,7 @@ class EventCollector:
                     path String,
                     response_status UInt16,
                     duration_ms UInt32
-                ) ENGINE = MergeTree() ORDER BY (timestamp, session_id)
+                ) ENGINE = ReplacingMergeTree(timestamp) ORDER BY (event_id, timestamp, session_id)
                 PARTITION BY toYYYYMM(timestamp)
                 TTL toDateTime(timestamp) + INTERVAL 90 DAY
                 """,
@@ -283,7 +288,10 @@ class EventCollector:
             raise
 
     async def _write_events_to_clickhouse(self, events: list[dict]):
-        """Write parsed events to ClickHouse tables"""
+        """Write parsed events to ClickHouse tables
+        Raises Exception on any insert failure so caller can avoid ACKing.
+        Uses ReplacingMergeTree for idempotent inserts - duplicates are deduplicated on merge.
+        """
         if not self.clickhouse_client or not events:
             return
 
@@ -394,11 +402,13 @@ class EventCollector:
                     ))
             except Exception as e:
                 logger.error(f"Failed to prepare event for ClickHouse: {e}", exc_info=True)
+                raise  # Re-raise to prevent ACK on preparation failure
 
         # Log batch counts before insert
         logger.info(f"Batch insert counts: sessions={len(sessions)}, commands={len(commands)}, auth={len(auth_attempts)}, cloud_api={len(cloud_api)}")
 
-        # Batch insert - each type independently so one failure doesn't block others
+        # Batch insert - RAISE on any failure so caller doesn't ACK
+        # Each type independently so we can log specific failures
         if sessions:
             try:
                 self.clickhouse_client.insert(
@@ -414,6 +424,7 @@ class EventCollector:
                 logger.info(f"Inserted {len(sessions)} sessions to ClickHouse")
             except Exception as e:
                 logger.error(f"Failed to insert sessions: {e}", exc_info=True)
+                raise
 
         if commands:
             try:
@@ -431,6 +442,7 @@ class EventCollector:
                     logger.info(f"  CMD: session={cmd[1]}, command={cmd[3][:50] if cmd[3] else 'empty'}")
             except Exception as e:
                 logger.error(f"Failed to insert commands: {e}", exc_info=True)
+                raise
 
         if auth_attempts:
             try:
@@ -445,6 +457,7 @@ class EventCollector:
                 logger.info(f"Inserted {len(auth_attempts)} auth attempts to ClickHouse")
             except Exception as e:
                 logger.error(f"Failed to insert auth_attempts: {e}", exc_info=True)
+                raise
 
         if cloud_api:
             try:
@@ -460,6 +473,7 @@ class EventCollector:
                 logger.info(f"Inserted {len(cloud_api)} cloud API requests to ClickHouse")
             except Exception as e:
                 logger.error(f"Failed to insert cloud_api_requests: {e}", exc_info=True)
+                raise
 
     async def _consumer_loop(self):
         """Background task that consumes from Redis streams and writes to ClickHouse"""
@@ -492,7 +506,6 @@ class EventCollector:
                     last_autoclaim = now
 
                 all_events = []
-                all_message_ids = []  # Track message IDs for ACK
                 stream_to_ids_map = {}  # Map stream -> list of message IDs
                 for stream, stream_type in streams_to_consume:
                     events, message_ids = await self.consume_events(
@@ -511,7 +524,6 @@ class EventCollector:
                             event_types[et] = event_types.get(et, 0) + 1
                         logger.debug(f"Event types from {stream}: {event_types}")
                         all_events.extend(events)
-                        all_message_ids.extend(message_ids)
                         if message_ids:
                             stream_to_ids_map[stream] = message_ids
 
@@ -519,7 +531,10 @@ class EventCollector:
                     await self._write_events_to_clickhouse(all_events)
                     logger.info(f"Processed {len(all_events)} events to ClickHouse")
 
-                    # ACK all successfully processed messages
+                    # ACK all successfully processed messages - FAIL FAST if XACK fails
+                    # We must NOT continue if XACK fails because messages will be reclaimed
+                    # by XAUTOCLAIM and re-processed, creating duplicates.
+                    ack_failed = False
                     for stream, message_ids in stream_to_ids_map.items():
                         if message_ids:
                             try:
@@ -529,6 +544,14 @@ class EventCollector:
                                 logger.debug(f"ACKed {len(message_ids)} messages from {stream}")
                             except Exception as e:
                                 logger.error(f"Failed to ACK messages from {stream}: {e}")
+                                ack_failed = True
+
+                    if ack_failed:
+                        # XACK failure means messages stay in PEL.
+                        # We must back off and NOT continue the loop, otherwise we'll
+                        # re-read the same messages (they're still unacknowledged in the stream).
+                        # The exception will be caught below and we'll sleep before retrying.
+                        raise RuntimeError("XACK failed - backing off to prevent duplicate processing")
 
                 await asyncio.sleep(1)  # Small delay between batches
 
@@ -546,31 +569,41 @@ class EventCollector:
         Use XAUTOCLAIM to reclaim idle pending messages from dead/old consumers.
         This handles messages that were delivered to previous consumers (with different names)
         but never ACKed, which would otherwise remain pending forever.
+
+        Uses next_start_id cursor for proper pagination - claims all idle messages in batches.
         """
         if not self.redis:
             return
 
         for stream, stream_type in streams_to_consume:
             try:
-                # XAUTOCLAIM parameters:
-                # - group: consumer group name
-                # - consumer: this consumer's name (claims will be assigned to us)
-                # - min_idle_time: only claim messages idle for at least this many ms (60 seconds)
-                # - start_id: '-' means start from the beginning of PEL
-                # - count: max messages to claim per stream per call
-                # Returns: [next_start_id, claimed_messages, deleted_ids]
-                next_start_id, claimed_messages, deleted_ids = await self.redis.xautoclaim(
-                    stream,
-                    ConsumerGroups.EVENT_COLLECTOR,
-                    consumer_name,
-                    min_idle_time=60000,  # 60 seconds - message must be idle for at least 60s
-                    start_id="-",  # start from beginning of PEL
-                    count=100,
-                )
+                # Use cursor-based iteration to claim all idle messages
+                start_id = "-"
+                total_claimed = 0
 
-                if claimed_messages:
+                while True:
+                    # XAUTOCLAIM parameters:
+                    # - group: consumer group name
+                    # - consumer: this consumer's name (claims will be assigned to us)
+                    # - min_idle_time: only claim messages idle for at least this many ms (60 seconds)
+                    # - start_id: cursor for pagination, '-' means start from beginning of PEL
+                    # - count: max messages to claim per stream per call
+                    # Returns: [next_start_id, claimed_messages, deleted_ids]
+                    next_start_id, claimed_messages, deleted_ids = await self.redis.xautoclaim(
+                        stream,
+                        ConsumerGroups.EVENT_COLLECTOR,
+                        consumer_name,
+                        min_idle_time=60000,  # 60 seconds - message must be idle for at least 60s
+                        start_id=start_id,
+                        count=100,
+                    )
+
+                    if not claimed_messages:
+                        break
+
                     claimed_ids = [msg_id for msg_id, _ in claimed_messages]
-                    logger.info(f"XAUTOCLAIM reclaimed {len(claimed_ids)} orphaned messages from {stream}")
+                    total_claimed += len(claimed_ids)
+                    logger.info(f"XAUTOCLAIM reclaimed {len(claimed_ids)} orphaned messages from {stream} (cursor={next_start_id})")
 
                     # Process the reclaimed messages through the same pipeline
                     reclaimed_events = []
@@ -591,6 +624,7 @@ class EventCollector:
                         logger.info(f"Processed {len(reclaimed_events)} reclaimed events to ClickHouse")
 
                         # ACK the reclaimed messages only after successful insertion
+                        # FAIL FAST if XACK fails
                         try:
                             await self.redis.xack(
                                 ConsumerGroups.EVENT_COLLECTOR, stream, *claimed_ids
@@ -598,6 +632,15 @@ class EventCollector:
                             logger.debug(f"ACKed {len(claimed_ids)} reclaimed messages from {stream}")
                         except Exception as e:
                             logger.error(f"Failed to ACK reclaimed messages from {stream}: {e}")
+                            raise RuntimeError(f"XACK failed for reclaimed messages: {e}")
+
+                    # Use next_start_id for next iteration
+                    if next_start_id == "0-0":
+                        break
+                    start_id = next_start_id
+
+                if total_claimed > 0:
+                    logger.info(f"XAUTOCLAIM total reclaimed {total_claimed} messages from {stream}")
 
             except redis.ResponseError as e:
                 # NOGROUP means consumer group doesn't exist yet - that's fine

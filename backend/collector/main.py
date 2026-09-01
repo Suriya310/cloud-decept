@@ -490,8 +490,8 @@ class EventCollector:
 
         # Use stable consumer identity based on hostname (consistent across restarts in Docker)
         # This preserves the Pending Entries List (PEL) across container restarts
-        consumer_name = f"clickhouse-writer-{socket.gethostname()}"
-        logger.info(f"Consumer name: {consumer_name}, group: {ConsumerGroups.EVENT_COLLECTOR}")
+        self.consumer_name = f"clickhouse-writer-{socket.gethostname()}"
+        logger.info(f"Consumer name: {self.consumer_name}, group: {ConsumerGroups.EVENT_COLLECTOR}")
 
         # Track when we last ran XAUTOCLAIM to reclaim orphaned messages from previous consumers
         last_autoclaim = 0

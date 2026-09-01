@@ -202,6 +202,7 @@ class LogForwarder:
             }
         elif mapped_type == "session_end":
             payload = {
+                "session_id": session_id,
                 "duration_seconds": cowrie_event.get("duration", 0) // 1000
                 if cowrie_event.get("duration")
                 else 0,

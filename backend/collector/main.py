@@ -656,15 +656,45 @@ class EventCollector:
                         logger.info(f"Processed {len(reclaimed_events)} reclaimed events to ClickHouse")
 
                         # ACK the reclaimed messages only after successful insertion
-                        # FAIL FAST if XACK fails
-                        try:
-                            await self.redis.xack(
-                                ConsumerGroups.EVENT_COLLECTOR, stream, *claimed_ids
-                            )
-                            logger.debug(f"ACKed {len(claimed_ids)} reclaimed messages from {stream}")
-                        except Exception as e:
-                            logger.error(f"Failed to ACK reclaimed messages from {stream}: {e}")
-                            raise RuntimeError(f"XACK failed for reclaimed messages: {e}")
+                        # Use retry logic to avoid leaving successfully processed messages in PEL
+                        # where they can be reclaimed and re-processed.
+                        failed_to_ack = {stream: claimed_ids} if claimed_ids else {}
+
+                        # Retry failed XACKs individually with exponential backoff
+                        # This prevents successfully processed messages from staying in PEL
+                        # where they can be reclaimed by XAUTOCLAIM
+                        if failed_to_ack:
+                            max_retries = 3
+                            base_delay = 0.5  # seconds
+
+                            for attempt in range(max_retries):
+                                if not failed_to_ack:
+                                    break  # All retried messages succeeded
+
+                                delay = base_delay * (2 ** attempt)  # Exponential backoff
+                                logger.info(f"Retrying failed XACKs for reclaimed messages (attempt {attempt + 1}/{max_retries}) after {delay}s delay")
+                                await asyncio.sleep(delay)
+
+                                still_failed = {}  # stream -> list of message_ids still failing
+
+                                for stream, message_ids in failed_to_ack.items():
+                                    try:
+                                        await self.redis.xack(
+                                            ConsumerGroups.EVENT_COLLECTOR, stream, *message_ids
+                                        )
+                                        logger.debug(f"Retry ACKed {len(message_ids)} reclaimed messages from {stream}")
+                                    except Exception as e:
+                                        logger.error(f"Failed to retry ACK reclaimed messages from {stream}: {e}")
+                                        still_failed[stream] = message_ids
+
+                                failed_to_ack = still_failed
+
+                            # If any messages still failed after retries, we have to accept that
+                            # they'll remain in PEL and may be reclaimed, but we've done our best
+                            if failed_to_ack:
+                                total_failed = sum(len(ids) for ids in failed_to_ack.values())
+                                logger.warning(f"{total_failed} reclaimed messages failed to XACK after {max_retries} retries; "
+                                             f"they will remain in PEL and may be reclaimed by XAUTOCLAIM")
 
                     # Use next_start_id for next iteration
                     if next_start_id == "0-0":
@@ -1006,7 +1036,8 @@ async def debug_pipeline():
             for group in groups:
                 if group.get("name") == ConsumerGroups.EVENT_COLLECTOR:
                     pending = await collector.redis.xpending_range(
-                        stream, ConsumerGroups.EVENT_COLLECTOR, "-", "+", 10
+                        stream, ConsumerGroups.EVENT_COLLECTOR, "-", "+", 10,
+                        consumername=collector.consumer_name
                     )
                     result["pending_messages"][stream] = len(pending)
         except Exception as e:

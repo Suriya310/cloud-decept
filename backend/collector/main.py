@@ -334,71 +334,74 @@ class EventCollector:
         cloud_api = []
 
         for ev in events:
-            data = ev.get("data", {})
-            payload = data.get("payload", {})
-            event_type = data.get("event_type", "")
-            stream = ev.get("stream", "")
+            # The event data is wrapped in an EventEnvelope with the actual event in the "payload" field
+            envelope = ev.get("data", {})
+            # The actual event data is in the envelope's "payload" field for event-specific data
+            # But top-level fields like session_id, timestamp, attacker_ip are at the envelope's top level
+            event_data = envelope.get("payload", envelope)
+            event_type = envelope.get("event_type", "")
+            stream = envelope.get("stream_name", "")
 
             try:
                 if event_type == "session_start":
-                    # SessionStartEvent
-                    start_time = parse_dt(data.get("timestamp", datetime.utcnow()))
+                    # SessionStartEvent - top-level fields in envelope, payload-specific in event_data
+                    start_time = parse_dt(envelope.get("timestamp", datetime.utcnow()))
                     sessions.append((
-                        safe_str(data.get("session_id")),
+                        safe_str(envelope.get("session_id")),
                         start_time,
                         start_time,  # end_time placeholder (updated on session_end)
                         0,     # duration_seconds
-                        safe_str(data.get("attacker_ip") or payload.get("client_ip")),
-                        safe_str(payload.get("country")),
-                        safe_str(payload.get("asn")),
-                        safe_str(payload.get("protocol", "ssh")),
+                        safe_str(envelope.get("attacker_ip") or event_data.get("client_ip")),
+                        safe_str(envelope.get("payload", {}).get("country")),
+                        safe_str(envelope.get("payload", {}).get("asn")),
+                        safe_str(envelope.get("payload", {}).get("protocol", "ssh")),
                         0,  # commands_executed
                         0,  # files_transferred
                         0,  # credentials_tried
-                        "",
+                        safe_str(envelope.get("payload", {}).get("intent", "")),
                         0,  # skill_level
-                        "",
+                        safe_str(envelope.get("payload", {}).get("disconnection_reason", "")),
                     ))
                 elif event_type == "session_end":
                     # SessionEndEvent - we'd need to update existing session, for now skip
                     # Could implement upsert logic later
                     pass
                 elif event_type == "command" or stream == StreamNames.COMMAND_EVENTS:
-                    cmd = safe_str(payload.get("command"))
-                    logger.debug(f"Preparing command for ClickHouse: session={payload.get('session_id')}, command={cmd[:50] if cmd else 'empty'}")
+                    cmd = safe_str(event_data.get("command"))
+                    logger.debug(f"Preparing command for ClickHouse: session={envelope.get('session_id')}, command={cmd[:50] if cmd else 'empty'}")
                     commands.append((
-                        safe_str(payload.get("event_id", str(uuid.uuid4()))),
-                        safe_str(payload.get("session_id")),
-                        parse_dt(payload.get("timestamp", datetime.utcnow())),
+                        safe_str(event_data.get("event_id", str(uuid.uuid4()))),
+                        safe_str(envelope.get("session_id")),
+                        parse_dt(envelope.get("timestamp", datetime.utcnow())),
                         cmd,
-                        safe_list(payload.get("arguments")),
-                        safe_str(payload.get("output")),
-                        safe_int(payload.get("exit_code")),
-                        safe_int(payload.get("duration_ms")),
+                        safe_list(event_data.get("arguments")),
+                        safe_str(event_data.get("output")),
+                        safe_int(event_data.get("exit_code")),
+                        safe_int(event_data.get("duration_ms")),
                         "",
-                        safe_list(payload.get("mitre_techniques")),
+                        safe_list(event_data.get("mitre_techniques")),
                     ))
                 elif event_type == "auth" or stream == StreamNames.AUTH_EVENTS:
                     auth_attempts.append((
-                        safe_str(payload.get("event_id", str(uuid.uuid4()))),
-                        safe_str(payload.get("session_id")),
-                        parse_dt(payload.get("timestamp", datetime.utcnow())),
-                        safe_str(payload.get("username")),
-                        safe_str(payload.get("password")),
-                        1 if payload.get("success", False) else 0,
-                        safe_str(payload.get("auth_method", "password")),
+                        safe_str(event_data.get("event_id", str(uuid.uuid4()))),
+                        safe_str(envelope.get("session_id")),
+                        parse_dt(envelope.get("timestamp", datetime.utcnow())),
+                        safe_str(event_data.get("username")),
+                        safe_str(event_data.get("password")),
+                        1 if event_data.get("success", False) else 0,
+                        safe_str(event_data.get("auth_method", "password")),
                     ))
                 elif event_type == "cloud_api" or stream == StreamNames.CLOUD_API_EVENTS:
                     cloud_api.append((
-                        safe_str(payload.get("event_id", str(uuid.uuid4()))),
-                        safe_str(payload.get("session_id")),
-                        parse_dt(payload.get("timestamp", datetime.utcnow())),
-                        safe_str(payload.get("cloud_provider")),
-                        safe_str(payload.get("http_method")),
-                        safe_str(payload.get("endpoint")),
-                        safe_str(payload.get("path")),
-                        safe_int(payload.get("response_status")),
-                        safe_int(payload.get("duration_ms")),
+                        safe_str(event_data.get("event_id", str(uuid.uuid4()))),
+                        safe_str(envelope.get("session_id")),
+                        parse_dt(envelope.get("timestamp", datetime.utcnow())),
+                        safe_str(event_data.get("cloud_provider")),
+                        safe_str(event_data.get("http_method")),
+                        safe_str(event_data.get("endpoint")),
+                        safe_str(event_data.get("path")),
+                        safe_int(event_data.get("response_status")),
+                        safe_int(event_data.get("duration_ms")),
                     ))
             except Exception as e:
                 logger.error(f"Failed to prepare event for ClickHouse: {e}", exc_info=True)

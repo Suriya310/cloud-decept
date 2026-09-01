@@ -193,6 +193,7 @@ class LogForwarder:
 
         if mapped_type == "session_start":
             payload = {
+                "session_id": session_id,
                 "protocol": cowrie_event.get("protocol", "ssh"),
                 "client_version": cowrie_event.get("version", ""),
                 "client_ip": src_ip,

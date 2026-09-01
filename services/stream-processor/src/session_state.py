@@ -55,6 +55,9 @@ class SessionStateManager:
         }
 
         self.sessions[session_id] = session
+        logger.info(f"Initialized session state for {session_id}")
+        return session
+
     def process_session_end(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Process a session_end event and finalize session.

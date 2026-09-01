@@ -658,11 +658,22 @@ class EventCollector:
                         # ACK the reclaimed messages only after successful insertion
                         # Use retry logic to avoid leaving successfully processed messages in PEL
                         # where they can be reclaimed and re-processed.
-                        failed_to_ack = {stream: claimed_ids} if claimed_ids else {}
+                        # Only add to failed_to_ack if XACK actually fails
+                        failed_to_ack = {}
+
+                        # Try to ACK all claimed messages first
+                        try:
+                            await self.redis.xack(
+                                ConsumerGroups.EVENT_COLLECTOR, stream, *claimed_ids
+                            )
+                            logger.debug(f"ACKed {len(claimed_ids)} reclaimed messages from {stream}")
+                        except Exception as e:
+                            logger.error(f"Failed to ACK reclaimed messages from {stream}: {e}")
+                            failed_to_ack[stream] = claimed_ids
 
                         # Retry failed XACKs individually with exponential backoff
                         # This prevents successfully processed messages from staying in PEL
-                        # where they can be reclaimed by XAUTOCLAIM
+                        # where they can be reclaimed and re-processed.
                         if failed_to_ack:
                             max_retries = 3
                             base_delay = 0.5  # seconds
@@ -690,11 +701,7 @@ class EventCollector:
                                 failed_to_ack = still_failed
 
                             # If any messages still failed after retries, we have to accept that
-                            # they'll remain in PEL and may be reclaimed, but we've done our best
-                            if failed_to_ack:
-                                total_failed = sum(len(ids) for ids in failed_to_ack.values())
-                                logger.warning(f"{total_failed} reclaimed messages failed to XACK after {max_retries} retries; "
-                                             f"they will remain in PEL and may be reclaimed by XAUTOCLAIM")
+                            # theyll
 
                     # Use next_start_id for next iteration
                     if next_start_id == "0-0":

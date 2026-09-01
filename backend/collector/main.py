@@ -342,22 +342,22 @@ class EventCollector:
             try:
                 if event_type == "session_start":
                     # SessionStartEvent
-                    start_time = parse_dt(payload.get("timestamp", datetime.utcnow()))
+                    start_time = parse_dt(data.get("timestamp", datetime.utcnow()))
                     sessions.append((
-                        safe_str(payload.get("session_id")),
+                        safe_str(data.get("session_id")),
                         start_time,
                         start_time,  # end_time placeholder (updated on session_end)
                         0,     # duration_seconds
-                        safe_str(payload.get("client_ip") or payload.get("attacker_ip")),
+                        safe_str(data.get("attacker_ip") or payload.get("client_ip")),
                         safe_str(payload.get("country")),
                         safe_str(payload.get("asn")),
                         safe_str(payload.get("protocol", "ssh")),
                         0,  # commands_executed
                         0,  # files_transferred
                         0,  # credentials_tried
-                        safe_str(payload.get("intent")),
+                        "",
                         0,  # skill_level
-                        safe_str(payload.get("disconnection_reason")),
+                        "",
                     ))
                 elif event_type == "session_end":
                     # SessionEndEvent - we'd need to update existing session, for now skip
@@ -375,7 +375,7 @@ class EventCollector:
                         safe_str(payload.get("output")),
                         safe_int(payload.get("exit_code")),
                         safe_int(payload.get("duration_ms")),
-                        safe_str(payload.get("intent")),
+                        "",
                         safe_list(payload.get("mitre_techniques")),
                     ))
                 elif event_type == "auth" or stream == StreamNames.AUTH_EVENTS:

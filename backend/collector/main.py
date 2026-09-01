@@ -502,7 +502,7 @@ class EventCollector:
                 # Periodically reclaim orphaned messages from dead/old consumers
                 now = asyncio.get_event_loop().time()
                 if now - last_autoclaim >= autoclaim_interval_sec:
-                    await self._reclaim_orphaned_messages(streams_to_consume, consumer_name)
+                    await self._reclaim_orphaned_messages(streams_to_consume, self.consumer_name)
                     last_autoclaim = now
 
                 all_events = []
@@ -511,7 +511,7 @@ class EventCollector:
                     events, message_ids = await self.consume_events(
                         stream=stream,
                         group=ConsumerGroups.EVENT_COLLECTOR,
-                        consumer=consumer_name,
+                        consumer=self.consumer_name,
                         count=50,
                         block_ms=2000,
                     )

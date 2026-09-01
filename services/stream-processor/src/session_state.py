@@ -55,27 +55,25 @@ class SessionStateManager:
         }
 
         self.sessions[session_id] = session
-        logger.info(f"Initialized session state for {session_id}")
-        return session
-
     def process_session_end(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Process a session_end event and finalize session.
         Returns the complete session context for Threat Intel analysis.
         """
-        session_id = event_data.get("payload", {}).get("session_id")
+        session_id = event_data.get("session_id")
         if not session_id or session_id not in self.sessions:
             logger.warning(f"Session end for unknown session: {session_id}")
             return None
 
         session = self.sessions[session_id]
-        session["end_time"] = event_data.get("payload", {}).get("timestamp")
-        session["duration_seconds"] = event_data.get("payload", {}).get("duration_seconds", 0)
-        session["disconnection_reason"] = event_data.get("payload", {}).get("message", "")
+        session["end_time"] = event_data.get("timestamp")
+        session["duration_seconds"] = event_data.get("duration_seconds", 0)
+        session["disconnection_reason"] = event_data.get("disconnection_reason", "")
         session["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        logger.info(f"Session {session_id} ended after {session['duration_seconds']}s")
+        logger.info(f"Session {session_id} ended after {session["duration_seconds"]}s")
         return session
+
 
     def add_command(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """

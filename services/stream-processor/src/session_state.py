@@ -74,7 +74,7 @@ class SessionStateManager:
         session["disconnection_reason"] = event_data.get("disconnection_reason", "")
         session["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        logger.info(f"Session {session_id} ended after {session["duration_seconds"]}s")
+        logger.info(f"Session {session_id} ended after {session['duration_seconds']}s")
         return session
 
 

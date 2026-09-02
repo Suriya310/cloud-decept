@@ -29,20 +29,23 @@ class SessionStateManager:
         Process a session_start event and initialize session state.
         Returns the session context.
         """
-        session_id = event_data.get("payload", {}).get("session_id")
+        # Top-level fields are at the event_data level, not in payload
+        session_id = event_data.get("session_id")
         if not session_id:
             logger.warning("Session start event missing session_id")
             return {}
 
+        # Payload contains event-specific data (protocol, client_version, client_ip, country, asn, org)
+        payload = event_data.get("payload", {})
+
         session = {
             "session_id": session_id,
-            "attacker_ip": event_data.get("payload", {}).get("client_ip")
-                           or event_data.get("payload", {}).get("attacker_ip", "unknown"),
+            "attacker_ip": event_data.get("attacker_ip") or event_data.get("payload", {}).get("client_ip", "unknown"),
             "country": event_data.get("payload", {}).get("country", ""),
             "asn": event_data.get("payload", {}).get("asn", ""),
             "protocol": event_data.get("payload", {}).get("protocol", "ssh"),
             "client_version": event_data.get("payload", {}).get("client_version", ""),
-            "start_time": event_data.get("payload", {}).get("timestamp"),
+            "start_time": event_data.get("timestamp"),
             "commands": [],
             "outputs": [],
             "auth_attempts": [],
@@ -83,7 +86,7 @@ class SessionStateManager:
         Add a command to session context.
         Returns session context so caller can decide if processing should be triggered.
         """
-        session_id = event_data.get("payload", {}).get("session_id")
+        session_id = event_data.get("session_id")
         if not session_id:
             return None
 
@@ -92,12 +95,12 @@ class SessionStateManager:
         if session_id not in self.sessions:
             self.sessions[session_id] = {
                 "session_id": session_id,
-                "attacker_ip": event_data.get("payload", {}).get("attacker_ip", "unknown"),
-                "country": event_data.get("payload", {}).get("country", ""),
-                "asn": event_data.get("payload", {}).get("asn", ""),
-                "protocol": event_data.get("payload", {}).get("protocol", "ssh"),
+                "attacker_ip": event_data.get("attacker_ip", "unknown"),
+                "country": event_data.get("country", ""),
+                "asn": event_data.get("asn", ""),
+                "protocol": event_data.get("protocol", "ssh"),
                 "client_version": "",
-                "start_time": event_data.get("payload", {}).get("timestamp"),
+                "start_time": event_data.get("timestamp"),
                 "commands": [],
                 "outputs": [],
                 "auth_attempts": [],
@@ -113,13 +116,13 @@ class SessionStateManager:
         session = self.sessions[session_id]
 
         command_entry = {
-            "command": event_data.get("payload", {}).get("command", ""),
-            "arguments": event_data.get("payload", {}).get("arguments", []),
-            "output": event_data.get("payload", {}).get("output", ""),
-            "timestamp": event_data.get("payload", {}).get("timestamp"),
-            "exit_code": event_data.get("payload", {}).get("exit_code"),
-            "duration_ms": event_data.get("payload", {}).get("duration_ms"),
-            "working_directory": event_data.get("payload", {}).get("working_directory", "/home/ubuntu"),
+            "command": event_data.get("command", ""),
+            "arguments": event_data.get("arguments", []),
+            "output": event_data.get("output", ""),
+            "timestamp": event_data.get("timestamp"),
+            "exit_code": event_data.get("exit_code"),
+            "duration_ms": event_data.get("duration_ms"),
+            "working_directory": event_data.get("working_directory", "/home/ubuntu"),
         }
 
         session["commands"].append(command_entry)
@@ -131,33 +134,35 @@ class SessionStateManager:
 
     def add_auth(self, event_data: Dict[str, Any]) -> None:
         """Add authentication event to session context."""
-        session_id = event_data.get("payload", {}).get("session_id")
+        session_id = event_data.get("session_id")
         if not session_id or session_id not in self.sessions:
             return
 
         session = self.sessions[session_id]
+        payload = event_data.get("payload", {})
         auth_entry = {
-            "username": event_data.get("payload", {}).get("username", ""),
-            "password": event_data.get("payload", {}).get("password", ""),
-            "success": event_data.get("payload", {}).get("success", False),
-            "timestamp": event_data.get("payload", {}).get("timestamp"),
-            "auth_method": event_data.get("payload", {}).get("auth_method", "password"),
+            "username": payload.get("username", ""),
+            "password": payload.get("password", ""),
+            "success": payload.get("success", False),
+            "timestamp": event_data.get("timestamp"),
+            "auth_method": payload.get("auth_method", "password"),
         }
         session["auth_attempts"].append(auth_entry)
         session["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     def add_file_transfer(self, event_data: Dict[str, Any]) -> None:
         """Add file transfer event to session context."""
-        session_id = event_data.get("payload", {}).get("session_id")
+        session_id = event_data.get("session_id")
         if not session_id or session_id not in self.sessions:
             return
 
         session = self.sessions[session_id]
+        payload = event_data.get("payload", {})
         file_entry = {
-            "filename": event_data.get("payload", {}).get("filename", ""),
-            "size_bytes": event_data.get("payload", {}).get("size_bytes", 0),
-            "direction": event_data.get("payload", {}).get("direction", "upload"),
-            "timestamp": event_data.get("payload", {}).get("timestamp"),
+            "filename": payload.get("filename", ""),
+            "size_bytes": payload.get("size_bytes", 0),
+            "direction": payload.get("direction", "upload"),
+            "timestamp": event_data.get("timestamp"),
         }
         session["file_transfers"].append(file_entry)
         session["updated_at"] = datetime.now(timezone.utc).isoformat()

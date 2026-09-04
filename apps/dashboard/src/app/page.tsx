@@ -206,9 +206,7 @@ export default function OverviewPage() {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
-      hour12: false,
-    });
-  };
+};
 
   // Compute command stats
   const totalCommands = stats?.total_commands ?? 0;
@@ -219,15 +217,10 @@ export default function OverviewPage() {
   const uniqueAttackersCount = stats?.unique_attackers ?? 0;
   const recentSessionsCount = stats?.recent_sessions ?? 0;
   const activeSessionsCount = stats?.active_sessions ?? 0;
-  const totalCommandsCount = stats?.total_commands ?? 0;
-  const uniqueAttackersCount = stats?.unique_attackers ?? 0;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="fixed top-0 left-0 right-0 z-40 h-16 bg-white border-b border-gray-200 flex items-center px-6">
-        <div className="flex items-center justify-between w-full max-w-7xl mx-auto">
-          <div className="flex items-center gap-4 flex-1">
+
+  return (
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary-600 to-primary-800 flex items-center justify-center">
                 <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">

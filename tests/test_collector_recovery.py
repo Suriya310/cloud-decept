@@ -15,12 +15,16 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Ensure mocks for third-party modules not installed locally
-for mod in ["clickhouse_connect", "httpx", "redis", "redis.asyncio", "fastapi", "fastapi.responses"]:
+for mod in ["clickhouse_connect", "httpx", "redis", "redis.asyncio", "fastapi.responses"]:
     sys.modules.setdefault(mod, MagicMock())
+
+fastapi_mock = sys.modules.setdefault("fastapi", MagicMock())
+fastapi_mock.FastAPI.return_value.get.side_effect = lambda *a, **kw: lambda f: f
+fastapi_mock.FastAPI.return_value.post.side_effect = lambda *a, **kw: lambda f: f
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from backend.collector.main import EventCollector
+from backend.collector.main import EventCollector, health, collector
 from backend.schemas.events import ConsumerGroups, StreamNames
 
 
@@ -202,6 +206,59 @@ class TestCollectorRecovery(unittest.IsolatedAsyncioTestCase):
         self.collector._ack_messages_with_retry.assert_called_once_with(
             StreamNames.SESSION_EVENTS, ["fresh-msg-1"]
         )
+
+    async def test_write_events_to_clickhouse_runs_in_thread(self):
+        """Verify _write_events_to_clickhouse delegates to asyncio.to_thread."""
+        events = [{"id": "1", "data": {"event_type": "session_start"}}]
+
+        with patch("asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
+            await self.collector._write_events_to_clickhouse(events)
+            mock_to_thread.assert_called_once_with(
+                self.collector._write_events_to_clickhouse_sync, events
+            )
+
+    async def test_health_responsive_during_background_write(self):
+        """Verify /health endpoint responds immediately while background writes are active."""
+        collector.redis = AsyncMock()
+        collector.redis.ping.return_value = True
+
+        collector.clickhouse_client = MagicMock()
+        collector.clickhouse_client.command.return_value = 1
+
+        import asyncio
+
+        # Simulate background task executing ClickHouse inserts via to_thread
+        async def background_write():
+            await self.collector._write_events_to_clickhouse([{"id": "1", "data": {}}])
+
+        # Run background write and health check concurrently
+        write_task = asyncio.create_task(background_write())
+        health_resp = await health()
+        await write_task
+
+        self.assertEqual(health_resp["status"], "healthy")
+        self.assertEqual(health_resp["redis"], "healthy")
+        self.assertEqual(health_resp["clickhouse"], "healthy")
+
+    async def test_health_timeout_on_slow_clickhouse(self):
+        """Verify /health does not block forever if ClickHouse hangs, returning degraded."""
+        collector.redis = AsyncMock()
+        collector.redis.ping.return_value = True
+
+        collector.clickhouse_client = MagicMock()
+
+        import time
+        # Simulate ClickHouse hanging for longer than the 2s timeout
+        def hanging_command(*args, **kwargs):
+            time.sleep(3.0)
+            return 1
+
+        collector.clickhouse_client.command.side_effect = hanging_command
+
+        health_resp = await health()
+        self.assertEqual(health_resp["status"], "degraded")
+        self.assertEqual(health_resp["redis"], "healthy")
+        self.assertEqual(health_resp["clickhouse"], "unhealthy")
 
 
 if __name__ == "__main__":

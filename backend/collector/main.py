@@ -300,8 +300,11 @@ class EventCollector:
             logger.error(f"Failed to initialize ClickHouse: {e}")
             raise
 
-    async def _write_events_to_clickhouse(self, events: list[dict]):
-        """Write parsed events to ClickHouse tables
+    def _write_events_to_clickhouse_sync(self, events: list[dict]):
+        """Synchronously write parsed events to ClickHouse tables.
+
+        Executed in a background thread via asyncio.to_thread to prevent
+        blocking the Uvicorn/FastAPI event loop.
         Raises Exception on any insert failure so caller can avoid ACKing.
         Uses ReplacingMergeTree for idempotent inserts - duplicates are deduplicated on merge.
         """
@@ -511,6 +514,18 @@ class EventCollector:
                 logger.error(f"Failed to insert cloud_api_requests: {e}", exc_info=True)
                 raise
 
+    async def _write_events_to_clickhouse(self, events: list[dict]):
+        """Write parsed events to ClickHouse tables asynchronously via worker thread.
+
+        Offloads blocking synchronous ClickHouse inserts and queries to a thread pool
+        to keep the Uvicorn/FastAPI event loop completely free for HTTP requests.
+        Raises Exception on any insert failure so caller can avoid ACKing.
+        Uses ReplacingMergeTree for idempotent inserts - duplicates are deduplicated on merge.
+        """
+        if not self.clickhouse_client or not events:
+            return
+        await asyncio.to_thread(self._write_events_to_clickhouse_sync, events)
+
     async def _ack_messages_with_retry(
         self, stream: str, message_ids: list[str], max_retries: int = 3, base_delay: float = 0.5
     ) -> bool:
@@ -624,7 +639,7 @@ class EventCollector:
                 if not all_events:
                     await asyncio.sleep(0.5)
                 else:
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.1)
 
             except asyncio.CancelledError:
                 logger.info("Consumer loop cancelled")
@@ -797,15 +812,21 @@ async def health():
 
     # Check Redis
     try:
-        await collector.redis.ping()
-        checks["redis"] = "healthy"
+        if collector.redis:
+            await asyncio.wait_for(collector.redis.ping(), timeout=2.0)
+            checks["redis"] = "healthy"
+        else:
+            checks["redis"] = "not_initialized"
     except Exception:
         checks["redis"] = "unhealthy"
 
     # Check ClickHouse
     try:
         if collector.clickhouse_client:
-            collector.clickhouse_client.command("SELECT 1")
+            await asyncio.wait_for(
+                asyncio.to_thread(collector.clickhouse_client.command, "SELECT 1"),
+                timeout=2.0,
+            )
             checks["clickhouse"] = "healthy"
         else:
             checks["clickhouse"] = "not_initialized"
@@ -912,10 +933,11 @@ async def update_session(request: SessionUpdateRequest):
         # ClickHouse ALTER TABLE UPDATE
         update_sql = f"ALTER TABLE clouddecept.sessions UPDATE {', '.join(updates)} WHERE session_id = '{request.session_id}'"
         logger.debug(f"Executing: {update_sql}")
-        collector.clickhouse_client.command(update_sql)
+        await asyncio.to_thread(collector.clickhouse_client.command, update_sql)
 
         # Verify update
-        count = collector.clickhouse_client.command(
+        count = await asyncio.to_thread(
+            collector.clickhouse_client.command,
             f"SELECT count() FROM clouddecept.sessions WHERE session_id = '{request.session_id}'"
         )
 
@@ -1079,7 +1101,10 @@ async def debug_pipeline():
             tables = ["sessions", "commands", "auth_attempts", "cloud_api_requests"]
             for table in tables:
                 try:
-                    count = collector.clickhouse_client.command(f"SELECT count() FROM clouddecept.{table}")
+                    count = await asyncio.to_thread(
+                        collector.clickhouse_client.command,
+                        f"SELECT count() FROM clouddecept.{table}",
+                    )
                     result["clickhouse_counts"][table] = count
                 except Exception as e:
                     result["clickhouse_counts"][table] = f"error: {e}"

@@ -125,10 +125,19 @@ class EventCollector:
         # Determine stream based on event type
         stream_name = self._get_stream_for_event(event)
         logger.debug(f"Event {event.event_id} type={event.__class__.__name__} -> stream={stream_name}")
-        # Convert event to dict to preserve all concrete type fields
-        event_dict = event.model_dump(mode='json')
+        # Map to canonical event_type string (e.g. SessionStartEvent -> session_start)
+        event_type_name = {
+            SessionStartEvent: "session_start",
+            SessionEndEvent: "session_end",
+            CommandEvent: "command",
+            AuthEvent: "auth",
+            CloudAPIEvent: "cloud_api",
+            FileTransferEvent: "file_transfer",
+            NetworkConnectionEvent: "network_connection",
+        }.get(type(event), event.__class__.__name__.replace("Event", "").lower())
+
         envelope = EventEnvelope(
-            event_type=event.__class__.__name__.replace("Event", "").lower(),
+            event_type=event_type_name,
             payload=event_dict,
             stream_name=stream_name,
             partition_key=event.session_id,
@@ -343,7 +352,7 @@ class EventCollector:
             stream = envelope.get("stream_name", "")
 
             try:
-                if event_type == "session_start":
+                if event_type in ("session_start", "sessionstart"):
                     # SessionStartEvent - top-level fields in envelope, payload-specific in event_data
                     start_time = parse_dt(event_data.get("timestamp", datetime.utcnow()))
                     sessions.append((
@@ -362,23 +371,28 @@ class EventCollector:
                         0,  # skill_level
                         safe_str(event_data.get("disconnection_reason", "")),
                     ))
-                elif event_type == "session_end":
+                elif event_type in ("session_end", "sessionend"):
                     session_id = safe_str(event_data.get("session_id"))
                     if session_id:
                         end_time = parse_dt(event_data.get("timestamp", datetime.utcnow()))
                         duration = safe_int(event_data.get("duration_seconds", 0))
                         disconnection_reason = safe_str(event_data.get("disconnection_reason", ""))
                         try:
+                            # Count commands and auth attempts recorded for this session
+                            cmd_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.commands WHERE session_id = '{session_id}'"))
+                            auth_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.auth_attempts WHERE session_id = '{session_id}'"))
                             escaped_reason = disconnection_reason.replace("'", "''")
                             update_sql = (
                                 f"ALTER TABLE {self.clickhouse_db}.sessions UPDATE "
                                 f"end_time = '{end_time.strftime('%Y-%m-%d %H:%M:%S')}', "
                                 f"duration_seconds = {duration}, "
+                                f"commands_executed = {cmd_cnt}, "
+                                f"credentials_tried = {auth_cnt}, "
                                 f"disconnection_reason = '{escaped_reason}' "
                                 f"WHERE session_id = '{session_id}'"
                             )
                             self.clickhouse_client.command(update_sql)
-                            logger.info(f"Updated session {session_id} with end_time={end_time}, duration={duration}s")
+                            logger.info(f"Updated session {session_id} with end_time={end_time}, duration={duration}s, cmds={cmd_cnt}, auth={auth_cnt}")
                         except Exception as e:
                             logger.error(f"Failed to update session_end for {session_id}: {e}", exc_info=True)
                 elif event_type == "command" or stream == StreamNames.COMMAND_EVENTS:
@@ -790,6 +804,7 @@ class SessionUpdateRequest(BaseModel):
     intent: Optional[str] = None
     skill_level: Optional[int] = None
     commands_executed: Optional[int] = None
+    credentials_tried: Optional[int] = None
     disconnection_reason: Optional[str] = None
     duration_seconds: Optional[int] = None
 
@@ -908,6 +923,8 @@ async def update_session(request: SessionUpdateRequest):
             updates.append(f"disconnection_reason = '{escaped_reason}'")
         if request.duration_seconds is not None:
             updates.append(f"duration_seconds = {request.duration_seconds}")
+        if request.credentials_tried is not None:
+            updates.append(f"credentials_tried = {request.credentials_tried}")
 
         if not updates:
             return SessionUpdateResponse(

@@ -286,33 +286,30 @@ class EventProcessor:
                 }
                 await self._publish_intent_prediction(session_id, intent_event)
 
-                # Persist AI classification to ClickHouse through the collector.
-                try:
-                    await self.ai_clients.client.post(
-                        "http://event-collector:8000/update-session",
-                        json={
-                            "session_id": session_id,
-                            "intent": intent_result.get("intent", "unknown"),
-                            "skill_level": intent_result.get("skill_level", 1),
-                            "commands_executed": len(session.get("commands", [])),
-                            "duration_seconds": self._calculate_duration(
-                                session.get("start_time"),
-                                session.get("end_time"),
-                            ),
-                        },
-                    )
-                    logger.info(
-                        f"Persisted intent for session {session_id}: "
-                        f"{intent_result.get('intent')} "
-                        f"(skill={intent_result.get('skill_level')})"
-                    )
-                except Exception as persist_error:
-                    logger.error(
-                        f"Failed to persist intent for session {session_id}: "
-                        f"{persist_error}"
-                    )
+            # Persist metrics and AI classification to ClickHouse through the collector.
+            try:
+                update_payload = {
+                    "session_id": session_id,
+                    "commands_executed": len(session.get("commands", [])),
+                    "credentials_tried": len(session.get("auth_attempts", [])),
+                    "duration_seconds": self._calculate_duration(
+                        session.get("start_time"),
+                        session.get("end_time"),
+                    ),
+                }
+                if intent_result:
+                    update_payload["intent"] = intent_result.get("intent", "unknown")
+                    update_payload["skill_level"] = intent_result.get("skill_level", 1)
 
-                logger.info(f"Intent predicted for session {session_id}: {intent_result.get('intent')}")
+                await self.ai_clients.client.post(
+                    "http://event-collector:8000/update-session",
+                    json=update_payload,
+                )
+                logger.info(f"Persisted update for session {session_id}: cmds={update_payload['commands_executed']}, auth={update_payload['credentials_tried']}")
+            except Exception as persist_error:
+                logger.error(f"Failed to persist update for session {session_id}: {persist_error}")
+
+            if intent_result:
 
                 # ============================================================
                 # Call Threat Intel

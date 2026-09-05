@@ -24,7 +24,7 @@ try:
     GEOIP_AVAILABLE = True
 except ImportError:
     GEOIP_AVAILABLE = False
-    logger.warning("geoip2 not available - GeoIP enrichment disabled")
+    print("WARNING: geoip2 not available - GeoIP enrichment disabled")
 
 # Configure logging
 logging.basicConfig(
@@ -202,11 +202,16 @@ class LogForwarder:
                 "org": "",
             }
         elif mapped_type == "session_end":
+            raw_dur = cowrie_event.get("duration", 0)
+            try:
+                raw_float = float(raw_dur)
+                # Cowrie outputs duration in seconds (float). If > 100,000 it might be ms.
+                dur_secs = int(raw_float / 1000) if raw_float > 100000 else int(round(raw_float))
+            except (ValueError, TypeError):
+                dur_secs = 0
             payload = {
                 "session_id": session_id,
-                "duration_seconds": cowrie_event.get("duration", 0) // 1000
-                if cowrie_event.get("duration")
-                else 0,
+                "duration_seconds": dur_secs,
                 "commands_executed": 0,  # Could track from command events
                 "files_transferred": 0,
                 "credentials_tried": 0,

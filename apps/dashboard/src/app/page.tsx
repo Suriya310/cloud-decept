@@ -28,12 +28,11 @@ import {
   Sparkles,
   Zap as ZapIcon,
   Shield as ShieldIcon,
+  RefreshCw,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useDashboardStore } from '@/lib/store';
 import { api } from '@/lib/api';
 import { format } from 'date-fns';
-import { useDashboardStore } from '@/lib/store';
 
 const COLORS = ['#22c55e', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 
@@ -54,29 +53,6 @@ const severityColors = {
   low: 'bg-green-100 text-green-800',
 };
 
-function getSeverityColor(severity: string) {
-  switch (severity.toLowerCase()) {
-    case 'critical': return 'bg-red-100 text-red-800 border-red-200';
-    case 'high': return 'bg-red-100 text-red-800 border-red-200';
-    case 'medium': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-    case 'low': return 'bg-green-100 text-green-800 border-green-200';
-    default: return 'bg-gray-100 text-gray-800 border-gray-200';
-  }
-}
-
-function getIntentColor(intent: string) {
-  switch (intent.toLowerCase()) {
-    case 'credential_access': return 'bg-red-100 text-red-800';
-    case 'discovery': return 'bg-yellow-100 text-yellow-800';
-    case 'lateral_movement': return 'bg-orange-100 text-orange-800';
-    case 'persistence': return 'bg-amber-100 text-amber-800';
-    case 'data_exfiltration': return 'bg-red-100 text-red-800';
-    case 'resource_hijacking': return 'bg-pink-100 text-pink-800';
-    case 'defense_evasion': return 'bg-indigo-100 text-indigo-800';
-    default: return 'bg-gray-100 text-gray-800';
-  }
-}
-
 export default function OverviewPage() {
   const {
     stats,
@@ -91,9 +67,6 @@ export default function OverviewPage() {
   } = useDashboardStore();
 
   const [autoRefresh, setAutoRefresh] = useState(true);
-
-  const sessionsArray = sessions ?? [];
-  const realTimeEventsArray = realTimeEvents ?? [];
 
   // Fetch stats for all-time totals
   useEffect(() => {
@@ -124,7 +97,6 @@ export default function OverviewPage() {
   const uniqueAttackers = stats?.unique_attackers ?? 0;
   const recentSessionsCount = stats?.recent_sessions ?? 0;
 
-  const recentSessions = sessionsArray.slice(0, 5);
   const topIntents = stats?.top_intents ?? [];
   const topCountries = stats?.top_countries ?? [];
   const threatDistribution = stats?.threat_distribution ?? [];
@@ -152,7 +124,7 @@ export default function OverviewPage() {
 
   // Top commands from sessions
   const allCommands = sessionsArray.flatMap(s =>
-    (s.commands || []).map(c => ({
+    ((s as any).commands || []).map((c: any) => ({
       session_id: s.session_id,
       session_ip: s.src_ip ?? s.attacker_ip,
       command: c.command,
@@ -165,7 +137,7 @@ export default function OverviewPage() {
 
   // Auth attempts
   const authEvents = sessionsArray.flatMap(s =>
-    (s.auth_attempts || []).map(a => ({
+    ((s as any).auth_attempts || []).map((a: any) => ({
       session_id: s.session_id,
       attacker_ip: s.src_ip ?? s.attacker_ip,
       username: a.username,
@@ -194,33 +166,17 @@ export default function OverviewPage() {
     return acc;
   }, {} as Record<string, number>);
 
-  // Format timestamp helper
-  const formatTimestamp = (ts: string | number | Date) => {
-    if (!ts) return '—';
-    if (!ts) return "—";
-    const date = new Date(ts);
-    if (isNaN(date.getTime())) return "Invalid date";
-    return date.toLocaleString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-  };
-  // Compute command stats
-  const totalCommands = stats?.total_commands ?? 0;
-  const uniqueAttackers = stats?.unique_attackers ?? 0;
-  const totalSessions = stats?.total_sessions ?? 0;
-  const activeSessions = stats?.active_sessions ?? 0;
-  const totalCommandsCount = stats?.total_commands ?? 0;
-  const uniqueAttackersCount = stats?.unique_attackers ?? 0;
-  const recentSessionsCount = stats?.recent_sessions ?? 0;
-  const activeSessionsCount = stats?.active_sessions ?? 0;
-
   return (
+    <div className="min-h-screen bg-gray-50 text-gray-900">
+      <div className="flex flex-col min-h-screen">
+        <header className="fixed top-0 left-0 right-0 z-10 bg-white border-b border-gray-200">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <ShieldIcon className="w-8 h-8 text-primary-600" />
+              <h1 className="text-xl font-bold text-gray-900">Deception Dashboard</h1>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
                 <span className={cn(
                   'px-2 py-1 rounded-full text-xs font-medium',
                   isApiHealthy ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
@@ -270,7 +226,7 @@ export default function OverviewPage() {
             />
             <StatCard
               title="Total Commands"
-              value={totalCommandsCount.toLocaleString()}
+              value={totalCommands.toLocaleString()}
               icon={<Terminal className="w-6 h-6" />}
               iconBg="bg-blue-100"
               iconColor="text-blue-600"
@@ -430,11 +386,10 @@ export default function OverviewPage() {
                                   </div>
                                 </div>
                               </div>
-                            )
+                            </Link>
                           ))}
                         </div>
                       )}
-                    )}
                   </div>
                 </div>
 
@@ -483,7 +438,6 @@ export default function OverviewPage() {
                           ))}
                         </div>
                       )}
-                    )}
                   </div>
                 </div>
               </div>
@@ -524,9 +478,8 @@ export default function OverviewPage() {
                             </div>
                           </div>
                         ))}
-                      )}
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -572,145 +525,144 @@ export default function OverviewPage() {
                               </span>
                             </div>
                           </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Threat Intelligence / AI Analysis */}
+              <div className="card lg:col-span-2">
+                <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+                  <h2 className="text-lg font-semibold text-gray-900">AI THREAT ANALYSIS</h2>
+                  <span className="text-xs text-gray-500">Intent Engine + Threat Intel</span>
+                </div>
+                <div className="p-4 space-y-4">
+                  {/* Recent High Threat Sessions */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900 mb-3">High-Risk Sessions</h3>
+                    {highThreatSessions.length === 0 ? (
+                      <p className="text-gray-500 text-sm py-4 text-center">No high-risk sessions detected</p>
+                    ) : (
+                      <div className="space-y-2 max-h-64 overflow-y-auto">
+                        {highThreatSessions.slice(0, 5).map((session) => (
+                          <Link
+                            key={session.session_id}
+                            href={`/sessions/${session.session_id}`}
+                            className="block p-3 bg-red-50 rounded-lg border border-red-200 hover:bg-red-50 transition-colors"
+                          >
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="font-mono text-xs text-gray-900">{session.session_id.slice(0, 12)}...</p>
+                                <p className="text-xs text-gray-500 flex items-center gap-1">
+                                  <MapPin className="w-3 h-3" />
+                                  {session.src_ip || session.attacker_ip || 'unknown'}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="badge font-mono bg-red-100 text-red-800">
+                                  {(session.threat_score ?? 0)}/100
+                                </span>
+                                <span className="text-xs text-gray-500">
+                                  {formatTimestamp(session.start_time)}
+                                </span>
+                              </div>
+                            </div>
+                          </Link>
                         ))}
                       </div>
                     )}
+                  </div>
+
+                  {/* Intent Distribution */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900 mb-3">Intent Distribution</h3>
+                    {Object.keys(intentCounts).length === 0 ? (
+                      <p className="text-gray-500 text-sm py-2">No intent data available</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {Object.entries(intentCounts)
+                          .sort(([, a], [, b]) => b - a)
+                          .slice(0, 6)
+                          .map(([intent, count]) => (
+                            <div key={intent} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
+                              <span className={cn('badge text-xs', getIntentColor(intent))}>
+                                {intent.replace(/_/g, ' ')}
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-primary-600 rounded-full"
+                                    style={{ width: `${(intentCounts[intent] / (Math.max(...Object.values(intentCounts)) || 1)) * 100}%` }}
+                                  />
+                                </div>
+                                <span className="text-sm font-medium text-gray-900 w-8 text-right">
+                                  {count}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Adaptive Response */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900 mb-3">Adaptive Response</h3>
+                    <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
+                          <Sparkles className="w-5 h-5 text-blue-600" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-blue-900">Adaptive Engine Active</p>
+                          <p className="text-xs text-blue-700">Automated deception responses enabled</p>
+                        </div>
+                        <span className="badge bg-blue-100 text-blue-800 ml-auto">ACTIVE</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Recent Commands Terminal Panel */}
+              <div className="card">
+                <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+                  <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                    <Terminal className="w-5 h-5 text-gray-600" />
+                    RECENT COMMANDS
+                  </h2>
+                  <button className="text-xs text-primary-600 hover:text-primary-700 flex items-center gap-1">
+                    <RefreshCw className="w-3 h-3" />
+                    Refresh
+                  </button>
+                </div>
+                <div className="p-4 max-h-64 overflow-y-auto bg-gray-900 rounded-lg font-mono text-green-300 text-sm">
+                  {allCommands.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">
+                      <Terminal className="w-12 h-12 mx-auto text-gray-400 mb-2" />
+                      <p>No commands captured yet</p>
+                      <p className="text-xs mt-1">SSH to port 2222 to generate activity</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1 font-mono">
+                      {allCommands.slice(0, 20).map((cmd, index) => (
+                        <div key={`${cmd.session_id}-${index}`} className="flex items-center gap-2 text-xs">
+                          <span className="text-gray-500 w-20">{formatTimestamp(cmd.timestamp)}</span>
+                          <span className="text-gray-400 w-16 truncate">{cmd.session_id.slice(0, 8)}</span>
+                          <span className="text-green-400 font-mono">{cmd.command}</span>
+                          <span className="text-gray-500 text-xs">{cmd.output ? cmd.output.slice(0, 40) + '...' : 'no output'}</span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
-
-                {/* Threat Intelligence / AI Analysis */}
-                <div className="card lg:col-span-2">
-                  <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-                    <h2 className="text-lg font-semibold text-gray-900">AI THREAT ANALYSIS</h2>
-                    <span className="text-xs text-gray-500">Intent Engine + Threat Intel</span>
-                  </div>
-                  <div className="p-4 space-y-4">
-                    {/* Recent High Threat Sessions */}
-                    <div>
-                      <h3 className="text-sm font-semibold text-gray-900 mb-3">High-Risk Sessions</h3>
-                      {highThreatSessions.length === 0 ? (
-                        <p className="text-gray-500 text-sm py-4 text-center">No high-risk sessions detected</p>
-                      ) : (
-                        <div className="space-y-2 max-h-64 overflow-y-auto">
-                          {highThreatSessions.slice(0, 5).map((session) => (
-                            <Link
-                              key={session.session_id}
-                              href={`/sessions/${session.session_id}`}
-                              className="block p-3 bg-red-50 rounded-lg border border-red-200 hover:bg-red-50 transition-colors"
-                            >
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <p className="font-mono text-xs text-gray-900">{session.session_id.slice(0, 12)}...</p>
-                                  <p className="text-xs text-gray-500 flex items-center gap-1">
-                                    <MapPin className="w-3 h-3" />
-                                    {session.src_ip || session.attacker_ip || 'unknown'}
-                                  </p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="badge font-mono bg-red-100 text-red-800">
-                                    {(session.threat_score ?? 0)}/100
-                                  </span>
-                                  <span className="text-xs text-gray-500">
-                                    {formatTimestamp(session.start_time)}
-                                  </span>
-                                </div>
-                              </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Intent Distribution */}
-                    <div>
-                      <h3 className="text-sm font-semibold text-gray-900 mb-3">Intent Distribution</h3>
-                      {Object.keys(intentCounts).length === 0 ? (
-                        <p className="text-gray-500 text-sm py-2">No intent data available</p>
-                      ) : (
-                        <div className="space-y-2">
-                          {Object.entries(intentCounts)
-                            .sort(([, a], [, b]) => b - a)
-                            .slice(0, 6)
-                            .map(([intent, count]) => (
-                              <div key={intent} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
-                                <span className={cn('badge text-xs', getIntentColor(intent))}>
-                                  {intent.replace(/_/g, ' ')}
-                                </span>
-                                <div className="flex items-center gap-2">
-                                  <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
-                                    <div
-                                      className="h-full bg-primary-600 rounded-full"
-                                      style={{ width: `${(intentCounts[intent] / (Math.max(...Object.values(intentCounts)) || 1)) * 100}%` }}
-                                    />
-                                  </div>
-                                  <span className="text-sm font-medium text-gray-900 w-8 text-right">
-                                    {count}
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Adaptive Response */}
-                    <div>
-                      <h3 className="text-sm font-semibold text-gray-900 mb-3">Adaptive Response</h3>
-                      <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
-                            <Sparkles className="w-5 h-5 text-blue-600" />
-                          </div>
-                          <div>
-                            <p className="text-sm font-medium text-blue-900">Adaptive Engine Active</p>
-                            <p className="text-xs text-blue-700">Automated deception responses enabled</p>
-                          </div>
-                          <span className="badge bg-blue-100 text-blue-800 ml-auto">ACTIVE</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Recent Commands Terminal Panel */}
-            <div className="card">
-              <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                  <Terminal className="w-5 h-5 text-gray-600" />
-                  RECENT COMMANDS
-                </h2>
-                <button className="text-xs text-primary-600 hover:text-primary-700 flex items-center gap-1">
-                  <RefreshCw className="w-3 h-3" />
-                  Refresh
-                </button>
-              </div>
-              <div className="p-4 max-h-64 overflow-y-auto bg-gray-900 rounded-lg font-mono text-green-300 text-sm">
-                {allCommands.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
-                    <Terminal className="w-12 h-12 mx-auto text-gray-400 mb-2" />
-                    <p>No commands captured yet</p>
-                    <p className="text-xs mt-1">SSH to port 2222 to generate activity</p>
-                  </div>
-                ) : (
-                  <div className="space-y-1 font-mono">
-                    {allCommands.slice(0, 20).map((cmd, index) => (
-                      <div key={`${cmd.session_id}-${index}`} className="flex items-center gap-2 text-xs">
-                        <span className="text-gray-500 w-20">{formatTimestamp(cmd.timestamp)}</span>
-                        <span className="text-gray-400 w-16 truncate">{cmd.session_id.slice(0, 8)}</span>
-                        <span className="text-green-400 font-mono">{cmd.command}</span>
-                        <span className="text-gray-500 text-xs">{cmd.output ? cmd.output.slice(0, 40) + '...' : 'no output'}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
           </div>
-        </div>
+        </main>
       </div>
     </div>
   );
 }
-
-export default OverviewPage;

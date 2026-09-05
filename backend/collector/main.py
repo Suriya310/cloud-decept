@@ -337,7 +337,7 @@ class EventCollector:
             # The event data is wrapped in an EventEnvelope with the actual event in the "payload" field
             envelope = ev.get("data", {})
             # The actual event data is in the envelope's "payload" field for event-specific data
-            # But top-level fields like session_id, timestamp, attacker_ip are at the envelope's top level
+            # The actual event data including session_id, timestamp, attacker_ip is in the payload
             event_data = envelope.get("payload", envelope)
             event_type = envelope.get("event_type", "")
             stream = envelope.get("stream_name", "")
@@ -345,34 +345,49 @@ class EventCollector:
             try:
                 if event_type == "session_start":
                     # SessionStartEvent - top-level fields in envelope, payload-specific in event_data
-                    start_time = parse_dt(envelope.get("timestamp", datetime.utcnow()))
+                    start_time = parse_dt(event_data.get("timestamp", datetime.utcnow()))
                     sessions.append((
-                        safe_str(envelope.get("session_id")),
+                        safe_str(event_data.get("session_id")),
                         start_time,
                         start_time,  # end_time placeholder (updated on session_end)
                         0,     # duration_seconds
-                        safe_str(envelope.get("attacker_ip") or event_data.get("client_ip")),
-                        safe_str(envelope.get("payload", {}).get("country")),
-                        safe_str(envelope.get("payload", {}).get("asn")),
-                        safe_str(envelope.get("payload", {}).get("protocol", "ssh")),
+                        safe_str(event_data.get("attacker_ip") or event_data.get("client_ip")),
+                        safe_str(event_data.get("country")),
+                        safe_str(event_data.get("asn")),
+                        safe_str(event_data.get("protocol", "ssh")),
                         0,  # commands_executed
                         0,  # files_transferred
                         0,  # credentials_tried
-                        safe_str(envelope.get("payload", {}).get("intent", "")),
+                        safe_str(event_data.get("intent", "")),
                         0,  # skill_level
-                        safe_str(envelope.get("payload", {}).get("disconnection_reason", "")),
+                        safe_str(event_data.get("disconnection_reason", "")),
                     ))
                 elif event_type == "session_end":
-                    # SessionEndEvent - we'd need to update existing session, for now skip
-                    # Could implement upsert logic later
-                    pass
+                    session_id = safe_str(event_data.get("session_id"))
+                    if session_id:
+                        end_time = parse_dt(event_data.get("timestamp", datetime.utcnow()))
+                        duration = safe_int(event_data.get("duration_seconds", 0))
+                        disconnection_reason = safe_str(event_data.get("disconnection_reason", ""))
+                        try:
+                            escaped_reason = disconnection_reason.replace("'", "''")
+                            update_sql = (
+                                f"ALTER TABLE {self.clickhouse_db}.sessions UPDATE "
+                                f"end_time = '{end_time.strftime('%Y-%m-%d %H:%M:%S')}', "
+                                f"duration_seconds = {duration}, "
+                                f"disconnection_reason = '{escaped_reason}' "
+                                f"WHERE session_id = '{session_id}'"
+                            )
+                            self.clickhouse_client.command(update_sql)
+                            logger.info(f"Updated session {session_id} with end_time={end_time}, duration={duration}s")
+                        except Exception as e:
+                            logger.error(f"Failed to update session_end for {session_id}: {e}", exc_info=True)
                 elif event_type == "command" or stream == StreamNames.COMMAND_EVENTS:
                     cmd = safe_str(event_data.get("command"))
-                    logger.debug(f"Preparing command for ClickHouse: session={envelope.get('session_id')}, command={cmd[:50] if cmd else 'empty'}")
+                    logger.debug(f"Preparing command for ClickHouse: session={event_data.get('session_id')}, command={cmd[:50] if cmd else 'empty'}")
                     commands.append((
                         safe_str(event_data.get("event_id", str(uuid.uuid4()))),
-                        safe_str(envelope.get("session_id")),
-                        parse_dt(envelope.get("timestamp", datetime.utcnow())),
+                        safe_str(event_data.get("session_id")),
+                        parse_dt(event_data.get("timestamp", datetime.utcnow())),
                         cmd,
                         safe_list(event_data.get("arguments")),
                         safe_str(event_data.get("output")),
@@ -384,8 +399,8 @@ class EventCollector:
                 elif event_type == "auth" or stream == StreamNames.AUTH_EVENTS:
                     auth_attempts.append((
                         safe_str(event_data.get("event_id", str(uuid.uuid4()))),
-                        safe_str(envelope.get("session_id")),
-                        parse_dt(envelope.get("timestamp", datetime.utcnow())),
+                        safe_str(event_data.get("session_id")),
+                        parse_dt(event_data.get("timestamp", datetime.utcnow())),
                         safe_str(event_data.get("username")),
                         safe_str(event_data.get("password")),
                         1 if event_data.get("success", False) else 0,
@@ -394,8 +409,8 @@ class EventCollector:
                 elif event_type == "cloud_api" or stream == StreamNames.CLOUD_API_EVENTS:
                     cloud_api.append((
                         safe_str(event_data.get("event_id", str(uuid.uuid4()))),
-                        safe_str(envelope.get("session_id")),
-                        parse_dt(envelope.get("timestamp", datetime.utcnow())),
+                        safe_str(event_data.get("session_id")),
+                        parse_dt(event_data.get("timestamp", datetime.utcnow())),
                         safe_str(event_data.get("cloud_provider")),
                         safe_str(event_data.get("http_method")),
                         safe_str(event_data.get("endpoint")),

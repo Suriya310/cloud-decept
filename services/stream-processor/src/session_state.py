@@ -24,83 +24,17 @@ class SessionStateManager:
         self.debounce_seconds = debounce_seconds
         self.max_batch_commands = max_batch_commands
 
-    def process_session_start(self, event_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Process a session_start event and initialize session state.
-        Returns the session context.
-        """
-        # Top-level fields are at the event_data level, not in payload
-        session_id = event_data.get("session_id")
-        if not session_id:
-            logger.warning("Session start event missing session_id")
-            return {}
-
-        # Payload contains event-specific data (protocol, client_version, client_ip, country, asn, org)
-        payload = event_data.get("payload", {})
-
-        session = {
-            "session_id": session_id,
-            "attacker_ip": event_data.get("attacker_ip") or event_data.get("payload", {}).get("client_ip", "unknown"),
-            "country": event_data.get("payload", {}).get("country", ""),
-            "asn": event_data.get("payload", {}).get("asn", ""),
-            "protocol": event_data.get("payload", {}).get("protocol", "ssh"),
-            "client_version": event_data.get("payload", {}).get("client_version", ""),
-            "start_time": event_data.get("timestamp"),
-            "commands": [],
-            "outputs": [],
-            "auth_attempts": [],
-            "file_transfers": [],
-            "intent_history": [],
-            "intent": None,
-            "skill_level": None,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-        self.sessions[session_id] = session
-        logger.info(f"Initialized session state for {session_id}")
-        return session
-
-    def process_session_end(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Process a session_end event and finalize session.
-        Returns the complete session context for Threat Intel analysis.
-        """
-        session_id = event_data.get("session_id")
-        if not session_id or session_id not in self.sessions:
-            logger.warning(f"Session end for unknown session: {session_id}")
-            return None
-
-        session = self.sessions[session_id]
-        session["end_time"] = event_data.get("timestamp")
-        session["duration_seconds"] = event_data.get("duration_seconds", 0)
-        session["disconnection_reason"] = event_data.get("disconnection_reason", "")
-        session["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-        logger.info(f"Session {session_id} ended after {session['duration_seconds']}s")
-        return session
-
-
-    def add_command(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Add a command to session context.
-        Returns session context so caller can decide if processing should be triggered.
-        """
-        session_id = event_data.get("session_id")
-        if not session_id:
-            return None
-
-        # Commands can arrive before the session_start event.
-        # Create a minimal session so command-driven AI processing is not lost.
+    def _ensure_session(self, session_id: str, payload: Dict[str, Any], event_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Get or initialize a session entry, updating metadata if available."""
         if session_id not in self.sessions:
             self.sessions[session_id] = {
                 "session_id": session_id,
-                "attacker_ip": event_data.get("attacker_ip", "unknown"),
-                "country": event_data.get("country", ""),
-                "asn": event_data.get("asn", ""),
-                "protocol": event_data.get("protocol", "ssh"),
-                "client_version": "",
-                "start_time": event_data.get("timestamp"),
+                "attacker_ip": payload.get("attacker_ip") or payload.get("client_ip") or event_data.get("attacker_ip") or "unknown",
+                "country": payload.get("country") or event_data.get("country", ""),
+                "asn": payload.get("asn") or event_data.get("asn", ""),
+                "protocol": payload.get("protocol") or event_data.get("protocol", "ssh"),
+                "client_version": payload.get("client_version") or event_data.get("client_version", ""),
+                "start_time": payload.get("timestamp") or event_data.get("timestamp"),
                 "commands": [],
                 "outputs": [],
                 "auth_attempts": [],
@@ -111,18 +45,112 @@ class SessionStateManager:
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
-            logger.info(f"Created session state from command event: {session_id}")
+        else:
+            session = self.sessions[session_id]
+            attacker_ip = payload.get("attacker_ip") or payload.get("client_ip") or event_data.get("attacker_ip")
+            if attacker_ip and session.get("attacker_ip") in ("unknown", "", None):
+                session["attacker_ip"] = attacker_ip
+            if payload.get("country") and not session.get("country"):
+                session["country"] = payload.get("country")
+            if payload.get("asn") and not session.get("asn"):
+                session["asn"] = payload.get("asn")
+            if payload.get("protocol") and not session.get("protocol"):
+                session["protocol"] = payload.get("protocol")
+            if payload.get("client_version") and not session.get("client_version"):
+                session["client_version"] = payload.get("client_version")
+            if not session.get("start_time"):
+                session["start_time"] = payload.get("timestamp") or event_data.get("timestamp")
+        return self.sessions[session_id]
 
-        session = self.sessions[session_id]
+    def process_session_start(self, event_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Process a session_start event and initialize session state.
+        Returns the session context.
+        """
+        payload = event_data.get("payload", event_data)
+        if not isinstance(payload, dict):
+            payload = event_data
+
+        session_id = payload.get("session_id") or event_data.get("partition_key") or event_data.get("session_id")
+        if not session_id:
+            logger.warning("Session start event missing session_id")
+            return {}
+
+        session = self._ensure_session(session_id, payload, event_data)
+        start_time = payload.get("timestamp") or event_data.get("timestamp")
+        if start_time:
+            session["start_time"] = start_time
+        attacker_ip = payload.get("attacker_ip") or payload.get("client_ip")
+        if attacker_ip:
+            session["attacker_ip"] = attacker_ip
+        if payload.get("country"):
+            session["country"] = payload.get("country")
+        if payload.get("asn"):
+            session["asn"] = payload.get("asn")
+        if payload.get("protocol"):
+            session["protocol"] = payload.get("protocol")
+        if payload.get("client_version"):
+            session["client_version"] = payload.get("client_version")
+        session["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        logger.info(f"Initialized/updated session state for {session_id}")
+        return session
+
+    def process_session_end(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Process a session_end event and finalize session.
+        Returns the complete session context for Threat Intel analysis.
+        """
+        payload = event_data.get("payload", event_data)
+        if not isinstance(payload, dict):
+            payload = event_data
+
+        session_id = payload.get("session_id") or event_data.get("partition_key") or event_data.get("session_id")
+        if not session_id:
+            logger.warning("Session end event missing session_id")
+            return None
+
+        session = self._ensure_session(session_id, payload, event_data)
+
+        session["end_time"] = payload.get("timestamp") or event_data.get("timestamp")
+        raw_duration = payload.get("duration_seconds") or event_data.get("duration_seconds")
+        if raw_duration is not None:
+            session["duration_seconds"] = self._parse_duration(raw_duration)
+        if not session.get("duration_seconds"):
+            calc_dur = self._calculate_duration(session)
+            if calc_dur > 0:
+                session["duration_seconds"] = calc_dur
+
+        session["disconnection_reason"] = payload.get("disconnection_reason", event_data.get("disconnection_reason", ""))
+        session["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        logger.info(f"Session {session_id} ended after {session.get('duration_seconds', 0)}s")
+        return session
+
+
+    def add_command(self, event_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Add a command to session context.
+        Returns session context so caller can decide if processing should be triggered.
+        """
+        payload = event_data.get("payload", event_data)
+        if not isinstance(payload, dict):
+            payload = event_data
+
+        session_id = payload.get("session_id") or event_data.get("partition_key") or event_data.get("session_id")
+        if not session_id:
+            return None
+
+        session = self._ensure_session(session_id, payload, event_data)
 
         command_entry = {
-            "command": event_data.get("command", ""),
-            "arguments": event_data.get("arguments", []),
-            "output": event_data.get("output", ""),
-            "timestamp": event_data.get("timestamp"),
-            "exit_code": event_data.get("exit_code"),
-            "duration_ms": event_data.get("duration_ms"),
-            "working_directory": event_data.get("working_directory", "/home/ubuntu"),
+            "command": payload.get("command", ""),
+            "arguments": payload.get("arguments", []),
+            "output": payload.get("output", ""),
+            "timestamp": payload.get("timestamp") or event_data.get("timestamp"),
+            "exit_code": payload.get("exit_code"),
+            "duration_ms": payload.get("duration_ms"),
+            "working_directory": payload.get("working_directory", "/home/ubuntu"),
         }
 
         session["commands"].append(command_entry)
@@ -134,17 +162,21 @@ class SessionStateManager:
 
     def add_auth(self, event_data: Dict[str, Any]) -> None:
         """Add authentication event to session context."""
-        session_id = event_data.get("session_id")
-        if not session_id or session_id not in self.sessions:
+        payload = event_data.get("payload", event_data)
+        if not isinstance(payload, dict):
+            payload = event_data
+
+        session_id = payload.get("session_id") or event_data.get("partition_key") or event_data.get("session_id")
+        if not session_id:
             return
 
-        session = self.sessions[session_id]
-        payload = event_data.get("payload", {})
+        session = self._ensure_session(session_id, payload, event_data)
+
         auth_entry = {
             "username": payload.get("username", ""),
             "password": payload.get("password", ""),
             "success": payload.get("success", False),
-            "timestamp": event_data.get("timestamp"),
+            "timestamp": payload.get("timestamp") or event_data.get("timestamp"),
             "auth_method": payload.get("auth_method", "password"),
         }
         session["auth_attempts"].append(auth_entry)
@@ -152,17 +184,21 @@ class SessionStateManager:
 
     def add_file_transfer(self, event_data: Dict[str, Any]) -> None:
         """Add file transfer event to session context."""
-        session_id = event_data.get("session_id")
-        if not session_id or session_id not in self.sessions:
+        payload = event_data.get("payload", event_data)
+        if not isinstance(payload, dict):
+            payload = event_data
+
+        session_id = payload.get("session_id") or event_data.get("partition_key") or event_data.get("session_id")
+        if not session_id:
             return
 
-        session = self.sessions[session_id]
-        payload = event_data.get("payload", {})
+        session = self._ensure_session(session_id, payload, event_data)
+
         file_entry = {
             "filename": payload.get("filename", ""),
             "size_bytes": payload.get("size_bytes", 0),
             "direction": payload.get("direction", "upload"),
-            "timestamp": event_data.get("timestamp"),
+            "timestamp": payload.get("timestamp") or event_data.get("timestamp"),
         }
         session["file_transfers"].append(file_entry)
         session["updated_at"] = datetime.now(timezone.utc).isoformat()

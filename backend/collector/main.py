@@ -125,6 +125,9 @@ class EventCollector:
         # Determine stream based on event type
         stream_name = self._get_stream_for_event(event)
         logger.debug(f"Event {event.event_id} type={event.__class__.__name__} -> stream={stream_name}")
+        # Convert event to dict to preserve all concrete type fields
+        event_dict = event.model_dump(mode='json')
+
         # Map to canonical event_type string (e.g. SessionStartEvent -> session_start)
         event_type_name = {
             SessionStartEvent: "session_start",

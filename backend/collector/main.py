@@ -60,6 +60,7 @@ class EventCollector:
         self.clickhouse_password = os.getenv("CLICKHOUSE_PASSWORD", "")
         self.clickhouse_db = os.getenv("CLICKHOUSE_DB", "clouddecept")
         self.clickhouse_client = None
+        self._autoclaim_cursors: dict[str, str] = {}
 
     async def initialize(self):
         """Initialize Redis and ClickHouse connections"""
@@ -510,8 +511,52 @@ class EventCollector:
                 logger.error(f"Failed to insert cloud_api_requests: {e}", exc_info=True)
                 raise
 
+    async def _ack_messages_with_retry(
+        self, stream: str, message_ids: list[str], max_retries: int = 3, base_delay: float = 0.5
+    ) -> bool:
+        """ACK messages with exponential backoff retry.
+
+        Returns True if all messages were ACKed, False if any failed after all retries.
+        """
+        if not self.redis or not message_ids:
+            return True
+
+        failed_ids = []
+        try:
+            await self.redis.xack(ConsumerGroups.EVENT_COLLECTOR, stream, *message_ids)
+            logger.debug(f"ACKed {len(message_ids)} messages from {stream}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to batch ACK messages from {stream}: {e}")
+            failed_ids = list(message_ids)
+
+        for attempt in range(max_retries):
+            if not failed_ids:
+                return True
+            delay = base_delay * (2 ** attempt)
+            logger.info(
+                f"Retrying failed XACKs for {stream} (attempt {attempt + 1}/{max_retries}) after {delay}s delay"
+            )
+            await asyncio.sleep(delay)
+            try:
+                await self.redis.xack(ConsumerGroups.EVENT_COLLECTOR, stream, *failed_ids)
+                logger.debug(f"Retry ACKed {len(failed_ids)} messages from {stream}")
+                return True
+            except Exception as e:
+                logger.error(f"Retry ACK attempt {attempt + 1} failed for {stream}: {e}")
+
+        logger.warning(
+            f"{len(failed_ids)} messages from {stream} failed to XACK after {max_retries} retries; "
+            f"they will remain in PEL and may be reclaimed by XAUTOCLAIM"
+        )
+        return False
+
     async def _consumer_loop(self):
-        """Background task that consumes from Redis streams and writes to ClickHouse"""
+        """Background task that consumes from Redis streams and writes to ClickHouse.
+
+        Prioritizes fresh incoming events over recovering old orphaned messages
+        to avoid queue starvation when historical PEL is large.
+        """
         logger.info("Starting ClickHouse consumer loop")
         self.running = True
 
@@ -534,25 +579,20 @@ class EventCollector:
 
         while self.running:
             try:
-                # Periodically reclaim orphaned messages from dead/old consumers
-                now = asyncio.get_event_loop().time()
-                if now - last_autoclaim >= autoclaim_interval_sec:
-                    await self._reclaim_orphaned_messages(streams_to_consume, self.consumer_name)
-                    last_autoclaim = now
-
                 all_events = []
                 stream_to_ids_map = {}  # Map stream -> list of message IDs
+
+                # STEP 1 (High Priority): Always consume fresh incoming events first (">")
                 for stream, stream_type in streams_to_consume:
                     events, message_ids = await self.consume_events(
                         stream=stream,
                         group=ConsumerGroups.EVENT_COLLECTOR,
                         consumer=self.consumer_name,
                         count=50,
-                        block_ms=2000,
+                        block_ms=1000,
                     )
                     if events:
                         logger.info(f"Consumed {len(events)} events from {stream} (type={stream_type})")
-                        # Log event types in this batch
                         event_types = {}
                         for ev in events:
                             et = ev.get("data", {}).get("event_type", "unknown")
@@ -567,60 +607,24 @@ class EventCollector:
                     logger.info(f"Processed {len(all_events)} events to ClickHouse")
 
                     # ACK all successfully processed messages with retry logic
-                    # We track which messages failed to XACK and retry them individually
-                    # to avoid leaving successfully processed messages in PEL where they
-                    # can be reclaimed and re-processed.
-                    failed_to_ack = {}  # stream -> list of message_ids that failed XACK
-
                     for stream, message_ids in stream_to_ids_map.items():
                         if message_ids:
-                            try:
-                                await self.redis.xack(
-                                    ConsumerGroups.EVENT_COLLECTOR, stream, *message_ids
-                                )
-                                logger.debug(f"ACKed {len(message_ids)} messages from {stream}")
-                            except Exception as e:
-                                logger.error(f"Failed to ACK messages from {stream}: {e}")
-                                # Track which specific messages failed to XACK for retry
-                                failed_to_ack[stream] = message_ids
+                            await self._ack_messages_with_retry(stream, message_ids)
 
-                    # Retry failed XACKs individually with exponential backoff
-                    # This prevents successfully processed messages from staying in PEL
-                    # where they can be reclaimed by XAUTOCLAIM
-                    if failed_to_ack:
-                        max_retries = 3
-                        base_delay = 0.5  # seconds
+                # STEP 2 (Background Recovery): Periodically reclaim orphaned messages from dead/old consumers
+                # Strictly bounded per cycle so fresh ingestion is never starved
+                now = asyncio.get_event_loop().time()
+                if now - last_autoclaim >= autoclaim_interval_sec:
+                    last_autoclaim = now
+                    await self._reclaim_orphaned_messages(
+                        streams_to_consume, self.consumer_name, max_total_reclaimed=100
+                    )
 
-                        for attempt in range(max_retries):
-                            if not failed_to_ack:
-                                break  # All retried messages succeeded
-
-                            delay = base_delay * (2 ** attempt)  # Exponential backoff
-                            logger.info(f"Retrying failed XACKs (attempt {attempt + 1}/{max_retries}) after {delay}s delay")
-                            await asyncio.sleep(delay)
-
-                            still_failed = {}  # stream -> list of message_ids still failing
-
-                            for stream, message_ids in failed_to_ack.items():
-                                try:
-                                    await self.redis.xack(
-                                        ConsumerGroups.EVENT_COLLECTOR, stream, *message_ids
-                                    )
-                                    logger.debug(f"Retry ACKed {len(message_ids)} messages from {stream}")
-                                except Exception as e:
-                                    logger.error(f"Failed to retry ACK messages from {stream}: {e}")
-                                    still_failed[stream] = message_ids
-
-                            failed_to_ack = still_failed
-
-                        # If any messages still failed after retries, we have to accept that
-                        # they'll remain in PEL and may be reclaimed, but we've done our best
-                        if failed_to_ack:
-                            total_failed = sum(len(ids) for ids in failed_to_ack.values())
-                            logger.warning(f"{total_failed} messages failed to XACK after {max_retries} retries; "
-                                         f"they will remain in PEL and may be reclaimed by XAUTOCLAIM")
-
-                await asyncio.sleep(1)  # Small delay between batches
+                # Adaptive sleep: brief pause if work was done, slightly longer if idle
+                if not all_events:
+                    await asyncio.sleep(0.5)
+                else:
+                    await asyncio.sleep(0.05)
 
             except asyncio.CancelledError:
                 logger.info("Consumer loop cancelled")
@@ -631,120 +635,89 @@ class EventCollector:
 
         logger.info("Consumer loop stopped")
 
-    async def _reclaim_orphaned_messages(self, streams_to_consume: list, consumer_name: str):
-        """
-        Use XAUTOCLAIM to reclaim idle pending messages from dead/old consumers.
-        This handles messages that were delivered to previous consumers (with different names)
-        but never ACKed, which would otherwise remain pending forever.
+    async def _reclaim_orphaned_messages(
+        self, streams_to_consume: list, consumer_name: str, max_total_reclaimed: int = 100
+    ):
+        """Use XAUTOCLAIM to reclaim idle pending messages from dead/old consumers.
 
-        Uses next_start_id cursor for proper pagination - claims all idle messages in batches.
+        Strictly bounded: claims at most max_total_reclaimed messages per cycle
+        and persists cursors across invocations to prevent starvation and looping.
         """
         if not self.redis:
             return
 
+        total_reclaimed = 0
+
         for stream, stream_type in streams_to_consume:
+            if total_reclaimed >= max_total_reclaimed:
+                break
+
             try:
-                # Use cursor-based iteration to claim all idle messages
-                start_id = "-"
-                total_claimed = 0
+                batch_limit = min(50, max_total_reclaimed - total_reclaimed)
+                start_id = self._autoclaim_cursors.get(stream, "0-0")
 
-                while True:
-                    # XAUTOCLAIM parameters:
-                    # - group: consumer group name
-                    # - consumer: this consumer's name (claims will be assigned to us)
-                    # - min_idle_time: only claim messages idle for at least this many ms (60 seconds)
-                    # - start_id: cursor for pagination, '-' means start from beginning of PEL
-                    # - count: max messages to claim per stream per call
-                    # Returns: [next_start_id, claimed_messages, deleted_ids]
-                    next_start_id, claimed_messages, deleted_ids = await self.redis.xautoclaim(
-                        stream,
-                        ConsumerGroups.EVENT_COLLECTOR,
-                        consumer_name,
-                        min_idle_time=60000,  # 60 seconds - message must be idle for at least 60s
-                        start_id=start_id,
-                        count=100,
-                    )
+                # XAUTOCLAIM parameters:
+                # - group: consumer group name
+                # - consumer: this consumer's name (claims will be assigned to us)
+                # - min_idle_time: only claim messages idle for at least this many ms (60 seconds)
+                # - start_id: cursor for pagination ('0-0' starts from beginning of PEL)
+                # - count: max messages to claim per call
+                # Returns: [next_start_id, claimed_messages, deleted_ids]
+                next_start_id, claimed_messages, deleted_ids = await self.redis.xautoclaim(
+                    stream,
+                    ConsumerGroups.EVENT_COLLECTOR,
+                    consumer_name,
+                    min_idle_time=60000,
+                    start_id=start_id,
+                    count=batch_limit,
+                )
 
-                    if not claimed_messages:
-                        break
+                # Persist cursor for next cycle (0-0 means scan wrapped around)
+                self._autoclaim_cursors[stream] = next_start_id if next_start_id != "0-0" else "0-0"
 
-                    claimed_ids = [msg_id for msg_id, _ in claimed_messages]
-                    total_claimed += len(claimed_ids)
-                    logger.info(f"XAUTOCLAIM reclaimed {len(claimed_ids)} orphaned messages from {stream} (cursor={next_start_id})")
+                if not claimed_messages:
+                    continue
 
-                    # Process the reclaimed messages through the same pipeline
-                    reclaimed_events = []
-                    for msg_id, msg_data in claimed_messages:
-                        try:
-                            envelope_data = json.loads(msg_data["data"])
-                            reclaimed_events.append({
-                                "id": msg_id,
-                                "stream": stream,
-                                "data": envelope_data,
-                            })
-                        except Exception as e:
-                            logger.error(f"Failed to parse reclaimed event {msg_id}: {e}")
+                total_reclaimed += len(claimed_messages)
+                logger.info(
+                    f"XAUTOCLAIM reclaimed {len(claimed_messages)} orphaned messages from {stream} "
+                    f"(cursor={next_start_id}, total_reclaimed={total_reclaimed}/{max_total_reclaimed})"
+                )
 
-                    if reclaimed_events:
+                # Process the reclaimed messages through the same pipeline
+                reclaimed_events = []
+                valid_message_ids = []
+                for msg_id, msg_data in claimed_messages:
+                    try:
+                        raw_data = msg_data.get("data") if isinstance(msg_data, dict) else None
+                        if not raw_data:
+                            raise ValueError(f"Missing 'data' field in message {msg_id}")
+                        envelope_data = json.loads(raw_data)
+                        reclaimed_events.append({
+                            "id": msg_id,
+                            "stream": stream,
+                            "data": envelope_data,
+                        })
+                        valid_message_ids.append(msg_id)
+                    except Exception as e:
+                        logger.error(f"Failed to parse reclaimed event {msg_id} from {stream}: {e}")
+                        # Malformed events are NOT added to valid_message_ids and thus NOT ACKed
+
+                if reclaimed_events:
+                    try:
                         # Insert into ClickHouse
                         await self._write_events_to_clickhouse(reclaimed_events)
-                        logger.info(f"Processed {len(reclaimed_events)} reclaimed events to ClickHouse")
+                        logger.info(f"Processed {len(reclaimed_events)} reclaimed events from {stream} to ClickHouse")
 
-                        # ACK the reclaimed messages only after successful insertion
-                        # Use retry logic to avoid leaving successfully processed messages in PEL
-                        # where they can be reclaimed and re-processed.
-                        # Only add to failed_to_ack if XACK actually fails
-                        failed_to_ack = {}
-
-                        # Try to ACK all claimed messages first
-                        try:
-                            await self.redis.xack(
-                                ConsumerGroups.EVENT_COLLECTOR, stream, *claimed_ids
-                            )
-                            logger.debug(f"ACKed {len(claimed_ids)} reclaimed messages from {stream}")
-                        except Exception as e:
-                            logger.error(f"Failed to ACK reclaimed messages from {stream}: {e}")
-                            failed_to_ack[stream] = claimed_ids
-
-                        # Retry failed XACKs individually with exponential backoff
-                        # This prevents successfully processed messages from staying in PEL
-                        # where they can be reclaimed and re-processed.
-                        if failed_to_ack:
-                            max_retries = 3
-                            base_delay = 0.5  # seconds
-
-                            for attempt in range(max_retries):
-                                if not failed_to_ack:
-                                    break  # All retried messages succeeded
-
-                                delay = base_delay * (2 ** attempt)  # Exponential backoff
-                                logger.info(f"Retrying failed XACKs for reclaimed messages (attempt {attempt + 1}/{max_retries}) after {delay}s delay")
-                                await asyncio.sleep(delay)
-
-                                still_failed = {}  # stream -> list of message_ids still failing
-
-                                for stream, message_ids in failed_to_ack.items():
-                                    try:
-                                        await self.redis.xack(
-                                            ConsumerGroups.EVENT_COLLECTOR, stream, *message_ids
-                                        )
-                                        logger.debug(f"Retry ACKed {len(message_ids)} reclaimed messages from {stream}")
-                                    except Exception as e:
-                                        logger.error(f"Failed to retry ACK reclaimed messages from {stream}: {e}")
-                                        still_failed[stream] = message_ids
-
-                                failed_to_ack = still_failed
-
-                            # If any messages still failed after retries, we have to accept that
-                            # theyll
-
-                    # Use next_start_id for next iteration
-                    if next_start_id == "0-0":
-                        break
-                    start_id = next_start_id
-
-                if total_claimed > 0:
-                    logger.info(f"XAUTOCLAIM total reclaimed {total_claimed} messages from {stream}")
+                        # ACK only successfully parsed and persisted messages with retry logic
+                        if valid_message_ids:
+                            await self._ack_messages_with_retry(stream, valid_message_ids)
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to write reclaimed events from {stream} to ClickHouse: {e}",
+                            exc_info=True,
+                        )
+                        # Do NOT ACK if ClickHouse insert failed; messages remain in PEL for retry
 
             except redis.ResponseError as e:
                 # NOGROUP means consumer group doesn't exist yet - that's fine

@@ -197,9 +197,11 @@ class LogForwarder:
                 "protocol": cowrie_event.get("protocol", "ssh"),
                 "client_version": cowrie_event.get("version", ""),
                 "client_ip": src_ip,
+                "attacker_ip": src_ip,
                 "country": geoip_data.get("country", ""),
                 "asn": geoip_data.get("asn", ""),
                 "org": "",
+                "timestamp": dt.isoformat(),
             }
         elif mapped_type == "session_end":
             raw_dur = cowrie_event.get("duration", 0)
@@ -218,6 +220,7 @@ class LogForwarder:
                 "intent": "",
                 "skill_level": 0,
                 "disconnection_reason": cowrie_event.get("message", ""),
+                "timestamp": dt.isoformat(),
             }
         elif mapped_type == "auth":
             payload = {

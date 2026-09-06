@@ -172,7 +172,7 @@ class EventProcessor:
 
         elif event_type in ("session_end", "sessionend"):
             # Finalize session and trigger AI processing
-            session = self.session_manager.process_session_end(payload)
+            session = self.session_manager.process_session_end(event_data)
             if not session:
                 return
 
@@ -380,12 +380,18 @@ class EventProcessor:
         if not start:
             return 0
         try:
-            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            def _to_naive_utc(dt_val: datetime) -> datetime:
+                if dt_val.tzinfo is not None:
+                    return dt_val.astimezone(timezone.utc).replace(tzinfo=None)
+                return dt_val
+
+            start_dt = _to_naive_utc(datetime.fromisoformat(start.replace("Z", "+00:00")))
             if end:
-                end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
-                return int((end_dt - start_dt).total_seconds())
+                end_dt = _to_naive_utc(datetime.fromisoformat(end.replace("Z", "+00:00")))
+                return max(0, int(round((end_dt - start_dt).total_seconds())))
             else:
-                return int((datetime.now(timezone.utc) - start_dt).total_seconds())
+                now = _to_naive_utc(datetime.now(timezone.utc))
+                return max(0, int((now - start_dt).total_seconds()))
         except Exception:
             return 0
 

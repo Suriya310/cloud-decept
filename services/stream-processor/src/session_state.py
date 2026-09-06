@@ -293,14 +293,20 @@ class SessionStateManager:
         if not start:
             return 0
 
+        def _to_naive_utc(dt_val: datetime) -> datetime:
+            if dt_val.tzinfo is not None:
+                return dt_val.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt_val
+
         try:
-            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            start_dt = _to_naive_utc(datetime.fromisoformat(start.replace("Z", "+00:00")))
             if end:
-                end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
-                return int((end_dt - start_dt).total_seconds())
+                end_dt = _to_naive_utc(datetime.fromisoformat(end.replace("Z", "+00:00")))
+                return max(0, int(round((end_dt - start_dt).total_seconds())))
             else:
                 # Ongoing session
-                return int((datetime.now(timezone.utc) - start_dt).total_seconds())
+                now = _to_naive_utc(datetime.now(timezone.utc))
+                return max(0, int((now - start_dt).total_seconds()))
         except Exception:
             return 0
 

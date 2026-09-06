@@ -325,6 +325,97 @@ class TestCollectorRecovery(unittest.IsolatedAsyncioTestCase):
         # Strict proof: in_flight never exceeded 1 at any moment
         self.assertEqual(max_concurrent, 1)
 
+    def test_session_end_calculates_duration_from_start_time_in_payload(self):
+        """Verify session_end with duration_seconds=0 calculates ~6s from start_time and end_time."""
+        self.collector.clickhouse_client = MagicMock()
+        self.collector.clickhouse_client.command.return_value = 0
+
+        event = {
+            "id": "msg-end-1",
+            "stream": StreamNames.SESSION_EVENTS,
+            "data": {
+                "event_type": "session_end",
+                "payload": {
+                    "session_id": "45dfa3c32596",
+                    "start_time": "2026-09-06 06:36:42",
+                    "timestamp": "2026-09-06 06:36:48",
+                    "duration_seconds": 0,
+                    "disconnection_reason": "Connection closed by remote host",
+                },
+            },
+        }
+
+        self.collector._write_events_to_clickhouse_sync([event])
+
+        # Verify command was called with duration_seconds = 6
+        sql_calls = [call[0][0] for call in self.collector.clickhouse_client.command.call_args_list]
+        update_calls = [s for s in sql_calls if "ALTER TABLE" in s and "sessions UPDATE" in s]
+        self.assertEqual(len(update_calls), 1)
+        self.assertIn("duration_seconds = 6", update_calls[0])
+        self.assertIn("end_time = '2026-09-06 06:36:48'", update_calls[0])
+
+    def test_session_end_calculates_duration_from_clickhouse_start_time(self):
+        """Verify session_end without start_time queries ClickHouse and computes correct duration."""
+        self.collector.clickhouse_client = MagicMock()
+
+        def mock_command(sql):
+            if "SELECT start_time FROM" in sql:
+                return "2026-09-06 06:36:42"
+            return 0
+
+        self.collector.clickhouse_client.command.side_effect = mock_command
+
+        event = {
+            "id": "msg-end-2",
+            "stream": StreamNames.SESSION_EVENTS,
+            "data": {
+                "event_type": "session_end",
+                "payload": {
+                    "session_id": "45dfa3c32596",
+                    "timestamp": "2026-09-06 06:36:48",
+                    "duration_seconds": 0,
+                },
+            },
+        }
+
+        self.collector._write_events_to_clickhouse_sync([event])
+
+        sql_calls = [call[0][0] for call in self.collector.clickhouse_client.command.call_args_list]
+        update_calls = [s for s in sql_calls if "ALTER TABLE" in s and "sessions UPDATE" in s]
+        self.assertEqual(len(update_calls), 1)
+        self.assertIn("duration_seconds = 6", update_calls[0])
+
+    async def test_update_session_protects_existing_duration_from_zero_or_none(self):
+        """Verify /update-session does not overwrite valid duration with 0 or None."""
+        collector.clickhouse_client = MagicMock()
+        collector.clickhouse_client.command.return_value = 1
+        collector.redis = AsyncMock()
+        collector.redis.ping.return_value = True
+
+        # When duration_seconds is 0, duration_seconds should NOT be in the UPDATE statement
+        req_zero = SessionUpdateRequest(
+            session_id="45dfa3c32596",
+            intent="credential_access",
+            duration_seconds=0,
+        )
+        res_zero = await update_session(req_zero)
+        self.assertTrue(res_zero.success)
+
+        sql_zero = collector.clickhouse_client.command.call_args_list[-2][0][0]
+        self.assertNotIn("duration_seconds", sql_zero)
+        self.assertIn("intent = 'credential_access'", sql_zero)
+
+        # When duration_seconds > 0, it SHOULD be included
+        req_valid = SessionUpdateRequest(
+            session_id="45dfa3c32596",
+            duration_seconds=15,
+        )
+        res_valid = await update_session(req_valid)
+        self.assertTrue(res_valid.success)
+
+        sql_valid = collector.clickhouse_client.command.call_args_list[-2][0][0]
+        self.assertIn("duration_seconds = 15", sql_valid)
+
 
 if __name__ == "__main__":
     unittest.main()

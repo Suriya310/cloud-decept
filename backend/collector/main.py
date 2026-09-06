@@ -13,7 +13,7 @@ import os
 import socket
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import clickhouse_connect
@@ -323,9 +323,19 @@ class EventCollector:
             if isinstance(value, datetime):
                 return value
             if isinstance(value, str):
-                # Handle ISO format with Z or without
-                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+                try:
+                    # Handle ISO format with Z or without, space or T
+                    clean_val = value.strip().replace("Z", "+00:00")
+                    return datetime.fromisoformat(clean_val)
+                except Exception:
+                    pass
             return datetime.utcnow()
+
+        def to_naive_utc(dt_val: datetime) -> datetime:
+            """Normalize datetime to naive UTC to prevent subtraction errors."""
+            if dt_val.tzinfo is not None:
+                return dt_val.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt_val
 
         def safe_int(value: Any, default: int = 0) -> int:
             """Safely convert value to int, defaulting to 0 for None/invalid"""
@@ -388,10 +398,34 @@ class EventCollector:
                 elif event_type in ("session_end", "sessionend"):
                     session_id = safe_str(event_data.get("session_id"))
                     if session_id:
-                        end_time = parse_dt(event_data.get("timestamp", datetime.utcnow()))
+                        end_time = parse_dt(event_data.get("timestamp") or envelope.get("timestamp", datetime.utcnow()))
                         duration = safe_int(event_data.get("duration_seconds", 0))
                         disconnection_reason = safe_str(event_data.get("disconnection_reason", ""))
                         try:
+                            # If duration <= 0, calculate from start_time and end_time
+                            if duration <= 0:
+                                start_time_raw = event_data.get("start_time") or envelope.get("start_time")
+                                if start_time_raw:
+                                    start_dt = parse_dt(start_time_raw)
+                                    dur_sec = (to_naive_utc(end_time) - to_naive_utc(start_dt)).total_seconds()
+                                    duration = max(0, int(round(dur_sec)))
+
+                            # If still <= 0, fetch start_time from ClickHouse
+                            if duration <= 0:
+                                try:
+                                    start_res = self.clickhouse_client.command(
+                                        f"SELECT start_time FROM {self.clickhouse_db}.sessions WHERE session_id = '{session_id}' LIMIT 1"
+                                    )
+                                    if start_res:
+                                        if isinstance(start_res, datetime):
+                                            start_dt = start_res
+                                        else:
+                                            start_dt = parse_dt(str(start_res).strip())
+                                        dur_sec = (to_naive_utc(end_time) - to_naive_utc(start_dt)).total_seconds()
+                                        duration = max(0, int(round(dur_sec)))
+                                except Exception as e:
+                                    logger.debug(f"Could not fetch start_time from ClickHouse for {session_id}: {e}")
+
                             # Count commands and auth attempts recorded for this session
                             cmd_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.commands WHERE session_id = '{session_id}'"))
                             auth_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.auth_attempts WHERE session_id = '{session_id}'"))
@@ -927,7 +961,7 @@ async def update_session(request: SessionUpdateRequest):
         if request.disconnection_reason is not None:
             escaped_reason = request.disconnection_reason.replace("'", "''")
             updates.append(f"disconnection_reason = '{escaped_reason}'")
-        if request.duration_seconds is not None:
+        if request.duration_seconds is not None and request.duration_seconds > 0:
             updates.append(f"duration_seconds = {request.duration_seconds}")
         if request.credentials_tried is not None:
             updates.append(f"credentials_tried = {request.credentials_tried}")
@@ -951,10 +985,15 @@ async def update_session(request: SessionUpdateRequest):
                 f"SELECT count() FROM clouddecept.sessions WHERE session_id = '{request.session_id}'"
             )
 
+        try:
+            count_val = int(count)
+        except (ValueError, TypeError):
+            count_val = 1 if count else 0
+
         return SessionUpdateResponse(
             session_id=request.session_id,
-            success=count > 0,
-            error=None if count > 0 else "Session not found"
+            success=count_val > 0,
+            error=None if count_val > 0 else "Session not found"
         )
 
     except Exception as e:

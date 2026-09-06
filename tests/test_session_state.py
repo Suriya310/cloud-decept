@@ -142,6 +142,26 @@ class TestSessionStateManager(unittest.TestCase):
         })
         self.assertEqual(end_session["duration_seconds"], 75)
 
+    def test_duration_fallback_calculation_mixed_timezones(self):
+        """Duration calculation handles mixed offset-aware and naive timestamps without exceptions."""
+        sm = SessionStateManager()
+        # Start time with explicit UTC timezone
+        sm.process_session_start({
+            "payload": {
+                "session_id": "45dfa3c32596",
+                "timestamp": "2026-09-06T06:36:42+00:00",
+            }
+        })
+        # End time in naive format (space separated) and 0 duration_seconds
+        end_session = sm.process_session_end({
+            "payload": {
+                "session_id": "45dfa3c32596",
+                "timestamp": "2026-09-06 06:36:48",
+                "duration_seconds": 0,
+            }
+        })
+        self.assertEqual(end_session["duration_seconds"], 6)
+
     def test_ai_context_extraction(self):
         sm = SessionStateManager()
         sm.process_session_start({

@@ -24,7 +24,13 @@ fastapi_mock.FastAPI.return_value.post.side_effect = lambda *a, **kw: lambda f: 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from backend.collector.main import EventCollector, health, collector
+from backend.collector.main import (
+    EventCollector,
+    SessionUpdateRequest,
+    collector,
+    health,
+    update_session,
+)
 from backend.schemas.events import ConsumerGroups, StreamNames
 
 
@@ -259,6 +265,65 @@ class TestCollectorRecovery(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(health_resp["status"], "degraded")
         self.assertEqual(health_resp["redis"], "healthy")
         self.assertEqual(health_resp["clickhouse"], "unhealthy")
+
+    async def test_clickhouse_client_access_serialized_no_concurrent_queries(self):
+        """Verify concurrent operations on ClickHouse are strictly serialized without concurrent query errors."""
+        import asyncio
+        import time
+
+        in_flight = 0
+        max_concurrent = 0
+
+        def simulated_command(*args, **kwargs):
+            nonlocal in_flight, max_concurrent
+            in_flight += 1
+            if in_flight > max_concurrent:
+                max_concurrent = in_flight
+            if in_flight > 1:
+                raise RuntimeError("Attempt to execute concurrent queries within the same session.")
+            time.sleep(0.02)  # Simulate I/O latency
+            in_flight -= 1
+            return 1
+
+        mock_client = MagicMock()
+        mock_client.command.side_effect = simulated_command
+        mock_client.insert.side_effect = simulated_command
+
+        collector.clickhouse_client = mock_client
+        collector.redis = AsyncMock()
+        collector.redis.ping.return_value = True
+
+        req = SessionUpdateRequest(
+            session_id="sess-concurrency-test",
+            intent="reconnaissance",
+        )
+
+        sample_event = {
+            "id": "concur-1",
+            "stream": StreamNames.SESSION_EVENTS,
+            "data": {
+                "event_type": "session_start",
+                "payload": {"session_id": "sess-concurrency-test", "timestamp": "2026-09-06T12:00:00Z"},
+            },
+        }
+
+        # Launch multiple concurrent operations: update_session, health check, and write_events
+        tasks = [
+            asyncio.create_task(update_session(req)),
+            asyncio.create_task(collector._write_events_to_clickhouse([sample_event])),
+            asyncio.create_task(health()),
+            asyncio.create_task(update_session(req)),
+            asyncio.create_task(health()),
+        ]
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for res in results:
+            if isinstance(res, Exception):
+                raise res
+
+        # Strict proof: in_flight never exceeded 1 at any moment
+        self.assertEqual(max_concurrent, 1)
 
 
 if __name__ == "__main__":

@@ -192,6 +192,150 @@ class TestSessionStateManager(unittest.TestCase):
         adaptive_ctx = sm.get_context_for_adaptive("sess-ai-ctx")
         self.assertEqual(len(adaptive_ctx["commands"]), 1)
 
+    def test_session_ordering_session_start_session_end_commands_auth(self):
+        """Cross-stream inverted ordering: session_start -> session_end -> commands -> auth.
+        Verifies that final state has duration_seconds=6, 7 commands, 1 auth attempt.
+        """
+        sm = SessionStateManager()
+        sid = "order-test-1"
+
+        # 1. session_start
+        sm.process_session_start({
+            "payload": {
+                "session_id": sid,
+                "timestamp": "2026-09-06T06:36:42Z",
+                "attacker_ip": "1.2.3.4",
+            }
+        })
+        # 2. session_end (before commands and auth)
+        sm.process_session_end({
+            "payload": {
+                "session_id": sid,
+                "timestamp": "2026-09-06T06:36:48Z",
+                "duration_seconds": 0,
+            }
+        })
+        # 3. commands
+        for cmd in ["whoami", "pwd", "uname -a", "ls -la", "sleep 3", "cat /etc/passwd", "exit"]:
+            sm.add_command({
+                "payload": {
+                    "session_id": sid,
+                    "command": cmd,
+                    "timestamp": "2026-09-06T06:36:45Z",
+                }
+            })
+        # 4. auth
+        sm.add_auth({
+            "payload": {
+                "session_id": sid,
+                "username": "root",
+                "password": "password123",
+                "timestamp": "2026-09-06T06:36:43Z",
+            }
+        })
+
+        ctx = sm.get_session_context(sid)
+        self.assertIsNotNone(ctx)
+        self.assertEqual(ctx["duration_seconds"], 6)
+        self.assertEqual(len(ctx["commands"]), 7)
+        self.assertEqual(len(ctx["auth_attempts"]), 1)
+
+    def test_session_ordering_normal_order(self):
+        """Normal ordering: session_start -> commands -> auth -> session_end.
+        Must produce identical final state.
+        """
+        sm = SessionStateManager()
+        sid = "order-test-2"
+
+        # 1. session_start
+        sm.process_session_start({
+            "payload": {
+                "session_id": sid,
+                "timestamp": "2026-09-06T06:36:42Z",
+                "attacker_ip": "1.2.3.4",
+            }
+        })
+        # 2. commands
+        for cmd in ["whoami", "pwd", "uname -a", "ls -la", "sleep 3", "cat /etc/passwd", "exit"]:
+            sm.add_command({
+                "payload": {
+                    "session_id": sid,
+                    "command": cmd,
+                    "timestamp": "2026-09-06T06:36:45Z",
+                }
+            })
+        # 3. auth
+        sm.add_auth({
+            "payload": {
+                "session_id": sid,
+                "username": "root",
+                "password": "password123",
+                "timestamp": "2026-09-06T06:36:43Z",
+            }
+        })
+        # 4. session_end
+        sm.process_session_end({
+            "payload": {
+                "session_id": sid,
+                "timestamp": "2026-09-06T06:36:48Z",
+                "duration_seconds": 0,
+            }
+        })
+
+        ctx = sm.get_session_context(sid)
+        self.assertIsNotNone(ctx)
+        self.assertEqual(ctx["duration_seconds"], 6)
+        self.assertEqual(len(ctx["commands"]), 7)
+        self.assertEqual(len(ctx["auth_attempts"]), 1)
+
+    def test_session_ordering_session_end_first(self):
+        """Extreme inverted ordering: session_end -> commands -> auth -> session_start.
+        Must also produce identical final state once session_start arrives.
+        """
+        sm = SessionStateManager()
+        sid = "order-test-3"
+
+        # 1. session_end first
+        sm.process_session_end({
+            "payload": {
+                "session_id": sid,
+                "timestamp": "2026-09-06T06:36:48Z",
+                "duration_seconds": 0,
+            }
+        })
+        # 2. commands
+        for cmd in ["whoami", "pwd", "uname -a", "ls -la", "sleep 3", "cat /etc/passwd", "exit"]:
+            sm.add_command({
+                "payload": {
+                    "session_id": sid,
+                    "command": cmd,
+                    "timestamp": "2026-09-06T06:36:45Z",
+                }
+            })
+        # 3. auth
+        sm.add_auth({
+            "payload": {
+                "session_id": sid,
+                "username": "root",
+                "password": "password123",
+                "timestamp": "2026-09-06T06:36:43Z",
+            }
+        })
+        # 4. session_start arrives last
+        sm.process_session_start({
+            "payload": {
+                "session_id": sid,
+                "timestamp": "2026-09-06T06:36:42Z",
+                "attacker_ip": "1.2.3.4",
+            }
+        })
+
+        ctx = sm.get_session_context(sid)
+        self.assertIsNotNone(ctx)
+        self.assertEqual(ctx["duration_seconds"], 6)
+        self.assertEqual(len(ctx["commands"]), 7)
+        self.assertEqual(len(ctx["auth_attempts"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,6 +62,7 @@ class EventCollector:
         self.clickhouse_client = None
         self._clickhouse_lock: Optional[asyncio.Lock] = None
         self._autoclaim_cursors: dict[str, str] = {}
+        self._ended_sessions: dict[str, dict] = {}
 
     @property
     def clickhouse_lock(self) -> asyncio.Lock:
@@ -307,6 +308,97 @@ class EventCollector:
             logger.error(f"Failed to initialize ClickHouse: {e}")
             raise
 
+    @staticmethod
+    def _parse_dt(value: Any) -> datetime:
+        """Parse ISO datetime string to datetime object"""
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                # Handle ISO format with Z or without, space or T
+                clean_val = value.strip().replace("Z", "+00:00")
+                return datetime.fromisoformat(clean_val)
+            except Exception:
+                pass
+        return datetime.utcnow()
+
+    @staticmethod
+    def _to_naive_utc(dt_val: datetime) -> datetime:
+        """Normalize datetime to naive UTC to prevent subtraction errors."""
+        if dt_val.tzinfo is not None:
+            return dt_val.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt_val
+
+    @staticmethod
+    def _safe_int(value: Any, default: int = 0) -> int:
+        """Safely convert value to int, defaulting to 0 for None/invalid"""
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return default
+
+    @staticmethod
+    def _safe_list(value: Any) -> list:
+        """Safely convert value to list, defaulting to [] for None"""
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return []
+
+    @staticmethod
+    def _safe_str(value: Any, default: str = "") -> str:
+        """Safely convert value to string, defaulting to empty string for None"""
+        if value is None:
+            return default
+        return str(value)
+
+    def _record_ended_session(self, session_id: str, end_time: datetime, duration_seconds: int, disconnection_reason: str):
+        """Record ended session in in-memory cache with bounded size."""
+        if len(self._ended_sessions) >= 10000:
+            oldest_key = next(iter(self._ended_sessions))
+            del self._ended_sessions[oldest_key]
+        self._ended_sessions[session_id] = {
+            "end_time": end_time,
+            "duration_seconds": duration_seconds,
+            "disconnection_reason": disconnection_reason,
+        }
+
+    def _get_ended_session_info(self, session_id: str) -> Optional[dict]:
+        """Check if session is ended from in-memory cache or ClickHouse."""
+        if session_id in self._ended_sessions:
+            return self._ended_sessions[session_id]
+
+        if not self.clickhouse_client:
+            return None
+
+        # Check ClickHouse if session has disconnection_reason or end_time != start_time
+        try:
+            query_res = self.clickhouse_client.query(
+                f"SELECT end_time, duration_seconds, disconnection_reason "
+                f"FROM {self.clickhouse_db}.sessions "
+                f"WHERE session_id = '{session_id}' "
+                f"AND (disconnection_reason != '' OR end_time > start_time) "
+                f"LIMIT 1"
+            )
+            if hasattr(query_res, "result_rows") and isinstance(query_res.result_rows, list) and query_res.result_rows:
+                row = query_res.result_rows[0]
+                end_time_val, dur_val, reason_val = row[0], row[1], row[2]
+                end_dt = end_time_val if isinstance(end_time_val, datetime) else self._parse_dt(str(end_time_val).strip())
+                info = {
+                    "end_time": end_dt,
+                    "duration_seconds": self._safe_int(dur_val),
+                    "disconnection_reason": self._safe_str(reason_val),
+                }
+                self._record_ended_session(session_id, info["end_time"], info["duration_seconds"], info["disconnection_reason"])
+                return info
+        except Exception as e:
+            logger.debug(f"Could not check ClickHouse for ended session {session_id}: {e}")
+
+        return None
+
     def _write_events_to_clickhouse_sync(self, events: list[dict]):
         """Synchronously write parsed events to ClickHouse tables.
 
@@ -318,59 +410,24 @@ class EventCollector:
         if not self.clickhouse_client or not events:
             return
 
-        def parse_dt(value: Any) -> datetime:
-            """Parse ISO datetime string to datetime object"""
-            if isinstance(value, datetime):
-                return value
-            if isinstance(value, str):
-                try:
-                    # Handle ISO format with Z or without, space or T
-                    clean_val = value.strip().replace("Z", "+00:00")
-                    return datetime.fromisoformat(clean_val)
-                except Exception:
-                    pass
-            return datetime.utcnow()
-
-        def to_naive_utc(dt_val: datetime) -> datetime:
-            """Normalize datetime to naive UTC to prevent subtraction errors."""
-            if dt_val.tzinfo is not None:
-                return dt_val.astimezone(timezone.utc).replace(tzinfo=None)
-            return dt_val
-
-        def safe_int(value: Any, default: int = 0) -> int:
-            """Safely convert value to int, defaulting to 0 for None/invalid"""
-            if value is None:
-                return default
-            try:
-                return int(value)
-            except (ValueError, TypeError):
-                return default
-
-        def safe_list(value: Any) -> list:
-            """Safely convert value to list, defaulting to [] for None"""
-            if value is None:
-                return []
-            if isinstance(value, list):
-                return value
-            return []
-
-        def safe_str(value: Any, default: str = "") -> str:
-            """Safely convert value to string, defaulting to empty string for None"""
-            if value is None:
-                return default
-            return str(value)
+        parse_dt = self._parse_dt
+        to_naive_utc = self._to_naive_utc
+        safe_int = self._safe_int
+        safe_list = self._safe_list
+        safe_str = self._safe_str
 
         # Group events by stream/type
         sessions = []
         commands = []
         auth_attempts = []
         cloud_api = []
+        session_ends = []
+        session_start_map = {}
+        touched_session_ids = set()
 
         for ev in events:
             # The event data is wrapped in an EventEnvelope with the actual event in the "payload" field
             envelope = ev.get("data", {})
-            # The actual event data is in the envelope's "payload" field for event-specific data
-            # The actual event data including session_id, timestamp, attacker_ip is in the payload
             event_data = envelope.get("payload", envelope)
             event_type = envelope.get("event_type", "")
             stream = envelope.get("stream_name", "")
@@ -378,9 +435,13 @@ class EventCollector:
             try:
                 if event_type in ("session_start", "sessionstart"):
                     # SessionStartEvent - top-level fields in envelope, payload-specific in event_data
+                    sid = safe_str(event_data.get("session_id"))
                     start_time = parse_dt(event_data.get("timestamp", datetime.utcnow()))
+                    if sid:
+                        session_start_map[sid] = start_time
+                        touched_session_ids.add(sid)
                     sessions.append((
-                        safe_str(event_data.get("session_id")),
+                        sid,
                         start_time,
                         start_time,  # end_time placeholder (updated on session_end)
                         0,     # duration_seconds
@@ -396,59 +457,21 @@ class EventCollector:
                         safe_str(event_data.get("disconnection_reason", "")),
                     ))
                 elif event_type in ("session_end", "sessionend"):
-                    session_id = safe_str(event_data.get("session_id"))
-                    if session_id:
+                    sid = safe_str(event_data.get("session_id"))
+                    if sid:
                         end_time = parse_dt(event_data.get("timestamp") or envelope.get("timestamp", datetime.utcnow()))
                         duration = safe_int(event_data.get("duration_seconds", 0))
                         disconnection_reason = safe_str(event_data.get("disconnection_reason", ""))
-                        try:
-                            # If duration <= 0, calculate from start_time and end_time
-                            if duration <= 0:
-                                start_time_raw = event_data.get("start_time") or envelope.get("start_time")
-                                if start_time_raw:
-                                    start_dt = parse_dt(start_time_raw)
-                                    dur_sec = (to_naive_utc(end_time) - to_naive_utc(start_dt)).total_seconds()
-                                    duration = max(0, int(round(dur_sec)))
-
-                            # If still <= 0, fetch start_time from ClickHouse
-                            if duration <= 0:
-                                try:
-                                    start_res = self.clickhouse_client.command(
-                                        f"SELECT start_time FROM {self.clickhouse_db}.sessions WHERE session_id = '{session_id}' LIMIT 1"
-                                    )
-                                    if start_res:
-                                        if isinstance(start_res, datetime):
-                                            start_dt = start_res
-                                        else:
-                                            start_dt = parse_dt(str(start_res).strip())
-                                        dur_sec = (to_naive_utc(end_time) - to_naive_utc(start_dt)).total_seconds()
-                                        duration = max(0, int(round(dur_sec)))
-                                except Exception as e:
-                                    logger.debug(f"Could not fetch start_time from ClickHouse for {session_id}: {e}")
-
-                            # Count commands and auth attempts recorded for this session
-                            cmd_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.commands WHERE session_id = '{session_id}'"))
-                            auth_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.auth_attempts WHERE session_id = '{session_id}'"))
-                            escaped_reason = disconnection_reason.replace("'", "''")
-                            update_sql = (
-                                f"ALTER TABLE {self.clickhouse_db}.sessions UPDATE "
-                                f"end_time = '{end_time.strftime('%Y-%m-%d %H:%M:%S')}', "
-                                f"duration_seconds = {duration}, "
-                                f"commands_executed = {cmd_cnt}, "
-                                f"credentials_tried = {auth_cnt}, "
-                                f"disconnection_reason = '{escaped_reason}' "
-                                f"WHERE session_id = '{session_id}'"
-                            )
-                            self.clickhouse_client.command(update_sql)
-                            logger.info(f"Updated session {session_id} with end_time={end_time}, duration={duration}s, cmds={cmd_cnt}, auth={auth_cnt}")
-                        except Exception as e:
-                            logger.error(f"Failed to update session_end for {session_id}: {e}", exc_info=True)
+                        session_ends.append((sid, end_time, duration, disconnection_reason, event_data, envelope))
                 elif event_type == "command" or stream == StreamNames.COMMAND_EVENTS:
+                    sid = safe_str(event_data.get("session_id"))
+                    if sid:
+                        touched_session_ids.add(sid)
                     cmd = safe_str(event_data.get("command"))
-                    logger.debug(f"Preparing command for ClickHouse: session={event_data.get('session_id')}, command={cmd[:50] if cmd else 'empty'}")
+                    logger.debug(f"Preparing command for ClickHouse: session={sid}, command={cmd[:50] if cmd else 'empty'}")
                     commands.append((
                         safe_str(event_data.get("event_id", str(uuid.uuid4()))),
-                        safe_str(event_data.get("session_id")),
+                        sid,
                         parse_dt(event_data.get("timestamp", datetime.utcnow())),
                         cmd,
                         safe_list(event_data.get("arguments")),
@@ -459,9 +482,12 @@ class EventCollector:
                         safe_list(event_data.get("mitre_techniques")),
                     ))
                 elif event_type == "auth" or stream == StreamNames.AUTH_EVENTS:
+                    sid = safe_str(event_data.get("session_id"))
+                    if sid:
+                        touched_session_ids.add(sid)
                     auth_attempts.append((
                         safe_str(event_data.get("event_id", str(uuid.uuid4()))),
-                        safe_str(event_data.get("session_id")),
+                        sid,
                         parse_dt(event_data.get("timestamp", datetime.utcnow())),
                         safe_str(event_data.get("username")),
                         safe_str(event_data.get("password")),
@@ -469,9 +495,12 @@ class EventCollector:
                         safe_str(event_data.get("auth_method", "password")),
                     ))
                 elif event_type == "cloud_api" or stream == StreamNames.CLOUD_API_EVENTS:
+                    sid = safe_str(event_data.get("session_id"))
+                    if sid:
+                        touched_session_ids.add(sid)
                     cloud_api.append((
                         safe_str(event_data.get("event_id", str(uuid.uuid4()))),
-                        safe_str(event_data.get("session_id")),
+                        sid,
                         parse_dt(event_data.get("timestamp", datetime.utcnow())),
                         safe_str(event_data.get("cloud_provider")),
                         safe_str(event_data.get("http_method")),
@@ -487,8 +516,7 @@ class EventCollector:
         # Log batch counts before insert
         logger.info(f"Batch insert counts: sessions={len(sessions)}, commands={len(commands)}, auth={len(auth_attempts)}, cloud_api={len(cloud_api)}")
 
-        # Batch insert - RAISE on any failure so caller doesn't ACK
-        # Each type independently so we can log specific failures
+        # Step 1: Batch insert new events FIRST so they exist in ClickHouse before aggregation
         if sessions:
             try:
                 self.clickhouse_client.insert(
@@ -554,6 +582,104 @@ class EventCollector:
             except Exception as e:
                 logger.error(f"Failed to insert cloud_api_requests: {e}", exc_info=True)
                 raise
+
+        # Step 2: Finalize sessions with session_end events
+        finalized_in_batch = set()
+        for sid, end_time, duration, disconnection_reason, event_data, envelope in session_ends:
+            try:
+                # If duration <= 0, calculate from start_time and end_time
+                if duration <= 0:
+                    start_dt = session_start_map.get(sid)
+                    if not start_dt:
+                        start_time_raw = event_data.get("start_time") or envelope.get("start_time")
+                        if start_time_raw:
+                            start_dt = parse_dt(start_time_raw)
+                    if not start_dt:
+                        try:
+                            start_res = self.clickhouse_client.command(
+                                f"SELECT start_time FROM {self.clickhouse_db}.sessions WHERE session_id = '{sid}' LIMIT 1"
+                            )
+                            if start_res:
+                                start_dt = start_res if isinstance(start_res, datetime) else parse_dt(str(start_res).strip())
+                        except Exception as e:
+                            logger.debug(f"Could not fetch start_time from ClickHouse for {sid}: {e}")
+
+                    if start_dt:
+                        dur_sec = (to_naive_utc(end_time) - to_naive_utc(start_dt)).total_seconds()
+                        duration = max(0, int(round(dur_sec)))
+
+                # Count commands and auth attempts recorded for this session (includes newly inserted)
+                cmd_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.commands WHERE session_id = '{sid}'"))
+                auth_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.auth_attempts WHERE session_id = '{sid}'"))
+
+                # Cache ended session info
+                self._record_ended_session(sid, end_time, duration, disconnection_reason)
+                finalized_in_batch.add(sid)
+
+                # Check if session exists in ClickHouse
+                sess_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.sessions WHERE session_id = '{sid}'"))
+                if sess_cnt > 0:
+                    escaped_reason = disconnection_reason.replace("'", "''")
+                    update_sql = (
+                        f"ALTER TABLE {self.clickhouse_db}.sessions UPDATE "
+                        f"end_time = '{end_time.strftime('%Y-%m-%d %H:%M:%S')}', "
+                        f"duration_seconds = {duration}, "
+                        f"commands_executed = {cmd_cnt}, "
+                        f"credentials_tried = {auth_cnt}, "
+                        f"disconnection_reason = '{escaped_reason}' "
+                        f"WHERE session_id = '{sid}'"
+                    )
+                    self.clickhouse_client.command(update_sql)
+                    logger.info(f"Updated session {sid} with end_time={end_time}, duration={duration}s, cmds={cmd_cnt}, auth={auth_cnt}")
+                else:
+                    logger.info(f"Session {sid} has not been created yet in ClickHouse; recorded as ended for deferred reconciliation")
+            except Exception as e:
+                logger.error(f"Failed to update session_end for {sid}: {e}", exc_info=True)
+
+        # Step 3: Reconcile any other touched sessions that are already ended
+        reconcile_candidate_ids = touched_session_ids - finalized_in_batch
+        for sid in reconcile_candidate_ids:
+            try:
+                ended_info = self._get_ended_session_info(sid)
+                if not ended_info:
+                    continue
+
+                end_time = ended_info.get("end_time")
+                duration = safe_int(ended_info.get("duration_seconds", 0))
+                disconnection_reason = safe_str(ended_info.get("disconnection_reason", ""))
+
+                if duration <= 0 and end_time:
+                    try:
+                        start_res = self.clickhouse_client.command(
+                            f"SELECT start_time FROM {self.clickhouse_db}.sessions WHERE session_id = '{sid}' LIMIT 1"
+                        )
+                        if start_res:
+                            start_dt = start_res if isinstance(start_res, datetime) else parse_dt(str(start_res).strip())
+                            dur_sec = (to_naive_utc(end_time) - to_naive_utc(start_dt)).total_seconds()
+                            duration = max(0, int(round(dur_sec)))
+                            ended_info["duration_seconds"] = duration
+                    except Exception as e:
+                        logger.debug(f"Could not recompute duration for {sid}: {e}")
+
+                cmd_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.commands WHERE session_id = '{sid}'"))
+                auth_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.auth_attempts WHERE session_id = '{sid}'"))
+
+                updates = [
+                    f"commands_executed = {cmd_cnt}",
+                    f"credentials_tried = {auth_cnt}",
+                    f"duration_seconds = {duration}",
+                ]
+                if end_time:
+                    updates.append(f"end_time = '{end_time.strftime('%Y-%m-%d %H:%M:%S')}'")
+                if disconnection_reason:
+                    escaped_reason = disconnection_reason.replace("'", "''")
+                    updates.append(f"disconnection_reason = '{escaped_reason}'")
+
+                update_sql = f"ALTER TABLE {self.clickhouse_db}.sessions UPDATE {', '.join(updates)} WHERE session_id = '{sid}'"
+                self.clickhouse_client.command(update_sql)
+                logger.info(f"Reconciled ended session {sid}: cmds={cmd_cnt}, auth={auth_cnt}, duration={duration}s")
+            except Exception as e:
+                logger.error(f"Failed to reconcile session {sid}: {e}", exc_info=True)
 
     async def _write_events_to_clickhouse(self, events: list[dict]):
         """Write parsed events to ClickHouse tables asynchronously via worker thread.
@@ -949,40 +1075,57 @@ async def update_session(request: SessionUpdateRequest):
         )
 
     try:
-        # Build update query
-        updates = []
-        if request.intent is not None:
-            escaped_intent = request.intent.replace("'", "''")
-            updates.append(f"intent = '{escaped_intent}'")
-        if request.skill_level is not None:
-            updates.append(f"skill_level = {request.skill_level}")
-        if request.commands_executed is not None:
-            updates.append(f"commands_executed = {request.commands_executed}")
-        if request.disconnection_reason is not None:
-            escaped_reason = request.disconnection_reason.replace("'", "''")
-            updates.append(f"disconnection_reason = '{escaped_reason}'")
-        if request.duration_seconds is not None and request.duration_seconds > 0:
-            updates.append(f"duration_seconds = {request.duration_seconds}")
-        if request.credentials_tried is not None:
-            updates.append(f"credentials_tried = {request.credentials_tried}")
-
-        if not updates:
-            return SessionUpdateResponse(
-                session_id=request.session_id,
-                success=False,
-                error="No fields to update"
-            )
-
         # ClickHouse ALTER TABLE UPDATE - serialized via clickhouse_lock
-        update_sql = f"ALTER TABLE clouddecept.sessions UPDATE {', '.join(updates)} WHERE session_id = '{request.session_id}'"
-        logger.debug(f"Executing: {update_sql}")
         async with collector.clickhouse_lock:
+            updates = []
+            if request.intent is not None:
+                escaped_intent = request.intent.replace("'", "''")
+                updates.append(f"intent = '{escaped_intent}'")
+            if request.skill_level is not None:
+                updates.append(f"skill_level = {request.skill_level}")
+            if request.commands_executed is not None:
+                try:
+                    cmd_res = await asyncio.to_thread(
+                        collector.clickhouse_client.command,
+                        f"SELECT count() FROM {collector.clickhouse_db}.commands WHERE session_id = '{request.session_id}'"
+                    )
+                    actual_cmds = EventCollector._safe_int(cmd_res)
+                    effective_cmds = max(request.commands_executed, actual_cmds)
+                except Exception:
+                    effective_cmds = request.commands_executed
+                updates.append(f"commands_executed = {effective_cmds}")
+            if request.disconnection_reason is not None:
+                escaped_reason = request.disconnection_reason.replace("'", "''")
+                updates.append(f"disconnection_reason = '{escaped_reason}'")
+            if request.duration_seconds is not None and request.duration_seconds > 0:
+                updates.append(f"duration_seconds = {request.duration_seconds}")
+            if request.credentials_tried is not None:
+                try:
+                    auth_res = await asyncio.to_thread(
+                        collector.clickhouse_client.command,
+                        f"SELECT count() FROM {collector.clickhouse_db}.auth_attempts WHERE session_id = '{request.session_id}'"
+                    )
+                    actual_auth = EventCollector._safe_int(auth_res)
+                    effective_auth = max(request.credentials_tried, actual_auth)
+                except Exception:
+                    effective_auth = request.credentials_tried
+                updates.append(f"credentials_tried = {effective_auth}")
+
+            if not updates:
+                return SessionUpdateResponse(
+                    session_id=request.session_id,
+                    success=False,
+                    error="No fields to update"
+                )
+
+            update_sql = f"ALTER TABLE {collector.clickhouse_db}.sessions UPDATE {', '.join(updates)} WHERE session_id = '{request.session_id}'"
+            logger.debug(f"Executing: {update_sql}")
             await asyncio.to_thread(collector.clickhouse_client.command, update_sql)
 
             # Verify update
             count = await asyncio.to_thread(
                 collector.clickhouse_client.command,
-                f"SELECT count() FROM clouddecept.sessions WHERE session_id = '{request.session_id}'"
+                f"SELECT count() FROM {collector.clickhouse_db}.sessions WHERE session_id = '{request.session_id}'"
             )
 
         try:

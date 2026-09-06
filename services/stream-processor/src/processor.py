@@ -199,14 +199,13 @@ class EventProcessor:
         session = self.session_manager.add_command({"payload": payload})
 
         # Check if we should trigger AI processing
-        # Process when we have enough commands or specific trigger commands
-        if session and len(session.get("commands", [])) >= 3:
-            # Check if this is a trigger command or we have enough commands
+        # Process when session has ended, or enough commands accumulate, or trigger command seen
+        if session:
             trigger_commands = {"aws", "az", "gcloud", "kubectl", "ssh", "scp", "curl", "wget", "nc", "nmap"}
             cmd_lower = payload.get("command", "").lower()
             is_trigger = any(trigger in cmd_lower for trigger in trigger_commands)
 
-            if is_trigger or len(session.get("commands", [])) >= 5:
+            if session.get("end_time") or is_trigger or len(session.get("commands", [])) >= 5:
                 logger.info(f"Triggering AI processing for session {session_id} (commands: {len(session.get('commands', []))})")
                 await self._process_session_ai(session)
 
@@ -239,9 +238,17 @@ class EventProcessor:
 
         # Check if AI already processed for this session
         ai_processed_key = f"ai_processed:{session_id}"
-        if ai_processed_key in self._processed_event_ids:
-            logger.debug(f"AI already processed for session {session_id}")
+        curr_cmd_count = len(session.get("commands", []))
+        prev_cmd_count = getattr(self, "_session_processed_cmd_counts", {}).get(session_id, -1)
+
+        if ai_processed_key in self._processed_event_ids and curr_cmd_count <= prev_cmd_count:
+            logger.debug(f"AI already processed for session {session_id} with {prev_cmd_count} commands")
             return
+
+        self._processed_event_ids.add(ai_processed_key)
+        if not hasattr(self, "_session_processed_cmd_counts"):
+            self._session_processed_cmd_counts = {}
+        self._session_processed_cmd_counts[session_id] = curr_cmd_count
 
         logger.info(f"Processing session {session_id} through AI pipeline")
 

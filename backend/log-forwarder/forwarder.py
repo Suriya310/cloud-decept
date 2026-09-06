@@ -224,16 +224,19 @@ class LogForwarder:
             }
         elif mapped_type == "auth":
             payload = {
+                "session_id": session_id,
                 "username": cowrie_event.get("username", ""),
                 "password": cowrie_event.get("password", ""),
                 "protocol": cowrie_event.get("protocol", "ssh"),
                 "success": event_type == "cowrie.login.success",
                 "auth_method": cowrie_event.get("auth_method", "password"),
+                "timestamp": dt.isoformat(),
             }
         elif mapped_type == "command":
             cmd = cowrie_event.get("input", "")
             logger.info(f"Mapped command event: session={session_id}, src_ip={src_ip}, command={cmd[:50] if cmd else 'empty'}, type={event_type}")
             payload = {
+                "session_id": session_id,
                 "command": cmd,
                 "arguments": [],
                 "working_directory": "/home/ubuntu",
@@ -241,13 +244,16 @@ class LogForwarder:
                 "duration_ms": 0,
                 "intent": "",
                 "mitre_techniques": [],
+                "timestamp": dt.isoformat(),
             }
         elif mapped_type == "file_transfer":
             payload = {
+                "session_id": session_id,
                 "filename": cowrie_event.get("filename", ""),
                 "size_bytes": cowrie_event.get("size", 0),
                 "direction": "download" if "download" in event_type else "upload",
                 "protocol": "ssh",
+                "timestamp": dt.isoformat(),
             }
 
         return {

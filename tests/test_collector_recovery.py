@@ -328,7 +328,7 @@ class TestCollectorRecovery(unittest.IsolatedAsyncioTestCase):
     def test_session_end_calculates_duration_from_start_time_in_payload(self):
         """Verify session_end with duration_seconds=0 calculates ~6s from start_time and end_time."""
         self.collector.clickhouse_client = MagicMock()
-        self.collector.clickhouse_client.command.return_value = 0
+        self.collector.clickhouse_client.command.return_value = 1
 
         event = {
             "id": "msg-end-1",
@@ -361,6 +361,8 @@ class TestCollectorRecovery(unittest.IsolatedAsyncioTestCase):
         def mock_command(sql):
             if "SELECT start_time FROM" in sql:
                 return "2026-09-06 06:36:42"
+            if "SELECT count() FROM" in sql and "sessions" in sql:
+                return 1
             return 0
 
         self.collector.clickhouse_client.command.side_effect = mock_command
@@ -415,6 +417,414 @@ class TestCollectorRecovery(unittest.IsolatedAsyncioTestCase):
 
         sql_valid = collector.clickhouse_client.command.call_args_list[-2][0][0]
         self.assertIn("duration_seconds = 15", sql_valid)
+
+    def test_inverted_cross_stream_ordering_reconciles_final_metrics(self):
+        """Ordering: session_start -> session_end -> commands -> auth.
+        Verifies that final session produces duration_seconds > 0, commands_executed, credentials_tried.
+        """
+        store = MockClickHouseStore()
+        self.collector.clickhouse_client = store
+
+        sid = "c4e4b469dc67"
+        start_event = {
+            "id": "msg-start",
+            "stream": StreamNames.SESSION_EVENTS,
+            "data": {
+                "event_type": "session_start",
+                "payload": {
+                    "session_id": sid,
+                    "timestamp": "2026-09-06 06:36:42",
+                    "attacker_ip": "1.2.3.4",
+                },
+            },
+        }
+        end_event = {
+            "id": "msg-end",
+            "stream": StreamNames.SESSION_EVENTS,
+            "data": {
+                "event_type": "session_end",
+                "payload": {
+                    "session_id": sid,
+                    "timestamp": "2026-09-06 06:36:48",
+                    "duration_seconds": 0,
+                    "disconnection_reason": "Connection closed by remote host",
+                },
+            },
+        }
+        cmd_events = [
+            {
+                "id": f"msg-cmd-{i}",
+                "stream": StreamNames.COMMAND_EVENTS,
+                "data": {
+                    "event_type": "command",
+                    "payload": {
+                        "session_id": sid,
+                        "command": cmd_text,
+                        "timestamp": "2026-09-06 06:36:45",
+                    },
+                },
+            }
+            for i, cmd_text in enumerate(["whoami", "pwd", "uname -a", "ls -la", "sleep 3", "cat /etc/passwd", "exit"])
+        ]
+        auth_event = {
+            "id": "msg-auth",
+            "stream": StreamNames.AUTH_EVENTS,
+            "data": {
+                "event_type": "auth",
+                "payload": {
+                    "session_id": sid,
+                    "username": "root",
+                    "password": "password123",
+                    "timestamp": "2026-09-06 06:36:43",
+                },
+            },
+        }
+
+        # 1. session_start
+        self.collector._write_events_to_clickhouse_sync([start_event])
+        # 2. session_end (arrives before commands & auth)
+        self.collector._write_events_to_clickhouse_sync([end_event])
+        # 3. commands
+        self.collector._write_events_to_clickhouse_sync(cmd_events)
+        # 4. auth
+        self.collector._write_events_to_clickhouse_sync([auth_event])
+
+        final_sess = store.sessions.get(sid)
+        self.assertIsNotNone(final_sess)
+        self.assertEqual(final_sess["duration_seconds"], 6)
+        self.assertEqual(final_sess["commands_executed"], 7)
+        self.assertEqual(final_sess["credentials_tried"], 1)
+        self.assertEqual(final_sess["end_time"], "2026-09-06 06:36:48")
+
+    def test_normal_cross_stream_ordering_produces_identical_metrics(self):
+        """Ordering: session_start -> commands -> auth -> session_end.
+        Must produce the exact same final metrics as inverted ordering.
+        """
+        store = MockClickHouseStore()
+        self.collector.clickhouse_client = store
+
+        sid = "normal-order-session"
+        start_event = {
+            "id": "msg-start",
+            "stream": StreamNames.SESSION_EVENTS,
+            "data": {
+                "event_type": "session_start",
+                "payload": {
+                    "session_id": sid,
+                    "timestamp": "2026-09-06 06:36:42",
+                    "attacker_ip": "1.2.3.4",
+                },
+            },
+        }
+        cmd_events = [
+            {
+                "id": f"msg-cmd-{i}",
+                "stream": StreamNames.COMMAND_EVENTS,
+                "data": {
+                    "event_type": "command",
+                    "payload": {
+                        "session_id": sid,
+                        "command": cmd_text,
+                        "timestamp": "2026-09-06 06:36:45",
+                    },
+                },
+            }
+            for i, cmd_text in enumerate(["whoami", "pwd", "uname -a", "ls -la", "sleep 3", "cat /etc/passwd", "exit"])
+        ]
+        auth_event = {
+            "id": "msg-auth",
+            "stream": StreamNames.AUTH_EVENTS,
+            "data": {
+                "event_type": "auth",
+                "payload": {
+                    "session_id": sid,
+                    "username": "root",
+                    "password": "password123",
+                    "timestamp": "2026-09-06 06:36:43",
+                },
+            },
+        }
+        end_event = {
+            "id": "msg-end",
+            "stream": StreamNames.SESSION_EVENTS,
+            "data": {
+                "event_type": "session_end",
+                "payload": {
+                    "session_id": sid,
+                    "timestamp": "2026-09-06 06:36:48",
+                    "duration_seconds": 0,
+                    "disconnection_reason": "Connection closed by remote host",
+                },
+            },
+        }
+
+        # 1. session_start
+        self.collector._write_events_to_clickhouse_sync([start_event])
+        # 2. commands
+        self.collector._write_events_to_clickhouse_sync(cmd_events)
+        # 3. auth
+        self.collector._write_events_to_clickhouse_sync([auth_event])
+        # 4. session_end
+        self.collector._write_events_to_clickhouse_sync([end_event])
+
+        final_sess = store.sessions.get(sid)
+        self.assertIsNotNone(final_sess)
+        self.assertEqual(final_sess["duration_seconds"], 6)
+        self.assertEqual(final_sess["commands_executed"], 7)
+        self.assertEqual(final_sess["credentials_tried"], 1)
+        self.assertEqual(final_sess["end_time"], "2026-09-06 06:36:48")
+
+    def test_same_batch_cross_stream_ordering(self):
+        """Single batch containing [session_start, session_end, commands, auth] (as observed on Oracle).
+        Must produce the exact same final metrics.
+        """
+        store = MockClickHouseStore()
+        self.collector.clickhouse_client = store
+
+        sid = "batch-order-session"
+        all_events = [
+            {
+                "id": "msg-start",
+                "stream": StreamNames.SESSION_EVENTS,
+                "data": {
+                    "event_type": "session_start",
+                    "payload": {
+                        "session_id": sid,
+                        "timestamp": "2026-09-06 06:36:42",
+                        "attacker_ip": "1.2.3.4",
+                    },
+                },
+            },
+            {
+                "id": "msg-end",
+                "stream": StreamNames.SESSION_EVENTS,
+                "data": {
+                    "event_type": "session_end",
+                    "payload": {
+                        "session_id": sid,
+                        "timestamp": "2026-09-06 06:36:48",
+                        "duration_seconds": 0,
+                        "disconnection_reason": "Connection closed by remote host",
+                    },
+                },
+            },
+        ]
+        for i, cmd_text in enumerate(["whoami", "pwd", "uname -a", "ls -la", "sleep 3", "cat /etc/passwd", "exit"]):
+            all_events.append({
+                "id": f"msg-cmd-{i}",
+                "stream": StreamNames.COMMAND_EVENTS,
+                "data": {
+                    "event_type": "command",
+                    "payload": {
+                        "session_id": sid,
+                        "command": cmd_text,
+                        "timestamp": "2026-09-06 06:36:45",
+                    },
+                },
+            })
+        all_events.append({
+            "id": "msg-auth",
+            "stream": StreamNames.AUTH_EVENTS,
+            "data": {
+                "event_type": "auth",
+                "payload": {
+                    "session_id": sid,
+                    "username": "root",
+                    "password": "password123",
+                    "timestamp": "2026-09-06 06:36:43",
+                },
+            },
+        })
+
+        self.collector._write_events_to_clickhouse_sync(all_events)
+
+        final_sess = store.sessions.get(sid)
+        self.assertIsNotNone(final_sess)
+        self.assertEqual(final_sess["duration_seconds"], 6)
+        self.assertEqual(final_sess["commands_executed"], 7)
+        self.assertEqual(final_sess["credentials_tried"], 1)
+        self.assertEqual(final_sess["end_time"], "2026-09-06 06:36:48")
+
+    def test_extreme_inverted_ordering_session_end_first(self):
+        """Ordering: session_end -> commands -> auth -> session_start.
+        Must produce the exact same final metrics.
+        """
+        store = MockClickHouseStore()
+        self.collector.clickhouse_client = store
+
+        sid = "extreme-order-session"
+        start_event = {
+            "id": "msg-start",
+            "stream": StreamNames.SESSION_EVENTS,
+            "data": {
+                "event_type": "session_start",
+                "payload": {
+                    "session_id": sid,
+                    "timestamp": "2026-09-06 06:36:42",
+                    "attacker_ip": "1.2.3.4",
+                },
+            },
+        }
+        end_event = {
+            "id": "msg-end",
+            "stream": StreamNames.SESSION_EVENTS,
+            "data": {
+                "event_type": "session_end",
+                "payload": {
+                    "session_id": sid,
+                    "timestamp": "2026-09-06 06:36:48",
+                    "duration_seconds": 0,
+                    "disconnection_reason": "Connection closed by remote host",
+                },
+            },
+        }
+        cmd_events = [
+            {
+                "id": f"msg-cmd-{i}",
+                "stream": StreamNames.COMMAND_EVENTS,
+                "data": {
+                    "event_type": "command",
+                    "payload": {
+                        "session_id": sid,
+                        "command": cmd_text,
+                        "timestamp": "2026-09-06 06:36:45",
+                    },
+                },
+            }
+            for i, cmd_text in enumerate(["whoami", "pwd", "uname -a", "ls -la", "sleep 3", "cat /etc/passwd", "exit"])
+        ]
+        auth_event = {
+            "id": "msg-auth",
+            "stream": StreamNames.AUTH_EVENTS,
+            "data": {
+                "event_type": "auth",
+                "payload": {
+                    "session_id": sid,
+                    "username": "root",
+                    "password": "password123",
+                    "timestamp": "2026-09-06 06:36:43",
+                },
+            },
+        }
+
+        # 1. session_end first (session_start has not arrived!)
+        self.collector._write_events_to_clickhouse_sync([end_event])
+        # 2. commands
+        self.collector._write_events_to_clickhouse_sync(cmd_events)
+        # 3. auth
+        self.collector._write_events_to_clickhouse_sync([auth_event])
+        # 4. session_start arrives last
+        self.collector._write_events_to_clickhouse_sync([start_event])
+
+        final_sess = store.sessions.get(sid)
+        self.assertIsNotNone(final_sess)
+        self.assertEqual(final_sess["duration_seconds"], 6)
+        self.assertEqual(final_sess["commands_executed"], 7)
+        self.assertEqual(final_sess["credentials_tried"], 1)
+        self.assertEqual(final_sess["end_time"], "2026-09-06 06:36:48")
+
+
+class MockClickHouseStore:
+    """Mock ClickHouse client with in-memory storage for table state & queries."""
+    def __init__(self):
+        self.sessions = {}  # session_id -> dict
+        self.commands = []  # list of tuples
+        self.auth_attempts = []  # list of tuples
+        self.cloud_api_requests = []
+        self.update_history = []
+
+    def insert(self, table, rows, column_names=None):
+        if "sessions" in table:
+            for r in rows:
+                sid = r[0]
+                self.sessions[sid] = {
+                    "session_id": r[0],
+                    "start_time": r[1],
+                    "end_time": r[2],
+                    "duration_seconds": r[3],
+                    "attacker_ip": r[4],
+                    "country": r[5],
+                    "asn": r[6],
+                    "protocol": r[7],
+                    "commands_executed": r[8],
+                    "files_transferred": r[9],
+                    "credentials_tried": r[10],
+                    "intent": r[11],
+                    "skill_level": r[12],
+                    "disconnection_reason": r[13],
+                }
+        elif "commands" in table:
+            self.commands.extend(rows)
+        elif "auth_attempts" in table:
+            self.auth_attempts.extend(rows)
+        elif "cloud_api" in table:
+            self.cloud_api_requests.extend(rows)
+
+    def command(self, sql):
+        sql_str = str(sql)
+        if "SELECT start_time FROM" in sql_str:
+            for sid, data in self.sessions.items():
+                if sid in sql_str:
+                    return data["start_time"]
+            return None
+
+        if "SELECT count() FROM" in sql_str and "sessions" in sql_str:
+            for sid in self.sessions:
+                if sid in sql_str:
+                    return 1
+            return 0
+
+        if "SELECT count() FROM" in sql_str and "commands" in sql_str:
+            count = 0
+            for c in self.commands:
+                if c[1] in sql_str:
+                    count += 1
+            return count
+
+        if "SELECT count() FROM" in sql_str and "auth_attempts" in sql_str:
+            count = 0
+            for a in self.auth_attempts:
+                if a[1] in sql_str:
+                    count += 1
+            return count
+
+        if "ALTER TABLE" in sql_str and "sessions UPDATE" in sql_str:
+            self.update_history.append(sql_str)
+            for sid, data in self.sessions.items():
+                if f"session_id = '{sid}'" in sql_str:
+                    update_part = sql_str.split("UPDATE ")[1].split(" WHERE")[0]
+                    for item in update_part.split(", "):
+                        k, v = item.split(" = ")
+                        v_clean = v.strip("'")
+                        if k == "duration_seconds":
+                            data["duration_seconds"] = int(v_clean)
+                        elif k == "commands_executed":
+                            data["commands_executed"] = int(v_clean)
+                        elif k == "credentials_tried":
+                            data["credentials_tried"] = int(v_clean)
+                        elif k == "end_time":
+                            data["end_time"] = v_clean
+                        elif k == "disconnection_reason":
+                            data["disconnection_reason"] = v_clean
+                    return 1
+            return 0
+
+        return 0
+
+    def query(self, sql):
+        sql_str = str(sql)
+        res = MagicMock()
+        rows = []
+        if "sessions" in sql_str:
+            for sid, data in self.sessions.items():
+                if sid in sql_str:
+                    end_val = data.get("end_time")
+                    start_val = data.get("start_time")
+                    reason_val = data.get("disconnection_reason", "")
+                    if reason_val or str(end_val) != str(start_val):
+                        rows.append((end_val, data.get("duration_seconds", 0), reason_val))
+        res.result_rows = rows
+        return res
 
 
 if __name__ == "__main__":

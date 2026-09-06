@@ -91,6 +91,10 @@ class SessionStateManager:
             session["protocol"] = payload.get("protocol")
         if payload.get("client_version"):
             session["client_version"] = payload.get("client_version")
+        if session.get("end_time") and (not session.get("duration_seconds") or session.get("duration_seconds") <= 0):
+            calc_dur = self._calculate_duration(session)
+            if calc_dur > 0:
+                session["duration_seconds"] = calc_dur
         session["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         logger.info(f"Initialized/updated session state for {session_id}")

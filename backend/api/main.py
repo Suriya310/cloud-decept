@@ -4,20 +4,40 @@ Queries ClickHouse (analytics), PostgreSQL (threat intel), Redis (cache/state).
 """
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import clickhouse_connect
+import httpx
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, ConfigDict
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("backend-api")
 
 # Database connections
 clickhouse_client = None
 postgres_pool = None
 redis_client = None
+clickhouse_lock = asyncio.Lock()
+
+
+async def run_ch_query(query: str):
+    """Safely execute a ClickHouse query using the shared client with lock."""
+    async with clickhouse_lock:
+        return await asyncio.to_thread(clickhouse_client.query, query)
+
+
+async def run_ch_command(command: str):
+    """Safely execute a ClickHouse command using the shared client with lock."""
+    async with clickhouse_lock:
+        return await asyncio.to_thread(clickhouse_client.command, command)
 
 
 async def init_databases():
@@ -152,6 +172,10 @@ async def init_schemas():
         """
         CREATE TABLE IF NOT EXISTS threat_intelligence (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            session_id VARCHAR(255),
+            technique_id VARCHAR(50),
+            technique_name VARCHAR(255),
+            tactic VARCHAR(100),
             ioc_type VARCHAR(50),
             ioc_value VARCHAR(500),
             confidence DECIMAL(3,2),
@@ -160,6 +184,8 @@ async def init_schemas():
             severity VARCHAR(20),
             context TEXT,
             enrichment JSONB,
+            iocs JSONB,
+            raw_data JSONB,
             created_at TIMESTAMP DEFAULT NOW(),
             updated_at TIMESTAMP DEFAULT NOW()
         )
@@ -189,11 +215,37 @@ async def init_schemas():
         """,
     ]
 
+    alter_sqls = [
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS session_id VARCHAR(255)",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS technique_id VARCHAR(50)",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS technique_name VARCHAR(255)",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS tactic VARCHAR(100)",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS ioc_type VARCHAR(50)",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS ioc_value VARCHAR(500)",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS confidence FLOAT",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS mitre_techniques TEXT[]",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS mitre_tactics TEXT[]",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS severity VARCHAR(20)",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS context TEXT",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS enrichment JSONB",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS iocs JSONB",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS raw_data JSONB",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()",
+        "ALTER TABLE threat_intelligence ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()",
+        "ALTER TABLE session_summaries ADD COLUMN IF NOT EXISTS mitre_techniques TEXT[]",
+        "ALTER TABLE session_summaries ADD COLUMN IF NOT EXISTS iocs JSONB",
+    ]
+
     conn = postgres_pool.getconn()
     try:
         with conn.cursor() as cur:
             for table_sql in pg_tables:
                 cur.execute(table_sql)
+            for alter_sql in alter_sqls:
+                try:
+                    cur.execute(alter_sql)
+                except Exception as e:
+                    logger.debug(f"Schema alter notice: {e}")
             conn.commit()
     finally:
         postgres_pool.putconn(conn)
@@ -337,7 +389,7 @@ async def health():
 
     # Check ClickHouse
     try:
-        clickhouse_client.command("SELECT 1")
+        await run_ch_command("SELECT 1")
         checks["clickhouse"] = "healthy"
     except Exception:
         checks["clickhouse"] = "unhealthy"
@@ -372,8 +424,13 @@ async def get_stats(
     hours: int = Query(24, ge=1, le=87600),  # Allow up to 10 years for "all time"
 ):
     """Get high-level statistics for dashboard"""
+    try:
+        hours_val = int(hours)
+    except Exception:
+        hours_val = 24
+
     now = datetime.utcnow()
-    since = now - timedelta(hours=hours)
+    since = now - timedelta(hours=hours_val)
     since_str = since.strftime('%Y-%m-%d %H:%M:%S')
     recent_str = (now - timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
     day_ago_str = (now - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
@@ -383,22 +440,28 @@ async def get_stats(
     # ALL-TIME TOTALS (no time filter) - primary fields
     # ============================================================
     # Use fully qualified table names to ensure correct database
-    total_sessions = clickhouse_client.command("SELECT count() FROM clouddecept.sessions")
-    total_commands = clickhouse_client.command("SELECT count() FROM clouddecept.commands")
-    unique_attackers = clickhouse_client.command("SELECT uniq(attacker_ip) FROM clouddecept.sessions")
+    total_sessions_raw = await run_ch_command("SELECT count() FROM clouddecept.sessions")
+    total_sessions = int(total_sessions_raw or 0)
+    total_commands_raw = await run_ch_command("SELECT uniqExact(event_id) FROM clouddecept.commands")
+    total_commands = int(total_commands_raw or 0)
+    unique_attackers_raw = await run_ch_command("SELECT uniq(attacker_ip) FROM clouddecept.sessions")
+    unique_attackers = int(unique_attackers_raw or 0)
 
     # ============================================================
     # RECENT WINDOW STATS (respects hours parameter)
     # ============================================================
-    recent_sessions = clickhouse_client.command(
+    recent_sessions_raw = await run_ch_command(
         f"SELECT count() FROM clouddecept.sessions WHERE start_time >= '{since_str}'"
     )
-    recent_commands = clickhouse_client.command(
-        f"SELECT count() FROM clouddecept.commands WHERE timestamp >= '{since_str}'"
+    recent_sessions = int(recent_sessions_raw or 0)
+    recent_commands_raw = await run_ch_command(
+        f"SELECT uniqExact(event_id) FROM clouddecept.commands WHERE timestamp >= '{since_str}'"
     )
-    recent_unique_attackers = clickhouse_client.command(
+    recent_commands = int(recent_commands_raw or 0)
+    recent_unique_attackers_raw = await run_ch_command(
         f"SELECT uniq(attacker_ip) FROM clouddecept.sessions WHERE start_time >= '{since_str}'"
     )
+    recent_unique_attackers = int(recent_unique_attackers_raw or 0)
 
     # ============================================================
     # ACTIVE SESSIONS (no end_time)
@@ -406,14 +469,15 @@ async def get_stats(
     # end_time is a non-nullable DateTime in ClickHouse.
     # Active sessions have end_time = epoch (1970-01-01 00:00:00).
     # Do NOT compare DateTime to empty string '' - causes CANNOT_PARSE_DATETIME.
-    active_sessions = clickhouse_client.command(
+    active_sessions_raw = await run_ch_command(
         "SELECT count() FROM clouddecept.sessions WHERE end_time = '1970-01-01 00:00:00'"
     )
+    active_sessions = int(active_sessions_raw or 0)
 
     # ============================================================
     # TOP INTENTS (all-time)
     # ============================================================
-    top_intents = clickhouse_client.query(
+    top_intents_res = await run_ch_query(
         """
         SELECT intent, count() as cnt
         FROM clouddecept.sessions
@@ -422,12 +486,13 @@ async def get_stats(
         ORDER BY cnt DESC
         LIMIT 10
         """
-    ).named_results()
+    )
+    top_intents = top_intents_res.named_results()
 
     # ============================================================
     # TOP COUNTRIES (all-time)
     # ============================================================
-    top_countries = clickhouse_client.query(
+    top_countries_res = await run_ch_query(
         """
         SELECT country, count() as cnt
         FROM clouddecept.sessions
@@ -436,14 +501,15 @@ async def get_stats(
         ORDER BY cnt DESC
         LIMIT 10
         """
-    ).named_results()
+    )
+    top_countries = top_countries_res.named_results()
 
     # ============================================================
     # THREAT DISTRIBUTION (based on skill_level)
     # ============================================================
     # skill_level: 1-10, map to threat levels
     # 1-2: Low, 3-4: Medium, 5-7: High, 8-10: Critical
-    threat_dist = clickhouse_client.query(
+    threat_dist_res = await run_ch_query(
         """
         SELECT
             sum(if(skill_level >= 8, 1, 0)) as critical,
@@ -453,7 +519,8 @@ async def get_stats(
         FROM clouddecept.sessions
         WHERE skill_level IS NOT NULL
         """
-    ).named_results()
+    )
+    threat_dist = threat_dist_res.named_results()
 
     # Convert generator to list for subscriptable access
     threat_rows = list(threat_dist)
@@ -462,16 +529,16 @@ async def get_stats(
     if threat_rows:
         row = threat_rows[0]
         threat_distribution = [
-            {"level": "Critical", "count": row["critical"] or 0},
-            {"level": "High", "count": row["high"] or 0},
-            {"level": "Medium", "count": row["medium"] or 0},
-            {"level": "Low", "count": row["low"] or 0},
+            {"level": "Critical", "count": int(row["critical"] or 0)},
+            {"level": "High", "count": int(row["high"] or 0)},
+            {"level": "Medium", "count": int(row["medium"] or 0)},
+            {"level": "Low", "count": int(row["low"] or 0)},
         ]
 
     # ============================================================
     # SESSIONS PER HOUR (last 24 hours)
     # ============================================================
-    sessions_per_hour = clickhouse_client.query(
+    sessions_per_hour_res = await run_ch_query(
         f"""
         SELECT
             formatDateTime(toStartOfHour(start_time), '%H:%M') as hour,
@@ -481,30 +548,32 @@ async def get_stats(
         GROUP BY hour
         ORDER BY hour
         """
-    ).named_results()
+    )
+    sessions_per_hour = sessions_per_hour_res.named_results()
 
     sessions_per_hour_formatted = [
-        {"hour": r["hour"], "count": r["cnt"]}
+        {"hour": r["hour"], "count": int(r["cnt"])}
         for r in sessions_per_hour
     ]
 
     # ============================================================
     # COMMANDS PER DAY (last 7 days)
     # ============================================================
-    commands_per_day = clickhouse_client.query(
+    commands_per_day_res = await run_ch_query(
         f"""
         SELECT
             toDate(timestamp) as day,
-            count() as cnt
+            uniqExact(event_id) as cnt
         FROM clouddecept.commands
         WHERE timestamp >= '{week_ago_str}'
         GROUP BY day
         ORDER BY day
         """
-    ).named_results()
+    )
+    commands_per_day = commands_per_day_res.named_results()
 
     commands_per_day_formatted = [
-        {"date": r["day"][:10] if isinstance(r["day"], str) else str(r["day"])[:10], "count": r["cnt"]}
+        {"date": r["day"][:10] if isinstance(r["day"], str) else str(r["day"])[:10], "count": int(r["cnt"])}
         for r in commands_per_day
     ]
 
@@ -516,8 +585,8 @@ async def get_stats(
         recent_commands=recent_commands,
         recent_unique_attackers=recent_unique_attackers,
         active_sessions=active_sessions,
-        top_intents=[{"intent": r["intent"], "count": r["cnt"]} for r in top_intents],
-        top_countries=[{"country": r["country"], "count": r["cnt"]} for r in top_countries],
+        top_intents=[{"intent": r["intent"], "count": int(r["cnt"])} for r in top_intents],
+        top_countries=[{"country": r["country"], "count": int(r["cnt"])} for r in top_countries],
         threat_distribution=threat_distribution,
         sessions_per_hour=sessions_per_hour_formatted,
         commands_per_day=commands_per_day_formatted,
@@ -532,7 +601,20 @@ async def list_sessions(
     hours: int = Query(24, ge=1, le=87600),  # Allow up to ~10 years for all-time
 ):
     """List recent sessions with filters"""
-    since = datetime.utcnow() - timedelta(hours=hours)
+    try:
+        limit_val = int(limit)
+    except Exception:
+        limit_val = 50
+    try:
+        offset_val = int(offset)
+    except Exception:
+        offset_val = 0
+    try:
+        hours_val = int(hours)
+    except Exception:
+        hours_val = 24
+
+    since = datetime.utcnow() - timedelta(hours=hours_val)
     since_str = since.strftime('%Y-%m-%d %H:%M:%S')
 
     where_clauses = [f"start_time >= '{since_str}'"]
@@ -541,7 +623,7 @@ async def list_sessions(
 
     where_sql = " AND ".join(where_clauses)
 
-    results = clickhouse_client.query(
+    results = (await run_ch_query(
         f"""
         SELECT session_id, start_time, end_time, duration_seconds,
                attacker_ip, country, protocol, commands_executed,
@@ -549,17 +631,17 @@ async def list_sessions(
         FROM clouddecept.sessions
         WHERE {where_sql}
         ORDER BY start_time DESC
-        LIMIT {limit} OFFSET {offset}
+        LIMIT {limit_val} OFFSET {offset_val}
         """
-    ).named_results()
+    )).named_results()
 
     return [SessionSummary(**r) for r in results]
 
 
 @app.get("/sessions/{session_id}", response_model=SessionSummary)
 async def get_session(session_id: str):
-    """Get detailed session info"""
-    result = clickhouse_client.query(
+    """Get detailed session info with accurate unique counts"""
+    result = await run_ch_query(
         f"""
         SELECT session_id, start_time, end_time, duration_seconds,
                attacker_ip, country, protocol, commands_executed,
@@ -569,15 +651,34 @@ async def get_session(session_id: str):
         WHERE session_id = '{session_id}'
         LIMIT 1
         """
-    ).named_results()
+    )
 
-    # Convert generator to list for subscriptable access and truthiness check
-    result_rows = list(result)
-
+    result_rows = list(result.named_results())
     if not result_rows:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    return SessionSummary(**result_rows[0])
+    sess_dict = dict(result_rows[0])
+
+    # Ensure commands_executed and credentials_tried reflect unique events
+    try:
+        actual_cmds = await run_ch_command(
+            f"SELECT uniqExact(event_id) FROM clouddecept.commands WHERE session_id = '{session_id}'"
+        )
+        if actual_cmds is not None:
+            sess_dict["commands_executed"] = int(actual_cmds)
+    except Exception:
+        pass
+
+    try:
+        actual_auth = await run_ch_command(
+            f"SELECT uniqExact(event_id) FROM clouddecept.auth_attempts WHERE session_id = '{session_id}'"
+        )
+        if actual_auth is not None:
+            sess_dict["credentials_tried"] = int(actual_auth)
+    except Exception:
+        pass
+
+    return SessionSummary(**sess_dict)
 
 
 @app.get("/sessions/{session_id}/commands", response_model=list[CommandResponse])
@@ -585,40 +686,47 @@ async def get_session_commands(
     session_id: str,
     limit: int = Query(100, ge=1, le=500),
 ):
-    """Get all commands for a session"""
-    results = clickhouse_client.query(
+    """Get all commands for a session (deduplicated by event_id)"""
+    try:
+        limit_val = int(limit)
+    except Exception:
+        limit_val = 100
+
+    results = (await run_ch_query(
         f"""
         SELECT event_id, session_id, timestamp, command, arguments,
                output, exit_code, duration_ms, intent, mitre_techniques
         FROM clouddecept.commands
         WHERE session_id = '{session_id}'
         ORDER BY timestamp ASC
-        LIMIT {limit}
+        LIMIT 1 BY event_id
+        LIMIT {limit_val}
         """
-    ).named_results()
+    )).named_results()
 
     return [CommandResponse(**r) for r in results]
 
 
 @app.get("/sessions/{session_id}/auth", response_model=list[AuthAttemptResponse])
 async def get_session_auth(session_id: str):
-    """Get all auth attempts for a session"""
-    results = clickhouse_client.query(
+    """Get all auth attempts for a session (deduplicated by event_id)"""
+    results = (await run_ch_query(
         f"""
         SELECT event_id, session_id, timestamp, username, password,
                success, auth_method
         FROM clouddecept.auth_attempts
         WHERE session_id = '{session_id}'
         ORDER BY timestamp ASC
+        LIMIT 1 BY event_id
         """
-    ).named_results()
+    )).named_results()
 
     return [AuthAttemptResponse(**r) for r in results]
 
 
 @app.get("/sessions/{session_id}/summary", response_model=SessionSummaryDetail)
 async def get_session_summary(session_id: str):
-    """Get AI-generated session summary from PostgreSQL"""
+    """Get AI-generated session summary from PostgreSQL, falling back to Threat Intel service on demand"""
     conn = postgres_pool.getconn()
     try:
         with conn.cursor() as cur:
@@ -629,20 +737,138 @@ async def get_session_summary(session_id: str):
                 (session_id,)
             )
             row = cur.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Summary not found")
-
-            return SessionSummaryDetail(
-                session_id=row[0],
-                summary=row[1],
-                intent=row[2],
-                skill_level=row[3],
-                mitre_techniques=row[4] or [],
-                iocs=row[5] or [],
-                created_at=row[6],
-            )
+            if row:
+                return SessionSummaryDetail(
+                    session_id=row[0],
+                    summary=row[1] or "",
+                    intent=row[2] or "unknown",
+                    skill_level=row[3] or 1,
+                    mitre_techniques=row[4] or [],
+                    iocs=row[5] or [],
+                    created_at=row[6] or datetime.utcnow(),
+                )
     finally:
         postgres_pool.putconn(conn)
+
+    # If not found in PostgreSQL, query Threat Intel engine on demand
+    threat_intel_url = os.getenv("THREAT_INTEL_URL", "http://threat-intel:8005")
+    try:
+        # Fetch unique commands for this session from ClickHouse
+        cmd_rows = (await run_ch_query(
+            f"""
+            SELECT event_id, command, output
+            FROM clouddecept.commands
+            WHERE session_id = '{session_id}'
+            ORDER BY timestamp ASC
+            LIMIT 1 BY event_id
+            """
+        )).named_results()
+        commands_list = [
+            {"command": r["command"], "output": r.get("output", "")}
+            for r in cmd_rows
+        ]
+
+        sess_rows = (await run_ch_query(
+            f"""
+            SELECT attacker_ip, country, duration_seconds, intent, skill_level
+            FROM clouddecept.sessions
+            WHERE session_id = '{session_id}'
+            LIMIT 1
+            """
+        )).named_results()
+        sess_data = list(sess_rows)
+        attacker_ip = sess_data[0]["attacker_ip"] if sess_data else "unknown"
+        country = sess_data[0]["country"] if sess_data else "unknown"
+        duration = int(sess_data[0]["duration_seconds"]) if sess_data else 0
+        intent = sess_data[0]["intent"] if sess_data else ""
+        skill_level = int(sess_data[0]["skill_level"]) if sess_data else 1
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{threat_intel_url}/analyze",
+                json={
+                    "session_id": session_id,
+                    "commands": commands_list,
+                    "outputs": [c.get("output", "") for c in commands_list if c.get("output")],
+                    "intent_history": [intent] if intent else [],
+                    "attacker_ip": attacker_ip,
+                    "attacker_country": country,
+                    "duration_seconds": duration,
+                }
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                summary_data = data.get("summary") or {}
+                techs = [
+                    t.get("technique_id")
+                    for t in data.get("techniques", [])
+                    if t.get("technique_id")
+                ]
+                iocs = data.get("iocs", [])
+                summary_text = (
+                    summary_data.get("narrative")
+                    or summary_data.get("techniques_summary")
+                    or f"Session {session_id} analysis completed."
+                )
+                intent_val = summary_data.get("primary_objective") or intent or "unknown"
+                skill_val = int(summary_data.get("skill_level", skill_level or 1))
+                now_dt = datetime.utcnow()
+
+                # Persist to session_summaries in Postgres so subsequent calls are instant
+                try:
+                    conn = postgres_pool.getconn()
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """INSERT INTO session_summaries (session_id, summary, intent, skill_level, mitre_techniques, iocs, created_at)
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                   ON CONFLICT (session_id) DO UPDATE SET
+                                       summary = EXCLUDED.summary,
+                                       intent = EXCLUDED.intent,
+                                       skill_level = EXCLUDED.skill_level,
+                                       mitre_techniques = EXCLUDED.mitre_techniques,
+                                       iocs = EXCLUDED.iocs""",
+                                (session_id, summary_text, intent_val, skill_val, techs, json.dumps(iocs), now_dt)
+                            )
+                            # Also persist techniques to threat_intelligence table
+                            for tech in data.get("techniques", []):
+                                cur.execute(
+                                    """INSERT INTO threat_intelligence (session_id, technique_id, technique_name, tactic, confidence, mitre_techniques, mitre_tactics, severity, context, enrichment, created_at)
+                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                       ON CONFLICT DO NOTHING""",
+                                    (
+                                        session_id,
+                                        tech.get("technique_id", ""),
+                                        tech.get("name", ""),
+                                        tech.get("tactic", ""),
+                                        float(tech.get("confidence", 1.0)),
+                                        [tech.get("technique_id", "")] if tech.get("technique_id") else [],
+                                        [tech.get("tactic", "")] if tech.get("tactic") else [],
+                                        tech.get("severity", "medium"),
+                                        tech.get("trigger", ""),
+                                        json.dumps(tech),
+                                        now_dt,
+                                    )
+                                )
+                            conn.commit()
+                    finally:
+                        postgres_pool.putconn(conn)
+                except Exception as db_err:
+                    logger.warning(f"Failed to cache summary to postgres: {db_err}")
+
+                return SessionSummaryDetail(
+                    session_id=session_id,
+                    summary=summary_text,
+                    intent=intent_val,
+                    skill_level=skill_val,
+                    mitre_techniques=techs,
+                    iocs=iocs,
+                    created_at=now_dt,
+                )
+    except Exception as e:
+        logger.warning(f"On-demand Threat Intel call failed for {session_id}: {e}")
+
+    raise HTTPException(status_code=404, detail="Summary not found")
 
 
 @app.get("/threat-intel", response_model=list[ThreatIntelResponse])
@@ -652,7 +878,26 @@ async def list_threat_intel(
     ioc_type: Optional[str] = None,
 ):
     """List threat intelligence findings"""
-    query = "SELECT id, ioc_type, ioc_value, confidence, mitre_techniques, mitre_tactics, severity, context, enrichment, created_at FROM threat_intelligence WHERE 1=1"
+    try:
+        limit_val = int(limit)
+    except Exception:
+        limit_val = 50
+
+    query = """
+        SELECT
+            id,
+            COALESCE(ioc_type, '') as ioc_type,
+            COALESCE(ioc_value, technique_name, '') as ioc_value,
+            COALESCE(confidence, 0.0) as confidence,
+            COALESCE(mitre_techniques, CASE WHEN technique_id IS NOT NULL AND technique_id != '' THEN ARRAY[technique_id] ELSE ARRAY[]::TEXT[] END) as mitre_techniques,
+            COALESCE(mitre_tactics, CASE WHEN tactic IS NOT NULL AND tactic != '' THEN ARRAY[tactic] ELSE ARRAY[]::TEXT[] END) as mitre_tactics,
+            COALESCE(severity, 'medium') as severity,
+            COALESCE(context, technique_name, '') as context,
+            COALESCE(enrichment, raw_data, '{}'::JSONB) as enrichment,
+            created_at
+        FROM threat_intelligence
+        WHERE 1=1
+    """
     params = []
 
     if severity:
@@ -663,7 +908,7 @@ async def list_threat_intel(
         params.append(ioc_type)
 
     query += " ORDER BY created_at DESC LIMIT %s"
-    params.append(limit)
+    params.append(limit_val)
 
     conn = postgres_pool.getconn()
     try:
@@ -673,15 +918,15 @@ async def list_threat_intel(
             return [
                 ThreatIntelResponse(
                     id=str(r[0]),
-                    ioc_type=r[1],
-                    ioc_value=r[2],
-                    confidence=float(r[3]),
+                    ioc_type=r[1] or "",
+                    ioc_value=r[2] or "",
+                    confidence=float(r[3] or 0.0),
                     mitre_techniques=r[4] or [],
                     mitre_tactics=r[5] or [],
-                    severity=r[6],
-                    context=r[7],
-                    enrichment=r[8] or {},
-                    created_at=r[9],
+                    severity=r[6] or "medium",
+                    context=r[7] or "",
+                    enrichment=r[8] if isinstance(r[8], dict) else {},
+                    created_at=r[9] or datetime.utcnow(),
                 )
                 for r in rows
             ]
@@ -691,34 +936,54 @@ async def list_threat_intel(
 
 @app.get("/mitre/techniques")
 async def list_mitre_techniques():
-    """Get MITRE ATT&CK techniques from threat intel"""
-    query = """
-        SELECT mitre_techniques, count() as freq
-        FROM threat_intelligence
-        WHERE array_length(mitre_techniques, 1) > 0
-        GROUP BY mitre_techniques
-        ORDER BY freq DESC
-        LIMIT 50
-    """
-    # This is a bit complex for SQL, fetch and process in Python
-    conn = postgres_pool.getconn()
+    """Get MITRE ATT&CK techniques from threat intel and ClickHouse"""
+    technique_counts = {}
+
+    # 1. Try PostgreSQL threat_intelligence
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT mitre_techniques FROM threat_intelligence WHERE array_length(mitre_techniques, 1) > 0")
-            rows = cur.fetchall()
+        conn = postgres_pool.getconn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COALESCE(mitre_techniques, CASE WHEN technique_id IS NOT NULL AND technique_id != '' THEN ARRAY[technique_id] ELSE ARRAY[]::TEXT[] END)
+                    FROM threat_intelligence
+                    """
+                )
+                rows = cur.fetchall()
+                for row in rows:
+                    if row and row[0]:
+                        for tech in row[0]:
+                            technique_counts[tech] = technique_counts.get(tech, 0) + 1
+        finally:
+            postgres_pool.putconn(conn)
+    except Exception as e:
+        logger.warning(f"Failed to query postgres for mitre techniques: {e}")
 
-        technique_counts = {}
-        for row in rows:
-            for tech in row[0]:
-                technique_counts[tech] = technique_counts.get(tech, 0) + 1
+    # 2. Also aggregate from ClickHouse commands (which has mitre_techniques)
+    if clickhouse_client:
+        try:
+            ch_res = await run_ch_query(
+                """
+                SELECT arrayJoin(mitre_techniques) as tech, uniqExact(event_id) as cnt
+                FROM clouddecept.commands
+                WHERE notEmpty(mitre_techniques)
+                GROUP BY tech
+                ORDER BY cnt DESC
+                LIMIT 50
+                """
+            )
+            for r in ch_res.named_results():
+                tech = r["tech"]
+                technique_counts[tech] = technique_counts.get(tech, 0) + int(r["cnt"])
+        except Exception as e:
+            logger.warning(f"Failed to query ClickHouse for mitre techniques: {e}")
 
-        sorted_techniques = sorted(
-            technique_counts.items(), key=lambda x: x[1], reverse=True
-        )[:50]
+    sorted_techniques = sorted(
+        technique_counts.items(), key=lambda x: x[1], reverse=True
+    )[:50]
 
-        return [{"technique": t, "count": c} for t, c in sorted_techniques]
-    finally:
-        postgres_pool.putconn(conn)
+    return [{"technique": t, "count": c} for t, c in sorted_techniques]
 
 
 @app.get("/attackers/top")
@@ -727,10 +992,19 @@ async def top_attackers(
     hours: int = Query(168, ge=1, le=720),
 ):
     """Get top attackers by session count"""
-    since = datetime.utcnow() - timedelta(hours=hours)
+    try:
+        limit_val = int(limit)
+    except Exception:
+        limit_val = 20
+    try:
+        hours_val = int(hours)
+    except Exception:
+        hours_val = 168
+
+    since = datetime.utcnow() - timedelta(hours=hours_val)
     since_str = since.strftime('%Y-%m-%d %H:%M:%S')
 
-    results = clickhouse_client.query(
+    results = (await run_ch_query(
         f"""
         SELECT attacker_ip, country, count() as sessions,
                uniq(session_id) as unique_sessions,
@@ -739,11 +1013,11 @@ async def top_attackers(
         WHERE start_time >= '{since_str}'
         GROUP BY attacker_ip, country
         ORDER BY sessions DESC
-        LIMIT {limit}
+        LIMIT {limit_val}
         """
-    ).named_results()
+    )).named_results()
 
-    return results
+    return list(results)
 
 
 @app.get("/commands/top")
@@ -751,23 +1025,32 @@ async def top_commands(
     limit: int = Query(20, ge=1, le=100),
     hours: int = Query(24, ge=1, le=168),
 ):
-    """Get most executed commands"""
-    since = datetime.utcnow() - timedelta(hours=hours)
+    """Get most executed commands (deduplicated by event_id)"""
+    try:
+        limit_val = int(limit)
+    except Exception:
+        limit_val = 20
+    try:
+        hours_val = int(hours)
+    except Exception:
+        hours_val = 24
+
+    since = datetime.utcnow() - timedelta(hours=hours_val)
     since_str = since.strftime('%Y-%m-%d %H:%M:%S')
 
-    results = clickhouse_client.query(
+    results = (await run_ch_query(
         f"""
-        SELECT command, count() as executions,
+        SELECT command, uniqExact(event_id) as executions,
                uniq(session_id) as unique_sessions
         FROM clouddecept.commands
         WHERE timestamp >= '{since_str}'
         GROUP BY command
         ORDER BY executions DESC
-        LIMIT {limit}
+        LIMIT {limit_val}
         """
-    ).named_results()
+    )).named_results()
 
-    return results
+    return list(results)
 
 
 @app.post("/search/sessions")
@@ -776,15 +1059,20 @@ async def search_sessions(
     limit: int = Query(50, ge=1, le=200),
 ):
     """Full-text search across sessions (commands, IPs, etc.)"""
+    try:
+        limit_val = int(limit)
+    except Exception:
+        limit_val = 50
+
     # Search in commands
-    cmd_results = clickhouse_client.query(
+    cmd_results = (await run_ch_query(
         f"""
         SELECT DISTINCT session_id
         FROM clouddecept.commands
         WHERE command ILIKE '%{query}%' OR output ILIKE '%{query}%'
-        LIMIT {limit}
+        LIMIT {limit_val}
         """
-    ).named_results()
+    )).named_results()
 
     session_ids = [r["session_id"] for r in cmd_results]
 
@@ -793,7 +1081,7 @@ async def search_sessions(
 
     # Get session details
     placeholders = ",".join(f"'{sid}'" for sid in session_ids)
-    sessions = clickhouse_client.query(
+    sessions = (await run_ch_query(
         f"""
         SELECT session_id, start_time, end_time, duration_seconds,
                attacker_ip, country, protocol, commands_executed,
@@ -802,9 +1090,9 @@ async def search_sessions(
         WHERE session_id IN ({placeholders})
         ORDER BY start_time DESC
         """
-    ).named_results()
+    )).named_results()
 
-    return sessions
+    return list(sessions)
 
 
 if __name__ == "__main__":

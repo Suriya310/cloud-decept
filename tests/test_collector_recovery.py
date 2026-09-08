@@ -774,14 +774,20 @@ class MockClickHouseStore:
                     return 1
             return 0
 
-        if "SELECT count() FROM" in sql_str and "commands" in sql_str:
+        if ("SELECT count() FROM" in sql_str or "SELECT uniqExact(event_id) FROM" in sql_str) and "commands" in sql_str:
+            if "uniqExact" in sql_str:
+                events = {c[0] for c in self.commands if c[1] in sql_str}
+                return len(events)
             count = 0
             for c in self.commands:
                 if c[1] in sql_str:
                     count += 1
             return count
 
-        if "SELECT count() FROM" in sql_str and "auth_attempts" in sql_str:
+        if ("SELECT count() FROM" in sql_str or "SELECT uniqExact(event_id) FROM" in sql_str) and "auth_attempts" in sql_str:
+            if "uniqExact" in sql_str:
+                events = {a[0] for a in self.auth_attempts if a[1] in sql_str}
+                return len(events)
             count = 0
             for a in self.auth_attempts:
                 if a[1] in sql_str:

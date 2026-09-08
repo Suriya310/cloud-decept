@@ -609,8 +609,8 @@ class EventCollector:
                         duration = max(0, int(round(dur_sec)))
 
                 # Count commands and auth attempts recorded for this session (includes newly inserted)
-                cmd_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.commands WHERE session_id = '{sid}'"))
-                auth_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.auth_attempts WHERE session_id = '{sid}'"))
+                cmd_cnt = safe_int(self.clickhouse_client.command(f"SELECT uniqExact(event_id) FROM {self.clickhouse_db}.commands WHERE session_id = '{sid}'"))
+                auth_cnt = safe_int(self.clickhouse_client.command(f"SELECT uniqExact(event_id) FROM {self.clickhouse_db}.auth_attempts WHERE session_id = '{sid}'"))
 
                 # Cache ended session info
                 self._record_ended_session(sid, end_time, duration, disconnection_reason)
@@ -661,8 +661,8 @@ class EventCollector:
                     except Exception as e:
                         logger.debug(f"Could not recompute duration for {sid}: {e}")
 
-                cmd_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.commands WHERE session_id = '{sid}'"))
-                auth_cnt = safe_int(self.clickhouse_client.command(f"SELECT count() FROM {self.clickhouse_db}.auth_attempts WHERE session_id = '{sid}'"))
+                cmd_cnt = safe_int(self.clickhouse_client.command(f"SELECT uniqExact(event_id) FROM {self.clickhouse_db}.commands WHERE session_id = '{sid}'"))
+                auth_cnt = safe_int(self.clickhouse_client.command(f"SELECT uniqExact(event_id) FROM {self.clickhouse_db}.auth_attempts WHERE session_id = '{sid}'"))
 
                 updates = [
                     f"commands_executed = {cmd_cnt}",
@@ -1087,7 +1087,7 @@ async def update_session(request: SessionUpdateRequest):
                 try:
                     cmd_res = await asyncio.to_thread(
                         collector.clickhouse_client.command,
-                        f"SELECT count() FROM {collector.clickhouse_db}.commands WHERE session_id = '{request.session_id}'"
+                        f"SELECT uniqExact(event_id) FROM {collector.clickhouse_db}.commands WHERE session_id = '{request.session_id}'"
                     )
                     actual_cmds = EventCollector._safe_int(cmd_res)
                     effective_cmds = max(request.commands_executed, actual_cmds)
@@ -1103,7 +1103,7 @@ async def update_session(request: SessionUpdateRequest):
                 try:
                     auth_res = await asyncio.to_thread(
                         collector.clickhouse_client.command,
-                        f"SELECT count() FROM {collector.clickhouse_db}.auth_attempts WHERE session_id = '{request.session_id}'"
+                        f"SELECT uniqExact(event_id) FROM {collector.clickhouse_db}.auth_attempts WHERE session_id = '{request.session_id}'"
                     )
                     actual_auth = EventCollector._safe_int(auth_res)
                     effective_auth = max(request.credentials_tried, actual_auth)

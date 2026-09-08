@@ -12,8 +12,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
+import urllib.request
+import urllib.error
+
 import clickhouse_connect
-import httpx
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, ConfigDict
@@ -38,6 +40,19 @@ async def run_ch_command(command: str):
     """Safely execute a ClickHouse command using the shared client with lock."""
     async with clickhouse_lock:
         return await asyncio.to_thread(clickhouse_client.command, command)
+
+
+def _query_threat_intel_service(url: str, payload: dict) -> dict:
+    """Synchronous HTTP POST to threat-intel service via urllib."""
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10.0) as resp:
+        if resp.status == 200:
+            return json.loads(resp.read().decode("utf-8"))
+    return {}
 
 
 async def init_databases():
@@ -783,88 +798,88 @@ async def get_session_summary(session_id: str):
         intent = sess_data[0]["intent"] if sess_data else ""
         skill_level = int(sess_data[0]["skill_level"]) if sess_data else 1
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{threat_intel_url}/analyze",
-                json={
-                    "session_id": session_id,
-                    "commands": commands_list,
-                    "outputs": [c.get("output", "") for c in commands_list if c.get("output")],
-                    "intent_history": [intent] if intent else [],
-                    "attacker_ip": attacker_ip,
-                    "attacker_country": country,
-                    "duration_seconds": duration,
-                }
+        payload = {
+            "session_id": session_id,
+            "commands": commands_list,
+            "outputs": [c.get("output", "") for c in commands_list if c.get("output")],
+            "intent_history": [intent] if intent else [],
+            "attacker_ip": attacker_ip,
+            "attacker_country": country,
+            "duration_seconds": duration,
+        }
+        data = await asyncio.to_thread(
+            _query_threat_intel_service,
+            f"{threat_intel_url}/analyze",
+            payload,
+        )
+        if data:
+            summary_data = data.get("summary") or {}
+            techs = [
+                t.get("technique_id")
+                for t in data.get("techniques", [])
+                if t.get("technique_id")
+            ]
+            iocs = data.get("iocs", [])
+            summary_text = (
+                summary_data.get("narrative")
+                or summary_data.get("techniques_summary")
+                or f"Session {session_id} analysis completed."
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                summary_data = data.get("summary") or {}
-                techs = [
-                    t.get("technique_id")
-                    for t in data.get("techniques", [])
-                    if t.get("technique_id")
-                ]
-                iocs = data.get("iocs", [])
-                summary_text = (
-                    summary_data.get("narrative")
-                    or summary_data.get("techniques_summary")
-                    or f"Session {session_id} analysis completed."
-                )
-                intent_val = summary_data.get("primary_objective") or intent or "unknown"
-                skill_val = int(summary_data.get("skill_level", skill_level or 1))
-                now_dt = datetime.utcnow()
+            intent_val = summary_data.get("primary_objective") or intent or "unknown"
+            skill_val = int(summary_data.get("skill_level", skill_level or 1))
+            now_dt = datetime.utcnow()
 
-                # Persist to session_summaries in Postgres so subsequent calls are instant
+            # Persist to session_summaries in Postgres so subsequent calls are instant
+            try:
+                conn = postgres_pool.getconn()
                 try:
-                    conn = postgres_pool.getconn()
-                    try:
-                        with conn.cursor() as cur:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """INSERT INTO session_summaries (session_id, summary, intent, skill_level, mitre_techniques, iocs, created_at)
+                               VALUES (%s, %s, %s, %s, %s, %s, %s)
+                               ON CONFLICT (session_id) DO UPDATE SET
+                                   summary = EXCLUDED.summary,
+                                   intent = EXCLUDED.intent,
+                                   skill_level = EXCLUDED.skill_level,
+                                   mitre_techniques = EXCLUDED.mitre_techniques,
+                                   iocs = EXCLUDED.iocs""",
+                            (session_id, summary_text, intent_val, skill_val, techs, json.dumps(iocs), now_dt)
+                        )
+                        # Also persist techniques to threat_intelligence table
+                        for tech in data.get("techniques", []):
                             cur.execute(
-                                """INSERT INTO session_summaries (session_id, summary, intent, skill_level, mitre_techniques, iocs, created_at)
-                                   VALUES (%s, %s, %s, %s, %s, %s, %s)
-                                   ON CONFLICT (session_id) DO UPDATE SET
-                                       summary = EXCLUDED.summary,
-                                       intent = EXCLUDED.intent,
-                                       skill_level = EXCLUDED.skill_level,
-                                       mitre_techniques = EXCLUDED.mitre_techniques,
-                                       iocs = EXCLUDED.iocs""",
-                                (session_id, summary_text, intent_val, skill_val, techs, json.dumps(iocs), now_dt)
-                            )
-                            # Also persist techniques to threat_intelligence table
-                            for tech in data.get("techniques", []):
-                                cur.execute(
-                                    """INSERT INTO threat_intelligence (session_id, technique_id, technique_name, tactic, confidence, mitre_techniques, mitre_tactics, severity, context, enrichment, created_at)
-                                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                       ON CONFLICT DO NOTHING""",
-                                    (
-                                        session_id,
-                                        tech.get("technique_id", ""),
-                                        tech.get("name", ""),
-                                        tech.get("tactic", ""),
-                                        float(tech.get("confidence", 1.0)),
-                                        [tech.get("technique_id", "")] if tech.get("technique_id") else [],
-                                        [tech.get("tactic", "")] if tech.get("tactic") else [],
-                                        tech.get("severity", "medium"),
-                                        tech.get("trigger", ""),
-                                        json.dumps(tech),
-                                        now_dt,
-                                    )
+                                """INSERT INTO threat_intelligence (session_id, technique_id, technique_name, tactic, confidence, mitre_techniques, mitre_tactics, severity, context, enrichment, created_at)
+                                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                   ON CONFLICT DO NOTHING""",
+                                (
+                                    session_id,
+                                    tech.get("technique_id", ""),
+                                    tech.get("name", ""),
+                                    tech.get("tactic", ""),
+                                    float(tech.get("confidence", 1.0)),
+                                    [tech.get("technique_id", "")] if tech.get("technique_id") else [],
+                                    [tech.get("tactic", "")] if tech.get("tactic") else [],
+                                    tech.get("severity", "medium"),
+                                    tech.get("trigger", ""),
+                                    json.dumps(tech),
+                                    now_dt,
                                 )
-                            conn.commit()
-                    finally:
-                        postgres_pool.putconn(conn)
-                except Exception as db_err:
-                    logger.warning(f"Failed to cache summary to postgres: {db_err}")
+                            )
+                        conn.commit()
+                finally:
+                    postgres_pool.putconn(conn)
+            except Exception as db_err:
+                logger.warning(f"Failed to cache summary to postgres: {db_err}")
 
-                return SessionSummaryDetail(
-                    session_id=session_id,
-                    summary=summary_text,
-                    intent=intent_val,
-                    skill_level=skill_val,
-                    mitre_techniques=techs,
-                    iocs=iocs,
-                    created_at=now_dt,
-                )
+            return SessionSummaryDetail(
+                session_id=session_id,
+                summary=summary_text,
+                intent=intent_val,
+                skill_level=skill_val,
+                mitre_techniques=techs,
+                iocs=iocs,
+                created_at=now_dt,
+            )
     except Exception as e:
         logger.warning(f"On-demand Threat Intel call failed for {session_id}: {e}")
 

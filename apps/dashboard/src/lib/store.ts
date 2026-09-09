@@ -27,7 +27,7 @@ interface ConnectionStatus {
 
 interface DashboardActions {
   // Sessions
-  fetchSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string }) => Promise<void>;
+  fetchSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string; min_skill_level?: number }) => Promise<void>;
   fetchSession: (sessionId: string) => Promise<void>;
   fetchSessionCommands: (sessionId: string) => Promise<void>;
   fetchSessionAuth: (sessionId: string) => Promise<void>;
@@ -45,7 +45,7 @@ interface DashboardActions {
   fetchStats: (hours?: number) => Promise<void>;
   fetchAllTimeStats: () => Promise<void>;
 
-  // Connection status (unified)
+  // Connection status
   fetchConnectionStatus: () => Promise<ConnectionStatus>;
   connectionStatus: ConnectionStatus | null;
 
@@ -70,17 +70,18 @@ const defaultFilters = {
 };
 
 // Transform backend session data to include UI-compatible fields
-function transformSession(s: any): Session {
+export function transformSession(s: any): Session {
+  const isClosed = s.end_time && !String(s.end_time).startsWith('1970');
   return {
     ...s,
-    // Map backend fields to UI-expected fields
     src_ip: s.attacker_ip,
     src_country: s.country,
     command_count: s.commands_executed ?? 0,
     intent_history: s.intent ? [s.intent] : [],
-    threat_score: s.skill_level ? Math.min(s.skill_level * 10, 100) : 0,
+    skill_level: typeof s.skill_level === 'number' ? s.skill_level : 0,
+    threat_score: typeof s.skill_level === 'number' ? s.skill_level : 0,
     tactics: [],
-    status: s.end_time ? 'closed' : 'active',
+    status: isClosed ? 'closed' : 'active',
     auth_success: s.credentials_tried && s.credentials_tried > 0 ? (s.commands_executed > 0) : undefined,
   };
 }
@@ -97,6 +98,10 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   topCommands: [],
   topAttackers: [],
   stats: null,
+  statsLoading: false,
+  statsError: null,
+  sessionsLoading: false,
+  sessionsError: null,
   realTimeEvents: [],
   isConnected: false,
   connectionStatus: null,
@@ -104,13 +109,14 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
 
   // Actions
   fetchSessions: async (params) => {
+    set({ sessionsLoading: true, sessionsError: null });
     try {
       const data = await api.getSessions(params);
       const transformed = (data.sessions || []).map(transformSession);
-      set({ sessions: transformed });
-    } catch (error) {
+      set({ sessions: transformed, sessionsLoading: false, sessionsError: null });
+    } catch (error: any) {
       console.error('Failed to fetch sessions:', error);
-      set({ sessions: [] });
+      set({ sessions: [], sessionsLoading: false, sessionsError: error?.message || 'Failed to load sessions' });
     }
   },
 
@@ -218,24 +224,19 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
     }
   },
 
-  fetchStats: async (hours?: number) => {
+  fetchStats: async (hours: number = 24) => {
+    set({ statsLoading: true, statsError: null });
     try {
       const data = await api.getStats(hours);
-      set({ stats: data });
-    } catch (error) {
+      set({ stats: data, statsLoading: false, statsError: null });
+    } catch (error: any) {
       console.error('Failed to fetch stats:', error);
-      set({ stats: null });
+      set({ statsLoading: false, statsError: error?.message || 'Failed to load statistics' });
     }
   },
 
   fetchAllTimeStats: async () => {
-    try {
-      const data = await api.getStats(87600);
-      set({ stats: data });
-    } catch (error) {
-      console.error('Failed to fetch all-time stats:', error);
-      set({ stats: null });
-    }
+    return get().fetchStats(24);
   },
 
   // Unified connection status

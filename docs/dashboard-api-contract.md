@@ -98,29 +98,34 @@ graph LR
       { "level": "Critical", "count": 3 },
       { "level": "High", "count": 8 },
       { "level": "Medium", "count": 14 },
-      { "level": "Low", "count": 17 }
+      { "level": "Low", "count": 17 },
+      { "level": "Unclassified", "count": 105 }
     ],
     "sessions_per_hour": [
       { "hour": "00:00", "count": 2 }
     ],
     "commands_per_day": [
       { "date": "2026-09-08", "count": 45 }
+    ],
+    "sessions_per_day": [
+      { "date": "2026-09-08", "count": 12 }
     ]
   }
   ```
-- **Dashboard Consumers**: `page.tsx` (StatCards), `analytics/page.tsx` (Recharts time series).
+- **Dashboard Consumers**: `useDashboardStats.ts`, `page.tsx` (StatCards & GeographicMap), `analytics/page.tsx` (Recharts time series).
 
 ---
 
 ### 3.3 Sessions Listing
 
-- **Endpoint**: `GET /sessions?limit=50&offset=0&intent=...&hours=24`
+- **Endpoint**: `GET /sessions?limit=50&offset=0&intent=...&hours=24&min_skill_level=5`
 - **Purpose**: Paginated list of honeypot sessions.
 - **Query Parameters**:
   - `limit` (int, 1-500, default: 50)
   - `offset` (int, default: 0)
   - `intent` (string, optional)
   - `hours` (int, 1-87600, default: 24)
+  - `min_skill_level` (int, 0-10, optional): Filters sessions by minimum adversary skill level (e.g. 5 for high-risk threats).
 - **Response Format**: Direct JSON array `list[SessionSummary]`:
   ```json
   [

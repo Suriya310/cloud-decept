@@ -383,6 +383,7 @@ class StatsResponse(BaseModel):
     threat_distribution: list[dict]
     sessions_per_hour: list[dict]
     commands_per_day: list[dict]
+    sessions_per_day: list[dict] = []
 
 
 class HealthResponse(BaseModel):
@@ -505,7 +506,7 @@ async def get_stats(
     top_intents = top_intents_res.named_results()
 
     # ============================================================
-    # TOP COUNTRIES (all-time)
+    # TOP COUNTRIES (all-time, top 50 for full geographic coverage)
     # ============================================================
     top_countries_res = await run_ch_query(
         """
@@ -514,7 +515,7 @@ async def get_stats(
         WHERE country != '' AND country IS NOT NULL
         GROUP BY country
         ORDER BY cnt DESC
-        LIMIT 10
+        LIMIT 50
         """
     )
     top_countries = top_countries_res.named_results()
@@ -523,16 +524,16 @@ async def get_stats(
     # THREAT DISTRIBUTION (based on skill_level)
     # ============================================================
     # skill_level: 1-10, map to threat levels
-    # 1-2: Low, 3-4: Medium, 5-7: High, 8-10: Critical
+    # 1-2: Low, 3-4: Medium, 5-7: High, 8-10: Critical, 0: Unclassified
     threat_dist_res = await run_ch_query(
         """
         SELECT
             sum(if(skill_level >= 8, 1, 0)) as critical,
             sum(if(skill_level >= 5 AND skill_level < 8, 1, 0)) as high,
             sum(if(skill_level >= 3 AND skill_level < 5, 1, 0)) as medium,
-            sum(if(skill_level < 3 AND skill_level > 0, 1, 0)) as low
+            sum(if(skill_level < 3 AND skill_level > 0, 1, 0)) as low,
+            sum(if(skill_level = 0, 1, 0)) as unclassified
         FROM clouddecept.sessions
-        WHERE skill_level IS NOT NULL
         """
     )
     threat_dist = threat_dist_res.named_results()
@@ -544,10 +545,11 @@ async def get_stats(
     if threat_rows:
         row = threat_rows[0]
         threat_distribution = [
-            {"level": "Critical", "count": int(row["critical"] or 0)},
-            {"level": "High", "count": int(row["high"] or 0)},
-            {"level": "Medium", "count": int(row["medium"] or 0)},
-            {"level": "Low", "count": int(row["low"] or 0)},
+            {"level": "Critical", "count": int(row.get("critical") or 0)},
+            {"level": "High", "count": int(row.get("high") or 0)},
+            {"level": "Medium", "count": int(row.get("medium") or 0)},
+            {"level": "Low", "count": int(row.get("low") or 0)},
+            {"level": "Unclassified", "count": int(row.get("unclassified") or 0)},
         ]
 
     # ============================================================
@@ -588,8 +590,33 @@ async def get_stats(
     commands_per_day = commands_per_day_res.named_results()
 
     commands_per_day_formatted = [
-        {"date": r["day"][:10] if isinstance(r["day"], str) else str(r["day"])[:10], "count": int(r["cnt"])}
+        {
+            "date": (r.get("day") or r.get("date") or "")[:10] if isinstance(r.get("day") or r.get("date"), str) else str(r.get("day") or r.get("date") or "")[:10],
+            "count": int(r.get("cnt", r.get("count", 0)))
+        }
         for r in commands_per_day
+    ]
+
+    # ============================================================
+    # SESSIONS PER DAY (last 7 days, authoritative deduplicated count)
+    # ============================================================
+    sessions_per_day_res = await run_ch_query(
+        f"""
+        SELECT
+            toDate(start_time) as day,
+            uniqExact(session_id) as cnt
+        FROM clouddecept.sessions
+        WHERE start_time >= '{week_ago_str}'
+        GROUP BY day
+        ORDER BY day
+        """
+    )
+    sessions_per_day_formatted = [
+        {
+            "date": (r.get("day") or r.get("date") or "")[:10] if isinstance(r.get("day") or r.get("date"), str) else str(r.get("day") or r.get("date") or "")[:10],
+            "count": int(r.get("cnt", r.get("count", 0)))
+        }
+        for r in sessions_per_day_res.named_results()
     ]
 
     return StatsResponse(
@@ -600,11 +627,12 @@ async def get_stats(
         recent_commands=recent_commands,
         recent_unique_attackers=recent_unique_attackers,
         active_sessions=active_sessions,
-        top_intents=[{"intent": r["intent"], "count": int(r["cnt"])} for r in top_intents],
-        top_countries=[{"country": r["country"], "count": int(r["cnt"])} for r in top_countries],
+        top_intents=[{"intent": r.get("intent", ""), "count": int(r.get("cnt", r.get("count", 0)))} for r in top_intents],
+        top_countries=[{"country": r.get("country", ""), "count": int(r.get("cnt", r.get("count", 0)))} for r in top_countries],
         threat_distribution=threat_distribution,
         sessions_per_hour=sessions_per_hour_formatted,
         commands_per_day=commands_per_day_formatted,
+        sessions_per_day=sessions_per_day_formatted,
     )
 
 
@@ -613,6 +641,7 @@ async def list_sessions(
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     intent: Optional[str] = None,
+    min_skill_level: Optional[int] = None,
     hours: int = Query(24, ge=1, le=87600),  # Allow up to ~10 years for all-time
 ):
     """List recent sessions with filters"""
@@ -635,6 +664,8 @@ async def list_sessions(
     where_clauses = [f"start_time >= '{since_str}'"]
     if intent:
         where_clauses.append(f"intent = '{intent}'")
+    if min_skill_level is not None:
+        where_clauses.append(f"skill_level >= {int(min_skill_level)}")
 
     where_sql = " AND ".join(where_clauses)
 
@@ -1021,7 +1052,7 @@ async def list_mitre_techniques():
 @app.get("/attackers/top")
 async def top_attackers(
     limit: int = Query(20, ge=1, le=100),
-    hours: int = Query(168, ge=1, le=720),
+    hours: int = Query(168, ge=1, le=87600),
 ):
     """Get top attackers by session count"""
     try:
@@ -1055,7 +1086,7 @@ async def top_attackers(
 @app.get("/commands/top")
 async def top_commands(
     limit: int = Query(20, ge=1, le=100),
-    hours: int = Query(24, ge=1, le=168),
+    hours: int = Query(24, ge=1, le=87600),
 ):
     """Get most executed commands (deduplicated by event_id)"""
     try:

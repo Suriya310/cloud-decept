@@ -1,25 +1,27 @@
 'use client';
 
-import { cn, formatTimestamp, getIntentColor } from '@/lib/utils';
-import { useDashboardStore } from '@/lib/store';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
+import Link from 'next/link';
 import {
   Search,
   Filter,
   ChevronLeft,
   ChevronRight,
   Download,
-  Eye,
   Terminal,
   Copy,
   Check,
   ChevronDown,
   ChevronUp,
+  RefreshCw,
 } from 'lucide-react';
-import Link from 'next/link';
+import { cn, formatTimestamp, getIntentColor } from '@/lib/utils';
+import { useDashboardStore } from '@/lib/store';
+import { normalizeIntent } from '@/lib/intents';
+import { safeCopyToClipboard } from '@/lib/clipboard';
 
 export default function CommandsPage() {
-  const { sessions, fetchSessions, commands, fetchSessionCommands } = useDashboardStore();
+  const { sessions, fetchSessions, commands, fetchSessionCommands, stats } = useDashboardStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -32,7 +34,9 @@ export default function CommandsPage() {
   }, [fetchSessions]);
 
   const sessionsArray = sessions ?? [];
-  const sessionOptions = sessionsArray.filter((s) => (s.command_count ?? 0) > 0);
+  const sessionOptions = useMemo(() => {
+    return sessionsArray.filter((s) => (s.command_count ?? 0) > 0);
+  }, [sessionsArray]);
 
   // Auto-select first session with commands if none selected
   useEffect(() => {
@@ -49,25 +53,33 @@ export default function CommandsPage() {
 
   const commandsArray = commands ?? [];
 
-  const filteredCommands = commandsArray.filter((cmd) => {
-    const matchesSearch =
-      cmd.command.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (cmd.output?.toLowerCase() ?? '').includes(searchQuery.toLowerCase()) ||
-      (cmd.intent?.toLowerCase() ?? '').includes(searchQuery.toLowerCase());
-    return matchesSearch;
-  });
+  const filteredCommands = useMemo(() => {
+    return commandsArray.filter((cmd) => {
+      const q = searchQuery.toLowerCase();
+      const matchesSearch =
+        !q ||
+        cmd.command.toLowerCase().includes(q) ||
+        (cmd.output?.toLowerCase() ?? '').includes(q) ||
+        (cmd.intent?.toLowerCase() ?? '').includes(q);
+      return matchesSearch;
+    });
+  }, [commandsArray, searchQuery]);
 
-  const totalPages = Math.ceil(filteredCommands.length / commandsPerPage);
-  const paginatedCommands = filteredCommands.slice(
-    (currentPage - 1) * commandsPerPage,
-    currentPage * commandsPerPage
-  );
+  const totalPages = Math.max(1, Math.ceil(filteredCommands.length / commandsPerPage));
+  const paginatedCommands = useMemo(() => {
+    return filteredCommands.slice(
+      (currentPage - 1) * commandsPerPage,
+      currentPage * commandsPerPage
+    );
+  }, [filteredCommands, currentPage, commandsPerPage]);
 
-  const copyToClipboard = (text: string, key: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 2000);
-  };
+  const copyToClipboard = useCallback(async (text: string, key: string) => {
+    const ok = await safeCopyToClipboard(text);
+    if (ok) {
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 2000);
+    }
+  }, []);
 
   const toggleCommand = (cmdId: string) => {
     setExpandedCommands((prev) => {
@@ -84,16 +96,19 @@ export default function CommandsPage() {
   const exportToCSV = () => {
     if (filteredCommands.length === 0) return;
     const headers = ['Time', 'Session ID', 'Command', 'Status', 'Intent', 'Output'];
-    const rows = filteredCommands.map(c => [
+    const rows = filteredCommands.map((c) => [
       c.timestamp ?? '',
       c.session_id ?? '',
       c.command ?? '',
       c.success || c.exit_code === 0 ? 'Success' : 'Failed',
-      c.intent ?? '',
+      normalizeIntent(c.intent).label,
       (c.output ?? '').replace(/\n/g, ' '),
     ]);
 
-    const csvContent = [headers.join(','), ...rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))].join('\n');
+    const csvContent = [
+      headers.join(','),
+      ...rows.map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')),
+    ].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -110,7 +125,7 @@ export default function CommandsPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Captured Commands</h1>
           <p className="text-gray-500 mt-1">
-            {commandsArray.length} commands for current session ({sessionOptions.length} active command sessions)
+            {commandsArray.length} commands captured in selected session ({sessionOptions.length} sessions with activity)
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -120,14 +135,20 @@ export default function CommandsPage() {
               type="search"
               placeholder="Search command or output..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-64 pl-10 pr-4 py-2 text-sm bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             />
           </div>
           <select
             value={selectedSessionId || ''}
-            onChange={(e) => setSelectedSessionId(e.target.value)}
-            className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white max-w-[260px]"
+            onChange={(e) => {
+              setSelectedSessionId(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white max-w-[280px]"
           >
             {sessionOptions.length === 0 && <option value="">No sessions with commands</option>}
             {sessionOptions.map((session) => (
@@ -143,7 +164,7 @@ export default function CommandsPage() {
             title="Export commands to CSV"
           >
             <Download className="w-4 h-4 text-gray-500" />
-            Export
+            Export CSV
           </button>
         </div>
       </div>
@@ -166,51 +187,58 @@ export default function CommandsPage() {
               {paginatedCommands.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-4 py-12 text-center text-gray-500">
-                    No commands found. Select another session or adjust search query.
+                    No commands found for the selected session.
                   </td>
                 </tr>
               ) : (
                 paginatedCommands.map((cmd, index) => {
                   const cmdKey = cmd.event_id || cmd.id || `cmd-${index}`;
                   const isExpanded = expandedCommands.has(cmdKey);
+                  const normIntent = normalizeIntent(cmd.intent);
+
                   return (
                     <tr key={cmdKey} className={cn(isExpanded && 'bg-gray-50')}>
-                      <td className="text-sm text-gray-500 font-mono whitespace-nowrap">
+                      <td className="text-xs text-gray-500 font-mono whitespace-nowrap">
                         {formatTimestamp(cmd.timestamp)}
                       </td>
                       <td>
-                        <Link href={`/sessions/${cmd.session_id}`} className="font-mono text-xs text-primary-600 hover:underline">
+                        <Link
+                          href={`/sessions/${cmd.session_id}`}
+                          className="font-mono text-xs text-primary-600 hover:underline"
+                        >
                           {cmd.session_id.slice(0, 10)}...
                         </Link>
                       </td>
                       <td className="max-w-xs">
-                        <code className="text-sm font-mono text-gray-900 truncate block">
+                        <code className="text-xs font-mono text-gray-900 truncate block font-semibold">
                           {cmd.command}
                         </code>
                       </td>
                       <td>
                         <span
                           className={cn(
-                            'badge',
-                            cmd.success || cmd.exit_code === 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                            'badge text-xs',
+                            cmd.success || cmd.exit_code === 0
+                              ? 'bg-green-100 text-green-800'
+                              : 'bg-red-100 text-red-800'
                           )}
                         >
                           {cmd.success || cmd.exit_code === 0 ? 'Success' : 'Failed'}
                         </span>
                       </td>
                       <td>
-                        {cmd.intent ? (
-                          <span className={cn('badge text-xs', getIntentColor(cmd.intent))}>
-                            {cmd.intent.replace(/_/g, ' ')}
-                          </span>
-                        ) : (
-                          <span className="text-gray-400 text-xs">—</span>
-                        )}
+                        <span
+                          className={cn('badge text-xs', getIntentColor(cmd.intent || ''))}
+                          title={normIntent.description}
+                        >
+                          {normIntent.label}
+                        </span>
                       </td>
                       <td className="max-w-md">
                         {cmd.output ? (
                           <code className="text-xs text-gray-500 truncate block font-mono">
-                            {cmd.output.slice(0, 80)}{cmd.output.length > 80 ? '...' : ''}
+                            {cmd.output.slice(0, 80)}
+                            {cmd.output.length > 80 ? '...' : ''}
                           </code>
                         ) : (
                           <span className="text-gray-400 text-xs">No output</span>
@@ -233,8 +261,13 @@ export default function CommandsPage() {
                             onClick={() => copyToClipboard(cmd.command, cmdKey)}
                             className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors"
                             aria-label="Copy command"
+                            title="Copy command"
                           >
-                            {copiedKey === cmdKey ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+                            {copiedKey === cmdKey ? (
+                              <Check className="w-4 h-4 text-green-600" />
+                            ) : (
+                              <Copy className="w-4 h-4" />
+                            )}
                           </button>
                         </div>
                       </td>

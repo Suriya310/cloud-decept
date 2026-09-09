@@ -1,4 +1,4 @@
-﻿"""
+"""
 Unit tests for Backend API fixes:
 1. /threat-intel query safety and column compatibility
 2. /mitre/techniques aggregation from PostgreSQL & ClickHouse without 500
@@ -198,6 +198,49 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
         for s in cmd_sqls:
             self.assertIn("uniqExact(event_id)", s)
 
+    async def test_get_stats_includes_sessions_per_day_and_unclassified(self):
+        """Verify /stats returns sessions_per_day and handles unclassified threat level."""
+        self.mock_ch.command.return_value = 5
+        mock_queries = []
+
+        def mock_query(sql):
+            mock_queries.append(sql)
+            res = MagicMock()
+            if "sessions_per_day" in str(sql) or "toDate(start_time) as date" in str(sql):
+                res.named_results.return_value = [{"date": "2026-09-09", "count": 10}]
+            elif "threat_distribution" in str(sql) or "skill_level" in str(sql):
+                res.named_results.return_value = [
+                    {"level": "High", "count": 2},
+                    {"level": "unclassified", "count": 8},
+                ]
+            elif "top_countries" in str(sql) or "country" in str(sql):
+                res.named_results.return_value = [{"country": "US", "count": 20}]
+            else:
+                res.named_results.return_value = []
+            return res
+
+        self.mock_ch.query.side_effect = mock_query
+
+        stats = await api_main.get_stats(hours=24)
+        self.assertIsInstance(stats.sessions_per_day, list)
+        self.assertIn("LIMIT 50", "".join(mock_queries))
+
+    async def test_list_sessions_min_skill_level_filter(self):
+        """Verify /sessions respects min_skill_level query parameter."""
+        executed_queries = []
+        def mock_query(sql):
+            executed_queries.append(sql)
+            res = MagicMock()
+            res.named_results.return_value = []
+            return res
+
+        self.mock_ch.query.side_effect = mock_query
+
+        await api_main.list_sessions(limit=10, min_skill_level=5)
+        sql_joined = " ".join(executed_queries)
+        self.assertIn("skill_level >= 5", sql_joined)
+
 
 if __name__ == "__main__":
     unittest.main()
+

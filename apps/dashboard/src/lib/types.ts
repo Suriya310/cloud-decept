@@ -172,6 +172,7 @@ export interface Stats {
   threat_distribution: { level: string; count: number }[];
   sessions_per_hour: { hour: string; count: number }[];
   commands_per_day: { date: string; count: number }[];
+  sessions_per_day?: { date: string; count: number }[];
 }
 
 export interface RealTimeEvent {
@@ -191,6 +192,10 @@ export interface DashboardState {
   topCommands: TopCommand[];
   topAttackers: TopAttacker[];
   stats: Stats | null;
+  statsLoading: boolean;
+  statsError: string | null;
+  sessionsLoading: boolean;
+  sessionsError: string | null;
   realTimeEvents: RealTimeEvent[];
   isConnected: boolean;
   filters: {

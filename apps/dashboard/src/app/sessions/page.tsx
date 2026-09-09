@@ -70,13 +70,40 @@ export default function SessionsPage() {
     ...new Set(sessionsArray.map((s) => s.src_country).filter(Boolean)),
   ];
 
-  // Use authoritative backend stats for totals
+  // Authoritative backend stats for totals
   const totalSessions = stats?.total_sessions ?? 0;
   const activeSessions = stats?.active_sessions ?? 0;
 
   const handleRowClick = (session: any) => {
     setSelectedSession(session);
     fetchSession(session.session_id);
+  };
+
+  const exportToCSV = () => {
+    if (filteredSessions.length === 0) return;
+    const headers = ['Session ID', 'Attacker IP', 'Country', 'Auth Status', 'Status', 'Intents', 'Commands', 'Threat Score', 'Duration (s)', 'Started At'];
+    const rows = filteredSessions.map(s => [
+      s.session_id,
+      s.src_ip ?? s.attacker_ip ?? '',
+      s.src_country ?? s.country ?? '',
+      s.auth_success === true ? 'Success' : s.auth_success === false ? 'Failed' : 'N/A',
+      s.status ?? '',
+      (s.intent_history ?? []).join('; '),
+      s.command_count ?? 0,
+      s.threat_score ?? 0,
+      s.duration_seconds ?? 0,
+      s.start_time ?? '',
+    ]);
+
+    const csvContent = [headers.join(','), ...rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `clouddecept-sessions-${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
@@ -88,7 +115,7 @@ export default function SessionsPage() {
             {totalSessions.toLocaleString()} total sessions (all-time) · {activeSessions} active
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
@@ -133,6 +160,15 @@ export default function SessionsPage() {
                 </option>
               ))}
             </select>
+            <button
+              onClick={exportToCSV}
+              disabled={filteredSessions.length === 0}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              title="Export sessions to CSV"
+            >
+              <Download className="w-4 h-4 text-gray-500" />
+              Export
+            </button>
           </div>
         </div>
       </div>
@@ -189,12 +225,14 @@ export default function SessionsPage() {
                       <span
                         className={cn(
                           'badge',
-                          session.auth_success
+                          session.auth_success === true
                             ? 'bg-green-100 text-green-800'
-                            : 'bg-red-100 text-red-800'
+                            : session.auth_success === false
+                            ? 'bg-red-100 text-red-800'
+                            : 'bg-gray-100 text-gray-600'
                         )}
                       >
-                        {session.auth_success ? 'Success' : 'Failed'}
+                        {session.auth_success === true ? 'Success' : session.auth_success === false ? 'Failed' : 'N/A'}
                       </span>
                     </td>
                     <td>
@@ -227,8 +265,10 @@ export default function SessionsPage() {
                       </div>
                     </td>
                     <td>
-                      <Terminal className="w-3 h-3 inline text-gray-400" />
-                      {session.command_count ?? 0}
+                      <div className="flex items-center gap-1">
+                        <Terminal className="w-3 h-3 text-gray-400" />
+                        <span>{session.command_count ?? 0}</span>
+                      </div>
                     </td>
                     <td>
                       <span
@@ -244,10 +284,10 @@ export default function SessionsPage() {
                     </td>
                     <td>
                       {session.duration_seconds ? (
-                        <>
-                          <Clock className="w-3 h-3 inline text-gray-400" />
-                          {Math.floor(session.duration_seconds / 60)}m {session.duration_seconds % 60}s
-                        </>
+                        <div className="flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-gray-400" />
+                          <span>{Math.floor(session.duration_seconds / 60)}m {session.duration_seconds % 60}s</span>
+                        </div>
                       ) : (
                         <span className="text-gray-400">—</span>
                       )}
@@ -259,7 +299,7 @@ export default function SessionsPage() {
                       <Link
                         href={`/sessions/${session.session_id}`}
                         onClick={(e) => e.stopPropagation()}
-                        className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                        className="p-1.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors inline-block"
                         aria-label="View session details"
                       >
                         <Eye className="w-4 h-4" />

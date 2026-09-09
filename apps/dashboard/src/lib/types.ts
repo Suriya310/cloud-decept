@@ -7,7 +7,7 @@ export interface Session {
   duration_seconds?: number;
   username?: string;
   password?: string;
-  auth_success: boolean;
+  auth_success?: boolean;
   protocol?: string;
   commands_executed: number;
   files_transferred?: number;
@@ -28,73 +28,128 @@ export interface Session {
 }
 
 export interface Command {
-  id: string;
+  event_id?: string;
+  id?: string;
   session_id: string;
   timestamp: string;
   command: string;
+  arguments?: string[];
   output?: string;
-  success: boolean;
+  exit_code?: number;
+  duration_ms?: number;
+  success?: boolean;
   intent?: string;
   intent_confidence?: number;
   mitre_techniques?: string[];
 }
 
 export interface AuthEvent {
+  event_id?: string;
+  id?: string;
   session_id: string;
   timestamp: string;
   username: string;
   password: string;
   success: boolean;
-  src_ip: string;
-  src_port: number;
-}
-
-export interface ThreatIntelligenceEvent {
-  session_id: string;
-  timestamp: string;
-  iocs: IOC[];
-  techniques: Technique[];
-  tactic_summary: Record<string, number>;
-  summary?: SessionSummary;
+  auth_method?: string;
+  src_ip?: string;
+  src_port?: number;
 }
 
 export interface IOC {
   type: string;
   value: string;
-  context: string;
-  confidence: number;
-  first_seen: string;
+  context?: string;
+  confidence?: number;
+  first_seen?: string;
 }
 
 export interface Technique {
   technique_id: string;
-  name: string;
-  tactic: string;
-  severity: string;
-  trigger: string;
-  confidence: number;
+  name?: string;
+  tactic?: string;
+  severity?: string;
+  trigger?: string;
+  confidence?: number;
 }
 
-export interface SessionSummary {
+export interface SessionSummaryDetail {
+  session_id: string;
+  summary: string;
+  intent: string;
   skill_level: number;
-  primary_objective: string;
-  techniques_summary: string;
-  iocs_of_interest: string[];
-  risk_level: string;
-  defensive_recommendations: string[];
-  narrative: string;
-  generated_at: string;
-  model: string;
+  mitre_techniques: string[];
+  iocs: (IOC | Record<string, any>)[];
+  created_at: string;
+  // Compatibility fields
+  primary_objective?: string;
+  narrative?: string;
+  techniques_summary?: string;
+  iocs_of_interest?: string[];
+  risk_level?: string;
+  defensive_recommendations?: string[];
+  generated_at?: string;
+  model?: string;
+}
+
+// Backward-compatible alias
+export type SessionSummary = SessionSummaryDetail;
+
+export interface ThreatIntelligenceEvent {
+  session_id?: string;
+  timestamp?: string;
+  iocs?: IOC[];
+  techniques?: Technique[];
+  tactic_summary?: Record<string, number>;
+  summary?: SessionSummaryDetail;
+}
+
+export interface ThreatIntelItem {
+  id: string;
+  ioc_type: string;
+  ioc_value: string;
+  confidence: number;
+  mitre_techniques: string[];
+  mitre_tactics: string[];
+  severity: string;
+  context: string;
+  enrichment: Record<string, any>;
+  created_at: string;
+}
+
+export interface MitreTechniqueCount {
+  technique: string;
+  count: number;
+}
+
+export interface TopAttacker {
+  attacker_ip: string;
+  country: string;
+  sessions: number;
+  unique_sessions: number;
+  last_seen?: string;
+}
+
+export interface TopCommand {
+  command: string;
+  executions: number;
+  unique_sessions: number;
+}
+
+export interface AdaptiveStrategy {
+  name: string;
+  description: string;
 }
 
 export interface AdaptationEvent {
+  id?: string;
   session_id: string;
   timestamp: string;
   intent: string;
   strategy: string;
   action: string;
   success: boolean;
-  details: Record<string, unknown>;
+  details?: Record<string, unknown>;
 }
 
 export interface Stats {
@@ -129,7 +184,12 @@ export interface DashboardState {
   sessions: Session[];
   selectedSession: Session | null;
   commands: Command[];
+  sessionAuth: AuthEvent[];
   threatIntel: ThreatIntelligenceEvent | null;
+  threatIntelItems: ThreatIntelItem[];
+  mitreTechniques: MitreTechniqueCount[];
+  topCommands: TopCommand[];
+  topAttackers: TopAttacker[];
   stats: Stats | null;
   realTimeEvents: RealTimeEvent[];
   isConnected: boolean;

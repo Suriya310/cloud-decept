@@ -1,5 +1,17 @@
 import { create } from 'zustand';
-import { DashboardState, Session, Command, ThreatIntelligenceEvent, Stats, RealTimeEvent } from './types';
+import {
+  DashboardState,
+  Session,
+  Command,
+  AuthEvent,
+  ThreatIntelligenceEvent,
+  ThreatIntelItem,
+  MitreTechniqueCount,
+  TopCommand,
+  TopAttacker,
+  Stats,
+  RealTimeEvent,
+} from './types';
 import { api } from './api';
 
 interface ConnectionStatus {
@@ -15,11 +27,19 @@ interface ConnectionStatus {
 
 interface DashboardActions {
   // Sessions
-  fetchSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number }) => Promise<void>;
+  fetchSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string }) => Promise<void>;
   fetchSession: (sessionId: string) => Promise<void>;
   fetchSessionCommands: (sessionId: string) => Promise<void>;
+  fetchSessionAuth: (sessionId: string) => Promise<void>;
   fetchSessionThreatIntel: (sessionId: string) => Promise<void>;
+  searchSessions: (query: string) => Promise<void>;
   setSelectedSession: (session: Session | null) => void;
+
+  // Analytics & Threat Intelligence
+  fetchThreatIntelItems: (params?: { limit?: number; severity?: string; ioc_type?: string }) => Promise<void>;
+  fetchMitreTechniques: () => Promise<void>;
+  fetchTopCommands: (hours?: number, limit?: number) => Promise<void>;
+  fetchTopAttackers: (hours?: number, limit?: number) => Promise<void>;
 
   // Stats
   fetchStats: (hours?: number) => Promise<void>;
@@ -56,11 +76,12 @@ function transformSession(s: any): Session {
     // Map backend fields to UI-expected fields
     src_ip: s.attacker_ip,
     src_country: s.country,
-    command_count: s.commands_executed,
+    command_count: s.commands_executed ?? 0,
     intent_history: s.intent ? [s.intent] : [],
     threat_score: s.skill_level ? Math.min(s.skill_level * 10, 100) : 0,
     tactics: [],
     status: s.end_time ? 'closed' : 'active',
+    auth_success: s.credentials_tried && s.credentials_tried > 0 ? (s.commands_executed > 0) : undefined,
   };
 }
 
@@ -69,7 +90,12 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   sessions: [],
   selectedSession: null,
   commands: [],
+  sessionAuth: [],
   threatIntel: null,
+  threatIntelItems: [],
+  mitreTechniques: [],
+  topCommands: [],
+  topAttackers: [],
   stats: null,
   realTimeEvents: [],
   isConnected: false,
@@ -101,10 +127,20 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   fetchSessionCommands: async (sessionId) => {
     try {
       const data = await api.getSessionCommands(sessionId);
-      set({ commands: data.commands });
+      set({ commands: data.commands || [] });
     } catch (error) {
       console.error('Failed to fetch commands:', error);
       set({ commands: [] });
+    }
+  },
+
+  fetchSessionAuth: async (sessionId) => {
+    try {
+      const data = await api.getSessionAuth(sessionId);
+      set({ sessionAuth: data.auth_events || [] });
+    } catch (error) {
+      console.error('Failed to fetch auth:', error);
+      set({ sessionAuth: [] });
     }
   },
 
@@ -118,13 +154,67 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
     }
   },
 
+  searchSessions: async (query: string) => {
+    try {
+      if (!query || query.trim() === '') {
+        await get().fetchSessions();
+        return;
+      }
+      const data = await api.searchSessions(query.trim(), 50);
+      set({ sessions: (data || []).map(transformSession) });
+    } catch (error) {
+      console.error('Failed to search sessions:', error);
+    }
+  },
+
+  fetchThreatIntelItems: async (params) => {
+    try {
+      const items = await api.listThreatIntel(params);
+      set({ threatIntelItems: items });
+    } catch (error) {
+      console.error('Failed to fetch threat intel items:', error);
+      set({ threatIntelItems: [] });
+    }
+  },
+
+  fetchMitreTechniques: async () => {
+    try {
+      const techniques = await api.getMitreTechniques();
+      set({ mitreTechniques: techniques });
+    } catch (error) {
+      console.error('Failed to fetch MITRE techniques:', error);
+      set({ mitreTechniques: [] });
+    }
+  },
+
+  fetchTopCommands: async (hours = 24, limit = 20) => {
+    try {
+      const top = await api.getTopCommands({ hours, limit });
+      set({ topCommands: top });
+    } catch (error) {
+      console.error('Failed to fetch top commands:', error);
+      set({ topCommands: [] });
+    }
+  },
+
+  fetchTopAttackers: async (hours = 168, limit = 20) => {
+    try {
+      const top = await api.getTopAttackers({ hours, limit });
+      set({ topAttackers: top });
+    } catch (error) {
+      console.error('Failed to fetch top attackers:', error);
+      set({ topAttackers: [] });
+    }
+  },
+
   setSelectedSession: (session) => {
     set({ selectedSession: session });
     if (session) {
       get().fetchSessionCommands(session.session_id);
+      get().fetchSessionAuth(session.session_id);
       get().fetchSessionThreatIntel(session.session_id);
     } else {
-      set({ commands: [], threatIntel: null });
+      set({ commands: [], sessionAuth: [], threatIntel: null });
     }
   },
 
@@ -140,13 +230,10 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
 
   fetchAllTimeStats: async () => {
     try {
-      // Use a large hours value (10 years) to get all-time stats
       const data = await api.getStats(87600);
-      console.log('[CloudDecept] Raw stats API response:', data);
       set({ stats: data });
-      console.log('[CloudDecept] Store stats updated:', data);
     } catch (error) {
-      console.error('[CloudDecept] Failed to fetch all-time stats:', error);
+      console.error('Failed to fetch all-time stats:', error);
       set({ stats: null });
     }
   },
@@ -194,7 +281,7 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
     set((state) => ({
       filters: { ...state.filters, ...filters },
     }));
-    get().fetchSessions({ status: filters.status });
+    get().fetchSessions({ status: filters.status, intent: filters.intent });
   },
 
   resetFilters: () => {

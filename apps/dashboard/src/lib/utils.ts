@@ -44,20 +44,31 @@ export function getSeverityColor(severity: string): string {
 }
 
 export function getIntentColor(intent: string): string {
-  switch (intent.toLowerCase()) {
+  const norm = (intent || '').toLowerCase().trim().replace(/[\s_]+/g, '_');
+  switch (norm) {
+    case 'steal_credentials':
     case 'credential_access':
-      return 'bg-danger-100 text-danger-800';
+    case 'credential_hunting':
+      return 'bg-red-100 text-red-800';
+    case 'system_discovery':
     case 'discovery':
-      return 'bg-warning-100 text-warning-800';
+    case 'cloud_recon':
+      return 'bg-blue-100 text-blue-800';
+    case 'move_laterally':
     case 'lateral_movement':
       return 'bg-orange-100 text-orange-800';
+    case 'cause_damage':
+    case 'impact':
+      return 'bg-rose-100 text-rose-800';
     case 'persistence':
       return 'bg-purple-100 text-purple-800';
     case 'data_exfiltration':
-      return 'bg-red-100 text-red-800';
+    case 'data_access':
+      return 'bg-amber-100 text-amber-800';
     case 'resource_hijacking':
       return 'bg-pink-100 text-pink-800';
     case 'defense_evasion':
+    case 'privilege_escalation':
       return 'bg-indigo-100 text-indigo-800';
     default:
       return 'bg-gray-100 text-gray-800';

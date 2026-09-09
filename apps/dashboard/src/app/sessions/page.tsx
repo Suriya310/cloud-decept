@@ -16,6 +16,8 @@ import {
   Copy,
   Check,
   RefreshCw,
+  Shield,
+  Activity,
 } from 'lucide-react';
 import { cn, formatTimestamp, getIntentColor } from '@/lib/utils';
 import { useDashboardStore } from '@/lib/store';
@@ -167,135 +169,142 @@ export default function SessionsPage() {
   };
 
   return (
-    <main className="p-6 space-y-6">
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div className="space-y-6">
+      {/* Header with Telemetry Metadata */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-cyan-500/15">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Live & Historical Sessions</h1>
-          <p className="text-gray-500 mt-1">
-            {totalSessions.toLocaleString()} total sessions (authoritative all-time) · {activeSessions} currently active
+          <h1 className="text-xl sm:text-2xl font-bold font-mono tracking-wider text-white uppercase flex items-center gap-2.5">
+            <Activity className="w-5 h-5 text-cyan-400" />
+            <span>SESSION INVESTIGATION MATRIX</span>
+          </h1>
+          <p className="text-xs text-slate-400 font-mono mt-1">
+            Authoritative: <span className="text-cyan-300 font-bold">{totalSessions.toLocaleString()} total</span> sessions recorded • <span className="text-emerald-400 font-bold">{activeSessions} live</span> active probes
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+
+        <div className="flex flex-wrap items-center gap-2.5">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-400/60" />
             <input
               type="search"
-              placeholder="Search IP, Session ID, Country..."
+              placeholder="Search IP, session, country..."
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-72 pl-10 pr-4 py-2 text-sm bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              className="w-64 pl-9 pr-3 py-1.5 text-xs font-mono rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
             />
           </div>
-          <div className="flex items-center gap-2">
-            <select
-              value={filters.status}
-              onChange={(e) => {
-                setFilters({ status: e.target.value });
-                setCurrentPage(1);
-              }}
-              className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
-              <option value="all">All Status</option>
-              <option value="active">Active</option>
-              <option value="closed">Closed</option>
-            </select>
-            <select
-              value={filters.intent}
-              onChange={(e) => {
-                setFilters({ intent: e.target.value });
-                setCurrentPage(1);
-              }}
-              className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
-              <option value="all">All Intents</option>
-              {uniqueIntents.map((intent) => (
-                <option key={intent} value={intent}>
-                  {normalizeIntent(intent).label}
-                </option>
-              ))}
-            </select>
-            <select
-              value={filters.country}
-              onChange={(e) => {
-                setFilters({ country: e.target.value });
-                setCurrentPage(1);
-              }}
-              className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
-              <option value="all">All Countries</option>
-              {uniqueCountries.map((country) => (
-                <option key={country} value={country}>
-                  {getCountryName(country)}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={exportToCSV}
-              disabled={filteredSessions.length === 0}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Export filtered sessions to CSV"
-            >
-              <Download className="w-4 h-4 text-gray-500" />
-              Export CSV
-            </button>
-            <button
-              onClick={loadSessions}
-              disabled={sessionsLoading}
-              className="p-2 border border-gray-300 rounded-lg bg-white text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50"
-              title="Refresh sessions"
-            >
-              <RefreshCw className={cn('w-4 h-4', sessionsLoading && 'animate-spin')} />
-            </button>
-          </div>
+
+          <select
+            value={filters.status}
+            onChange={(e) => {
+              setFilters({ status: e.target.value });
+              setCurrentPage(1);
+            }}
+            className="px-2.5 py-1.5 text-xs font-mono rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 focus:outline-none focus:border-cyan-400"
+          >
+            <option value="all">All Status</option>
+            <option value="active">Active</option>
+            <option value="closed">Closed</option>
+          </select>
+
+          <select
+            value={filters.intent}
+            onChange={(e) => {
+              setFilters({ intent: e.target.value });
+              setCurrentPage(1);
+            }}
+            className="px-2.5 py-1.5 text-xs font-mono rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 focus:outline-none focus:border-cyan-400"
+          >
+            <option value="all">All Intents</option>
+            {uniqueIntents.map((intent) => (
+              <option key={intent} value={intent}>
+                {normalizeIntent(intent).label}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={filters.country}
+            onChange={(e) => {
+              setFilters({ country: e.target.value });
+              setCurrentPage(1);
+            }}
+            className="px-2.5 py-1.5 text-xs font-mono rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 focus:outline-none focus:border-cyan-400"
+          >
+            <option value="all">All Countries</option>
+            {uniqueCountries.map((country) => (
+              <option key={country} value={country}>
+                {getCountryName(country)}
+              </option>
+            ))}
+          </select>
+
+          <button
+            onClick={exportToCSV}
+            disabled={filteredSessions.length === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono font-bold text-cyan-300 bg-[#070e22] border border-cyan-500/30 rounded-lg hover:border-cyan-400 hover:text-white transition-all disabled:opacity-50"
+            title="Export filtered records as CSV"
+          >
+            <Download className="w-3.5 h-3.5 text-cyan-400" />
+            CSV
+          </button>
+
+          <button
+            onClick={loadSessions}
+            disabled={sessionsLoading}
+            className="p-1.5 rounded-lg bg-[#070e22] border border-cyan-500/30 text-slate-400 hover:text-cyan-300 transition-colors disabled:opacity-50"
+            title="Refresh sessions list"
+          >
+            <RefreshCw className={cn('w-4 h-4', sessionsLoading && 'animate-spin text-cyan-400')} />
+          </button>
         </div>
       </div>
 
       {/* Error state */}
       {sessionsError && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center gap-3">
-          <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0" />
+        <div className="p-4 bg-rose-950/40 border border-rose-500/40 rounded-xl flex items-center gap-3 text-rose-300 text-xs font-mono">
+          <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0" />
           <div>
-            <p className="font-medium text-red-800">Failed to load sessions</p>
-            <p className="text-sm text-red-700">{sessionsError}</p>
+            <p className="font-bold uppercase tracking-wider">FAILED TO RETRIEVE SESSIONS</p>
+            <p className="text-slate-400 mt-0.5">{sessionsError}</p>
           </div>
         </div>
       )}
 
-      {/* Sessions Table Card */}
-      <div className="card">
+      {/* Main Glass Table Container */}
+      <div className="glass-panel rounded-2xl overflow-hidden border border-cyan-500/20 shadow-2xl">
         <div className="table-container">
           <table className="table">
             <thead>
               <tr>
                 <th>Session ID</th>
                 <th>Attacker IP</th>
-                <th>Country</th>
+                <th>Origin Country</th>
                 <th>Auth</th>
                 <th>Status</th>
-                <th>Intents</th>
+                <th>Intent Classification</th>
                 <th>Commands</th>
                 <th>Threat Assessment</th>
                 <th>Duration</th>
-                <th>Started</th>
-                <th>Actions</th>
+                <th>Started At (UTC)</th>
+                <th>Inspect</th>
               </tr>
             </thead>
             <tbody>
               {sessionsLoading && sessionsArray.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-12 text-center text-gray-500">
-                    <RefreshCw className="w-6 h-6 animate-spin mx-auto text-primary-500 mb-2" />
-                    Loading honeypot sessions...
+                  <td colSpan={11} className="px-4 py-16 text-center text-slate-400 font-mono text-xs">
+                    <RefreshCw className="w-6 h-6 animate-spin mx-auto text-cyan-400 mb-2" />
+                    Querying ClickHouse session indexes...
                   </td>
                 </tr>
               ) : paginatedSessions.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-12 text-center text-gray-500">
-                    No sessions match the selected search criteria or filters.
+                  <td colSpan={11} className="px-4 py-16 text-center text-slate-500 font-mono text-xs">
+                    No honeypot sessions found matching the active filters.
                   </td>
                 </tr>
               ) : (
@@ -310,23 +319,23 @@ export default function SessionsPage() {
                       key={session.session_id}
                       onClick={() => handleRowClick(session)}
                       className={cn(
-                        'cursor-pointer transition-colors',
-                        isSelected ? 'bg-primary-50/70' : 'hover:bg-gray-50'
+                        'cursor-pointer font-mono text-xs transition-colors',
+                        isSelected ? 'bg-cyan-950/60' : 'hover:bg-cyan-950/20'
                       )}
                     >
                       {/* Session ID */}
-                      <td className="font-mono text-xs">
-                        <div className="flex items-center gap-1.5">
+                      <td className="whitespace-nowrap">
+                        <div className="flex items-center gap-1.5 font-bold text-slate-300">
                           <span title={session.session_id}>
-                            {session.session_id.slice(0, 12)}...
+                            {session.session_id.slice(0, 10)}...
                           </span>
                           <button
                             onClick={(e) => handleCopy(session.session_id, `sess-${session.session_id}`, e)}
-                            className="text-gray-400 hover:text-gray-600 p-0.5 rounded transition-colors"
+                            className="text-slate-500 hover:text-cyan-300 p-0.5"
                             title="Copy session ID"
                           >
                             {copiedKey === `sess-${session.session_id}` ? (
-                              <Check className="w-3 h-3 text-green-600" />
+                              <Check className="w-3 h-3 text-emerald-400" />
                             ) : (
                               <Copy className="w-3 h-3" />
                             )}
@@ -335,16 +344,16 @@ export default function SessionsPage() {
                       </td>
 
                       {/* Attacker IP */}
-                      <td>
-                        <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-gray-800">
+                      <td className="whitespace-nowrap">
+                        <div className="flex items-center gap-1.5 font-bold text-white">
                           <span>{ip}</span>
                           <button
                             onClick={(e) => handleCopy(ip, `ip-${session.session_id}`, e)}
-                            className="text-gray-400 hover:text-gray-600 p-0.5 rounded transition-colors"
+                            className="text-slate-500 hover:text-cyan-300 p-0.5"
                             title="Copy attacker IP"
                           >
                             {copiedKey === `ip-${session.session_id}` ? (
-                              <Check className="w-3 h-3 text-green-600" />
+                              <Check className="w-3 h-3 text-emerald-400" />
                             ) : (
                               <Copy className="w-3 h-3" />
                             )}
@@ -353,10 +362,10 @@ export default function SessionsPage() {
                       </td>
 
                       {/* Country */}
-                      <td>
-                        <div className="flex items-center gap-1 text-xs text-gray-700">
-                          <MapPin className="w-3 h-3 text-gray-400 flex-shrink-0" />
-                          <span className="truncate max-w-[120px]" title={countryFull}>
+                      <td className="whitespace-nowrap">
+                        <div className="flex items-center gap-1 text-slate-300">
+                          <MapPin className="w-3 h-3 text-cyan-400 flex-shrink-0" />
+                          <span className="truncate max-w-[130px]" title={countryFull}>
                             {countryFull}
                           </span>
                         </div>
@@ -366,18 +375,18 @@ export default function SessionsPage() {
                       <td>
                         <span
                           className={cn(
-                            'badge text-xs',
+                            'badge text-[10px] uppercase font-mono font-bold',
                             session.auth_success === true
-                              ? 'bg-green-100 text-green-800'
+                              ? 'text-emerald-400 bg-emerald-950/80 border-emerald-500/40'
                               : session.auth_success === false
-                              ? 'bg-red-100 text-red-800'
-                              : 'bg-gray-100 text-gray-600'
+                              ? 'text-rose-400 bg-rose-950/80 border-rose-500/40'
+                              : 'text-slate-400 bg-slate-900 border-slate-700/50'
                           )}
                         >
                           {session.auth_success === true
-                            ? 'Success'
+                            ? 'GRANTED'
                             : session.auth_success === false
-                            ? 'Failed'
+                            ? 'FAILED'
                             : 'N/A'}
                         </span>
                       </td>
@@ -386,25 +395,25 @@ export default function SessionsPage() {
                       <td>
                         <span
                           className={cn(
-                            'badge text-xs',
+                            'badge text-[10px] uppercase font-mono font-bold',
                             session.status === 'active'
-                              ? 'bg-green-100 text-green-800 animate-pulse'
-                              : 'bg-gray-100 text-gray-800'
+                              ? 'text-emerald-400 bg-emerald-950/80 border-emerald-500/40 shadow-sm shadow-emerald-950 animate-pulse'
+                              : 'text-slate-400 bg-slate-900 border-slate-700/50'
                           )}
                         >
-                          {session.status ?? 'closed'}
+                          {session.status ?? 'CLOSED'}
                         </span>
                       </td>
 
                       {/* Intents */}
                       <td>
-                        <div className="flex flex-wrap gap-1 max-w-[160px]">
+                        <div className="flex flex-wrap gap-1 max-w-[170px]">
                           {(session.intent_history ?? []).slice(0, 2).map((intent) => {
                             const norm = normalizeIntent(intent);
                             return (
                               <span
                                 key={intent}
-                                className={cn('badge text-[11px]', getIntentColor(intent))}
+                                className={cn('badge text-[10px] font-mono px-2', norm.badgeClass)}
                                 title={norm.description}
                               >
                                 {norm.label}
@@ -412,7 +421,7 @@ export default function SessionsPage() {
                             );
                           })}
                           {(session.intent_history ?? []).length > 2 && (
-                            <span className="badge bg-gray-100 text-gray-600 text-[10px]">
+                            <span className="badge bg-slate-800 text-slate-400 text-[9px] font-mono">
                               +{(session.intent_history ?? []).length - 2}
                             </span>
                           )}
@@ -421,8 +430,8 @@ export default function SessionsPage() {
 
                       {/* Commands */}
                       <td>
-                        <div className="flex items-center gap-1 font-mono text-xs text-gray-800">
-                          <Terminal className="w-3 h-3 text-gray-400" />
+                        <div className="flex items-center gap-1 font-mono text-xs text-white">
+                          <Terminal className="w-3 h-3 text-cyan-400" />
                           <span>{(session.command_count ?? 0).toLocaleString()}</span>
                         </div>
                       </td>
@@ -431,9 +440,8 @@ export default function SessionsPage() {
                       <td>
                         <span
                           className={cn(
-                            'badge text-xs font-semibold',
-                            threat.badgeBg,
-                            threat.badgeColor
+                            'badge text-[10px] font-mono font-bold',
+                            threat.badgeClass
                           )}
                           title={threat.description}
                         >
@@ -442,34 +450,33 @@ export default function SessionsPage() {
                       </td>
 
                       {/* Duration */}
-                      <td>
+                      <td className="whitespace-nowrap text-slate-400">
                         {session.duration_seconds && session.duration_seconds > 0 ? (
-                          <div className="flex items-center gap-1 text-xs text-gray-600">
-                            <Clock className="w-3 h-3 text-gray-400" />
+                          <div className="flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-slate-500" />
                             <span>
                               {Math.floor(session.duration_seconds / 60)}m {session.duration_seconds % 60}s
                             </span>
                           </div>
                         ) : session.status === 'active' ? (
-                          <span className="text-xs text-emerald-600 font-medium">In progress</span>
+                          <span className="text-emerald-400 font-bold">IN PROGRESS</span>
                         ) : (
-                          <span className="text-gray-400 text-xs">—</span>
+                          <span className="text-slate-600">—</span>
                         )}
                       </td>
 
                       {/* Started */}
-                      <td className="text-xs text-gray-500 whitespace-nowrap">
+                      <td className="whitespace-nowrap text-slate-400">
                         {formatTimestamp(session.start_time)}
                       </td>
 
-                      {/* Actions */}
+                      {/* Inspect */}
                       <td>
                         <Link
                           href={`/sessions/${session.session_id}`}
                           onClick={(e) => e.stopPropagation()}
-                          className="p-1.5 text-gray-500 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors inline-block"
-                          aria-label="View session details"
-                          title="Open session details"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-300 hover:bg-cyan-950/50 border border-transparent hover:border-cyan-500/30 transition-all inline-block"
+                          title="Open investigation console"
                         >
                           <Eye className="w-4 h-4" />
                         </Link>
@@ -482,30 +489,30 @@ export default function SessionsPage() {
           </table>
         </div>
 
-        {/* Pagination Controls */}
+        {/* Pagination Bar */}
         {totalPages > 1 && (
-          <div className="p-4 border-t border-gray-200 flex items-center justify-between">
-            <div className="text-sm text-gray-500">
-              Showing {(currentPage - 1) * sessionsPerPage + 1} to{' '}
+          <div className="p-4 border-t border-cyan-500/15 flex items-center justify-between font-mono text-xs">
+            <div className="text-slate-400">
+              Displaying {(currentPage - 1) * sessionsPerPage + 1} to{' '}
               {Math.min(currentPage * sessionsPerPage, filteredSessions.length)} of{' '}
-              {filteredSessions.length} matching sessions
+              {filteredSessions.length} sessions
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
-                className="p-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1.5 rounded-lg border border-cyan-500/20 text-slate-300 hover:text-cyan-300 bg-[#070e22] disabled:opacity-30 disabled:cursor-not-allowed"
                 aria-label="Previous page"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <span className="text-sm font-medium text-gray-700">
-                Page {currentPage} of {totalPages}
+              <span className="text-cyan-400 font-bold px-2">
+                {currentPage} / {totalPages}
               </span>
               <button
                 onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
-                className="p-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1.5 rounded-lg border border-cyan-500/20 text-slate-300 hover:text-cyan-300 bg-[#070e22] disabled:opacity-30 disabled:cursor-not-allowed"
                 aria-label="Next page"
               >
                 <ChevronRight className="w-4 h-4" />
@@ -514,6 +521,6 @@ export default function SessionsPage() {
           </div>
         )}
       </div>
-    </main>
+    </div>
   );
 }

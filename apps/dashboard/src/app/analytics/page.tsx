@@ -19,30 +19,62 @@ import {
   Legend,
 } from 'recharts';
 import { format } from 'date-fns';
-import { AlertTriangle, RefreshCw, BarChart2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  RefreshCw,
+  BarChart3,
+  TrendingUp,
+  Globe2,
+  ShieldAlert,
+  Activity,
+  Zap,
+  Terminal,
+  Cpu,
+  Users,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useDashboardStats } from '@/hooks/useDashboardStats';
 import { useDashboardStore } from '@/lib/store';
 import { getCountryName } from '@/lib/countries';
 import { normalizeIntent } from '@/lib/intents';
 
-const COLORS = [
-  '#3b82f6', // blue
+const NEON_PALETTE = [
+  '#06b6d4', // cyan
   '#10b981', // emerald
   '#f59e0b', // amber
-  '#ef4444', // red
   '#8b5cf6', // purple
-  '#06b6d4', // cyan
+  '#f43f5e', // rose
+  '#3b82f6', // blue
+  '#14b8a6', // teal
   '#ec4899', // pink
-  '#6366f1', // indigo
 ];
 
 const THREAT_COLORS: Record<string, string> = {
-  Critical: '#ef4444',
+  Critical: '#f43f5e',
   High: '#f97316',
-  Medium: '#eab308',
-  Low: '#22c55e',
-  Unclassified: '#94a3b8',
+  Medium: '#f59e0b',
+  Low: '#10b981',
+  Unclassified: '#64748b',
+};
+
+const CustomTooltip = ({ active, payload, label, unit = 'events' }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-[#050a18]/95 border border-cyan-500/40 rounded-lg p-2.5 shadow-neon text-xs font-mono backdrop-blur-md">
+        <p className="text-cyan-300 font-bold mb-1">{label || payload[0].name}</p>
+        <div className="flex items-center gap-2">
+          <span
+            className="w-2 h-2 rounded-full"
+            style={{ backgroundColor: payload[0].color || payload[0].fill || '#06b6d4' }}
+          />
+          <span className="text-slate-300">
+            {Number(payload[0].value).toLocaleString()} {unit}
+          </span>
+        </div>
+      </div>
+    );
+  }
+  return null;
 };
 
 export default function AnalyticsPage() {
@@ -129,7 +161,7 @@ export default function AnalyticsPage() {
       return statsTopIntents.map((item, index) => ({
         name: normalizeIntent(item.intent).label,
         value: item.count,
-        color: COLORS[index % COLORS.length],
+        color: NEON_PALETTE[index % NEON_PALETTE.length],
       }));
     }
     return [];
@@ -142,7 +174,7 @@ export default function AnalyticsPage() {
         name: getCountryName(item.country),
         rawCode: item.country,
         value: item.count,
-        color: COLORS[index % COLORS.length],
+        color: NEON_PALETTE[index % NEON_PALETTE.length],
       }));
     }
     return [];
@@ -159,7 +191,7 @@ export default function AnalyticsPage() {
         entries.push({
           level: lvl,
           count: cnt,
-          color: THREAT_COLORS[lvl] || '#94a3b8',
+          color: THREAT_COLORS[lvl] || '#64748b',
         });
       }
     }
@@ -171,78 +203,157 @@ export default function AnalyticsPage() {
   }, [threatData]);
 
   return (
-    <main className="p-6 space-y-6">
-      {/* Top Header Row */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <main className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-[1600px] mx-auto text-slate-100">
+      {/* Header HUD */}
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Analytics & Historical Trends</h1>
-          <p className="text-gray-500 mt-1">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono tracking-widest uppercase bg-cyan-950/80 text-cyan-400 border border-cyan-500/30">
+              Aggregated Telemetry
+            </span>
+            <span className="flex h-2 w-2 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500" />
+            </span>
+            <span className="text-xs font-mono text-cyan-300">ClickHouse Engine Online</span>
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white font-mono flex items-center gap-3">
+            <BarChart3 className="w-7 h-7 text-cyan-400" />
+            ANALYTICS & THREAT POSTURE INTELLIGENCE
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-2xl font-mono">
             Authoritative ClickHouse aggregations across sessions, commands, geolocation, and threat postures
           </p>
         </div>
+
+        {/* Action Button */}
         <div className="flex items-center gap-3">
           <button
             onClick={() => refresh()}
             disabled={isLoading}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 text-sm font-medium transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-3.5 py-2 rounded-lg border border-cyan-500/30 bg-[#050a18]/90 text-cyan-300 hover:text-cyan-200 hover:border-cyan-400 text-xs font-mono font-bold transition-all disabled:opacity-50 shadow-neon"
           >
             <RefreshCw className={cn('w-4 h-4', isLoading && 'animate-spin')} />
-            Refresh Analytics
+            REFRESH ANALYTICS
           </button>
         </div>
       </div>
 
       {/* Backend API Connection Banner */}
       {(!isApiHealthy || isError) && (
-        <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-3">
-          <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+        <div className="p-3 bg-amber-950/40 border border-amber-500/30 rounded-lg flex items-center gap-3 text-amber-300 font-mono text-xs">
+          <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" />
           <div>
-            <p className="font-medium text-amber-800">Backend API unreachable</p>
-            <p className="text-sm text-amber-700">
+            <p className="font-bold">BACKEND TELEMETRY DISCONNECTED</p>
+            <p className="text-slate-400 text-[11px]">
               Historical analytical metrics require an active ClickHouse backend connection.
             </p>
           </div>
         </div>
       )}
 
-      {/* Top Grid: Sessions by Hour & Commands by Day */}
+      {/* Top HUD KPI Metric Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="glass-panel p-4 rounded-xl border border-cyan-500/20 flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase">
+              TOTAL SESSIONS
+            </span>
+            <Activity className="w-4 h-4 text-cyan-400" />
+          </div>
+          <p className="text-3xl font-mono font-bold text-white mt-2">
+            {totalSessions.toLocaleString()}
+          </p>
+          <div className="mt-2 pt-2 border-t border-cyan-500/10 flex items-center justify-between text-[11px] font-mono text-cyan-300">
+            <span>Primary Ingestion Store</span>
+            <span className="text-emerald-400 font-bold">100% Verified</span>
+          </div>
+        </div>
+
+        <div className="glass-panel p-4 rounded-xl border border-emerald-500/20 flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase">
+              ACTIVE SESSIONS
+            </span>
+            <Zap className="w-4 h-4 text-emerald-400" />
+          </div>
+          <p className="text-3xl font-mono font-bold text-emerald-400 mt-2">
+            {activeSessions.toLocaleString()}
+          </p>
+          <div className="mt-2 pt-2 border-t border-emerald-500/10 flex items-center justify-between text-[11px] font-mono text-emerald-300">
+            <span>Live Socket Connections</span>
+            <span className="text-emerald-400 font-bold animate-pulse">MONITORED</span>
+          </div>
+        </div>
+
+        <div className="glass-panel p-4 rounded-xl border border-purple-500/20 flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase">
+              TOTAL COMMANDS
+            </span>
+            <Terminal className="w-4 h-4 text-purple-400" />
+          </div>
+          <p className="text-3xl font-mono font-bold text-purple-300 mt-2">
+            {totalCommands.toLocaleString()}
+          </p>
+          <div className="mt-2 pt-2 border-t border-purple-500/10 flex items-center justify-between text-[11px] font-mono text-purple-300">
+            <span>Payloads & Invocations</span>
+            <span className="text-purple-400 font-bold">LOGGED</span>
+          </div>
+        </div>
+
+        <div className="glass-panel p-4 rounded-xl border border-rose-500/20 flex flex-col justify-between">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase">
+              UNIQUE ADVERSARIES
+            </span>
+            <Users className="w-4 h-4 text-rose-400" />
+          </div>
+          <p className="text-3xl font-mono font-bold text-rose-300 mt-2">
+            {uniqueAttackers.toLocaleString()}
+          </p>
+          <div className="mt-2 pt-2 border-t border-rose-500/10 flex items-center justify-between text-[11px] font-mono text-rose-300">
+            <span>Distinct Attacker IPs</span>
+            <span className="text-rose-400 font-bold">PROFILED</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Grid: Sessions by Hour & Commands by Day */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Sessions by Hour */}
-        <div className="card">
-          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="glass-panel rounded-xl border border-cyan-500/20 overflow-hidden">
+          <div className="p-4 border-b border-cyan-500/20 flex items-center justify-between bg-[#050a18]/60">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Sessions by Hour</h2>
-              <p className="text-xs text-gray-500">Temporal distribution (Last 24 Hours)</p>
+              <h2 className="text-sm font-mono font-bold text-white tracking-wider flex items-center gap-2 uppercase">
+                <TrendingUp className="w-4 h-4 text-cyan-400" />
+                TEMPORAL SESSIONS BY HOUR (LAST 24 HOURS)
+              </h2>
+              <p className="text-xs text-slate-400 font-mono mt-0.5">
+                Dynamic ingress distribution over the trailing 24-hour window
+              </p>
             </div>
           </div>
           <div className="p-4 h-72">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={hourlyData}>
                 <defs>
-                  <linearGradient id="colorSessions" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
+                  <linearGradient id="colorSessionsDark" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#06b6d4" stopOpacity={0.0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                <XAxis dataKey="hour" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#fff',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '8px',
-                    boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-                  }}
-                  formatter={(value: number) => [`${value.toLocaleString()} sessions`, 'Activity']}
-                />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
+                <XAxis dataKey="hour" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} fontStretch="condensed" />
+                <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+                <Tooltip content={<CustomTooltip unit="sessions" />} />
                 <Area
                   type="monotone"
                   dataKey="sessions"
-                  stroke="#10b981"
+                  stroke="#06b6d4"
                   strokeWidth={2}
                   fillOpacity={1}
-                  fill="url(#colorSessions)"
+                  fill="url(#colorSessionsDark)"
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -250,33 +361,30 @@ export default function AnalyticsPage() {
         </div>
 
         {/* Commands by Day */}
-        <div className="card">
-          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="glass-panel rounded-xl border border-cyan-500/20 overflow-hidden">
+          <div className="p-4 border-b border-cyan-500/20 flex items-center justify-between bg-[#050a18]/60">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Commands Captured by Day</h2>
-              <p className="text-xs text-gray-500">Volume of attacker commands (Last 7 Days)</p>
+              <h2 className="text-sm font-mono font-bold text-white tracking-wider flex items-center gap-2 uppercase">
+                <Terminal className="w-4 h-4 text-blue-400" />
+                COMMAND EXECUTIONS BY DAY (LAST 7 DAYS)
+              </h2>
+              <p className="text-xs text-slate-400 font-mono mt-0.5">
+                Volume of attacker terminal executions recorded over the trailing 7 days
+              </p>
             </div>
           </div>
           <div className="p-4 h-72">
             {commandsDailyData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+              <div className="h-full flex items-center justify-center text-slate-500 text-xs font-mono">
                 No daily command activity recorded in window
               </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={commandsDailyData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="date" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#fff',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '8px',
-                      boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-                    }}
-                    formatter={(value: number) => [`${value.toLocaleString()} commands`, 'Executions']}
-                  />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
+                  <XAxis dataKey="date" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+                  <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+                  <Tooltip content={<CustomTooltip unit="commands" />} />
                   <Bar dataKey="commands" fill="#3b82f6" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -285,19 +393,24 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {/* Middle Grid: Top Attack Intents & Top Countries */}
+      {/* Grid: Top Attack Intents & Top Attacker Geographies */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Top Attack Intents (Clean Donut Chart with Legend & Tooltip) */}
-        <div className="card">
-          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+        {/* Top Attack Intents */}
+        <div className="glass-panel rounded-xl border border-cyan-500/20 overflow-hidden">
+          <div className="p-4 border-b border-cyan-500/20 flex items-center justify-between bg-[#050a18]/60">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Top Attack Intents</h2>
-              <p className="text-xs text-gray-500">MITRE ATT&CK objective taxonomy (All-Time)</p>
+              <h2 className="text-sm font-mono font-bold text-white tracking-wider flex items-center gap-2 uppercase">
+                <ShieldAlert className="w-4 h-4 text-cyan-400" />
+                MITRE ATT&CK INTENT OBJECTIVE TAXONOMY
+              </h2>
+              <p className="text-xs text-slate-400 font-mono mt-0.5">
+                Categorized behavioral intent breakdown (All-Time Authoritative)
+              </p>
             </div>
           </div>
           <div className="p-4 h-80">
             {intentData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+              <div className="h-full flex items-center justify-center text-slate-500 text-xs font-mono">
                 No intent classification data available
               </div>
             ) : (
@@ -308,74 +421,66 @@ export default function AnalyticsPage() {
                     cx="50%"
                     cy="45%"
                     innerRadius={55}
-                    outerRadius={90}
-                    paddingAngle={2}
+                    outerRadius={95}
+                    paddingAngle={3}
                     dataKey="value"
                     nameKey="name"
-                    // Only label slices that are at least 5% to eliminate text collisions
                     label={({ name, percent }) =>
                       percent >= 0.05 ? `${name} ${(percent * 100).toFixed(0)}%` : ''
                     }
+                    stroke="#030712"
+                    strokeWidth={2}
                   >
                     {intentData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#fff',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '8px',
-                      boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-                    }}
-                    formatter={(value: number, name: string) => [
-                      `${value.toLocaleString()} events`,
-                      name,
-                    ]}
+                  <Tooltip content={<CustomTooltip unit="intents" />} />
+                  <Legend
+                    verticalAlign="bottom"
+                    height={40}
+                    iconType="circle"
+                    formatter={(val) => <span className="text-xs font-mono text-slate-300">{val}</span>}
                   />
-                  <Legend verticalAlign="bottom" height={40} iconType="circle" />
                 </PieChart>
               </ResponsiveContainer>
             )}
           </div>
         </div>
 
-        {/* Top Attacker Countries (Horizontal Bar Chart with Full Names) */}
-        <div className="card">
-          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+        {/* Top Attacker Geographies */}
+        <div className="glass-panel rounded-xl border border-cyan-500/20 overflow-hidden">
+          <div className="p-4 border-b border-cyan-500/20 flex items-center justify-between bg-[#050a18]/60">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Top Attacker Geographies</h2>
-              <p className="text-xs text-gray-500">Country of origin by session count (All-Time)</p>
+              <h2 className="text-sm font-mono font-bold text-white tracking-wider flex items-center gap-2 uppercase">
+                <Globe2 className="w-4 h-4 text-purple-400" />
+                PRIMARY ORIGIN GEOGRAPHIES (ALL-TIME)
+              </h2>
+              <p className="text-xs text-slate-400 font-mono mt-0.5">
+                Top source countries mapped by verified session volume
+              </p>
             </div>
           </div>
           <div className="p-4 h-80">
             {countryData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+              <div className="h-full flex items-center justify-center text-slate-500 text-xs font-mono">
                 No geographic data recorded
               </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={countryData} layout="vertical" margin={{ left: 20, right: 20 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis type="number" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
+                <BarChart data={countryData} layout="vertical" margin={{ left: 10, right: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
+                  <XAxis type="number" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
                   <YAxis
                     type="category"
                     dataKey="name"
-                    stroke="#475569"
-                    fontSize={11}
+                    stroke="#94a3b8"
+                    fontSize={10}
                     tickLine={false}
                     axisLine={false}
                     width={110}
                   />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#fff',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '8px',
-                      boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-                    }}
-                    formatter={(value: number) => [`${value.toLocaleString()} sessions`, 'Sessions']}
-                  />
+                  <Tooltip content={<CustomTooltip unit="sessions" />} />
                   <Bar dataKey="value" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -387,19 +492,22 @@ export default function AnalyticsPage() {
       {/* Bottom Grid: Threat Level Distribution & Sessions Over Time */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Threat Level Distribution */}
-        <div className="card">
-          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="glass-panel rounded-xl border border-cyan-500/20 overflow-hidden">
+          <div className="p-4 border-b border-cyan-500/20 flex items-center justify-between bg-[#050a18]/60">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Threat Distribution</h2>
-              <p className="text-xs text-gray-500">Skill and risk classifications (All-Time)</p>
+              <h2 className="text-sm font-mono font-bold text-white tracking-wider flex items-center gap-2 uppercase">
+                <ShieldAlert className="w-4 h-4 text-rose-400" />
+                THREAT LEVEL SPECTRUM
+              </h2>
+              <p className="text-xs text-slate-400 font-mono mt-0.5">Risk tier classifications</p>
             </div>
-            <span className="text-xs font-semibold text-gray-500">
-              {totalThreatEvaluated.toLocaleString()} sessions
+            <span className="text-xs font-mono font-bold text-cyan-300">
+              {totalThreatEvaluated.toLocaleString()} EVALUATED
             </span>
           </div>
           <div className="p-4 h-72">
             {threatData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+              <div className="h-full flex items-center justify-center text-slate-500 text-xs font-mono">
                 No threat assessment records
               </div>
             ) : (
@@ -410,31 +518,27 @@ export default function AnalyticsPage() {
                     cx="50%"
                     cy="45%"
                     innerRadius={50}
-                    outerRadius={80}
+                    outerRadius={85}
                     paddingAngle={3}
                     dataKey="count"
                     nameKey="level"
                     label={({ level, percent }) =>
                       percent >= 0.05 ? `${level} ${(percent * 100).toFixed(0)}%` : ''
                     }
+                    stroke="#030712"
+                    strokeWidth={2}
                   >
                     {threatData.map((entry, index) => (
                       <Cell key={`threat-cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#fff',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '8px',
-                      boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-                    }}
-                    formatter={(value: number, name: string) => [
-                      `${value.toLocaleString()} sessions (${totalThreatEvaluated > 0 ? ((value / totalThreatEvaluated) * 100).toFixed(1) : 0}%)`,
-                      name,
-                    ]}
+                  <Tooltip content={<CustomTooltip unit="sessions" />} />
+                  <Legend
+                    verticalAlign="bottom"
+                    height={36}
+                    iconType="circle"
+                    formatter={(val) => <span className="text-xs font-mono text-slate-300">{val}</span>}
                   />
-                  <Legend verticalAlign="bottom" height={36} iconType="circle" />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -442,70 +546,41 @@ export default function AnalyticsPage() {
         </div>
 
         {/* Sessions Over Time (Last 7 Days) */}
-        <div className="card lg:col-span-2">
-          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="glass-panel lg:col-span-2 rounded-xl border border-cyan-500/20 overflow-hidden">
+          <div className="p-4 border-b border-cyan-500/20 flex items-center justify-between bg-[#050a18]/60">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Sessions Over Time</h2>
-              <p className="text-xs text-gray-500">Daily unique honeypot sessions (Last 7 Days)</p>
+              <h2 className="text-sm font-mono font-bold text-white tracking-wider flex items-center gap-2 uppercase">
+                <Activity className="w-4 h-4 text-amber-400" />
+                DAILY SESSION TIMELINE (LAST 7 DAYS)
+              </h2>
+              <p className="text-xs text-slate-400 font-mono mt-0.5">
+                Daily unique honeypot intrusion trajectories recorded
+              </p>
             </div>
           </div>
           <div className="p-4 h-72">
             {sessionsDailyData.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+              <div className="h-full flex items-center justify-center text-slate-500 text-xs font-mono">
                 No daily session records in current window
               </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={sessionsDailyData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="date" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#fff',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '8px',
-                      boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-                    }}
-                    formatter={(value: number) => [`${value.toLocaleString()} sessions`, 'Sessions']}
-                  />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
+                  <XAxis dataKey="date" stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+                  <YAxis stroke="#64748b" fontSize={10} tickLine={false} axisLine={false} />
+                  <Tooltip content={<CustomTooltip unit="sessions" />} />
                   <Line
                     type="monotone"
                     dataKey="sessions"
                     stroke="#f59e0b"
                     strokeWidth={3}
                     dot={{ fill: '#f59e0b', strokeWidth: 2, r: 4 }}
-                    activeDot={{ r: 7, strokeWidth: 2 }}
+                    activeDot={{ r: 6, strokeWidth: 2, fill: '#f59e0b' }}
                   />
                 </LineChart>
               </ResponsiveContainer>
             )}
-          </div>
-        </div>
-      </div>
-
-      {/* Summary Statistics Card (All-Time Authoritative) */}
-      <div className="card">
-        <div className="p-4 border-b border-gray-200">
-          <h2 className="text-base font-semibold text-gray-900">Summary Statistics (All-Time Authoritative)</h2>
-          <p className="text-xs text-gray-500">Directly calculated from primary ClickHouse telemetry tables</p>
-        </div>
-        <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
-            <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Total Sessions</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{totalSessions.toLocaleString()}</p>
-          </div>
-          <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
-            <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Active Sessions</p>
-            <p className="text-2xl font-bold text-emerald-600 mt-1">{activeSessions.toLocaleString()}</p>
-          </div>
-          <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
-            <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Total Commands</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{totalCommands.toLocaleString()}</p>
-          </div>
-          <div className="bg-gray-50 p-4 rounded-lg border border-gray-100">
-            <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold">Unique Attackers</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">{uniqueAttackers.toLocaleString()}</p>
           </div>
         </div>
       </div>

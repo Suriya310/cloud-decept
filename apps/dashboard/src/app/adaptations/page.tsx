@@ -12,12 +12,18 @@ import {
   Eye,
   Copy,
   Check,
-  Download,
-  AlertTriangle,
   RefreshCw,
   Sparkles,
   Info,
   MapPin,
+  Flame,
+  Key,
+  Database,
+  Cpu,
+  Clock,
+  Terminal,
+  ArrowRight,
+  CheckCircle2,
 } from 'lucide-react';
 import { cn, formatTimestamp, getIntentColor } from '@/lib/utils';
 import { useDashboardStore } from '@/lib/store';
@@ -30,6 +36,8 @@ interface StrategyInfo {
   name: string;
   description: string;
   action_template: string;
+  icon: string;
+  badgeColor: string;
 }
 
 const STRATEGY_DEFINITIONS: Record<string, StrategyInfo> = {
@@ -37,46 +45,58 @@ const STRATEGY_DEFINITIONS: Record<string, StrategyInfo> = {
     name: 'Credential Capture Decoy',
     description: 'Injects synthetic canary AWS credentials and deceptive SSH keys into bash environment',
     action_template: 'Injected canary credentials into environment and filesystem',
+    icon: 'Key',
+    badgeColor: 'border-amber-500/40 text-amber-300 bg-amber-950/40',
   },
   fake_environment: {
     name: 'Synthetic Cloud Environment',
     description: 'Presents deceptive cloud resource listings and mock system configurations',
     action_template: 'Returned deceptive cloud resource inventory and instance metadata',
+    icon: 'Database',
+    badgeColor: 'border-cyan-500/40 text-cyan-300 bg-cyan-950/40',
   },
   throttle: {
     name: 'Latency Throttling',
     description: 'Introduces artificial delays to slow automated scanning tools and brute-forcers',
-    action_template: 'Applied dynamic command latency delay',
+    action_template: 'Applied dynamic command latency delay (500ms - 2000ms)',
+    icon: 'Clock',
+    badgeColor: 'border-blue-500/40 text-blue-300 bg-blue-950/40',
   },
   decoy_resource: {
     name: 'Decoy Cloud Storage Targets',
     description: 'Spawns decoy S3 buckets and mock database endpoints to capture exfiltration',
-    action_template: 'Exposed decoy cloud storage targets',
+    action_template: 'Exposed decoy cloud storage targets and honeytokens',
+    icon: 'Cpu',
+    badgeColor: 'border-purple-500/40 text-purple-300 bg-purple-950/40',
   },
   session_terminate: {
     name: 'Containment Termination',
     description: 'Terminates active session upon critical system-level compromise attempt',
-    action_template: 'Session severed to prevent lateral movement',
+    action_template: 'Session severed immediately to isolate honeypot host',
+    icon: 'Flame',
+    badgeColor: 'border-rose-500/40 text-rose-300 bg-rose-950/40',
   },
   alert_only: {
     name: 'Passive Observation',
-    description: 'Passive telemetry recording and MITRE ATT&CK correlation',
+    description: 'Passive telemetry recording, behavioral fingerprinting, and MITRE ATT&CK correlation',
     action_template: 'Logged session telemetry and mapped MITRE techniques',
+    icon: 'Terminal',
+    badgeColor: 'border-teal-500/40 text-teal-300 bg-teal-950/40',
   },
 };
 
 function mapIntentToStrategy(intent: string): { strategy: string; action: string } {
   const norm = intent.toLowerCase().replace(/-/g, '_');
-  if (norm.includes('credential') || norm.includes('steal')) {
+  if (norm.includes('credential') || norm.includes('steal') || norm.includes('dump')) {
     return { strategy: 'credential_capture', action: STRATEGY_DEFINITIONS.credential_capture.action_template };
   }
-  if (norm.includes('recon') || norm.includes('discovery') || norm.includes('system')) {
+  if (norm.includes('recon') || norm.includes('discovery') || norm.includes('system') || norm.includes('enum')) {
     return { strategy: 'fake_environment', action: STRATEGY_DEFINITIONS.fake_environment.action_template };
   }
-  if (norm.includes('lateral') || norm.includes('exfiltration') || norm.includes('data')) {
+  if (norm.includes('lateral') || norm.includes('exfiltration') || norm.includes('data') || norm.includes('s3')) {
     return { strategy: 'decoy_resource', action: STRATEGY_DEFINITIONS.decoy_resource.action_template };
   }
-  if (norm.includes('damage') || norm.includes('privilege') || norm.includes('destroy')) {
+  if (norm.includes('damage') || norm.includes('privilege') || norm.includes('destroy') || norm.includes('escape')) {
     return { strategy: 'session_terminate', action: STRATEGY_DEFINITIONS.session_terminate.action_template };
   }
   return { strategy: 'alert_only', action: STRATEGY_DEFINITIONS.alert_only.action_template };
@@ -87,7 +107,7 @@ export default function AdaptationsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStrategy, setSelectedStrategy] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
-  const [strategies, setStrategies] = useState<Record<string, { name: string; description: string }>>(STRATEGY_DEFINITIONS);
+  const [strategies, setStrategies] = useState<Record<string, StrategyInfo>>(STRATEGY_DEFINITIONS);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const adaptationsPerPage = 20;
@@ -108,7 +128,23 @@ export default function AdaptationsPage() {
       try {
         const liveStrategies = await api.getAdaptiveStrategies();
         if (liveStrategies && Object.keys(liveStrategies).length > 0) {
-          setStrategies((prev) => ({ ...prev, ...liveStrategies }));
+          setStrategies((prev) => {
+            const merged = { ...prev };
+            for (const [k, v] of Object.entries(liveStrategies)) {
+              if (merged[k]) {
+                merged[k] = { ...merged[k], ...v };
+              } else {
+                merged[k] = {
+                  name: v.name || k,
+                  description: v.description || '',
+                  action_template: 'Applied deception policy',
+                  icon: 'Shield',
+                  badgeColor: 'border-cyan-500/40 text-cyan-300 bg-cyan-950/40',
+                };
+              }
+            }
+            return merged;
+          });
         }
       } catch {
         // Fall back to built-in strategy definitions
@@ -186,73 +222,143 @@ export default function AdaptationsPage() {
     );
   }, [filteredAdaptations, currentPage, adaptationsPerPage]);
 
+  const getStrategyIcon = (key: string) => {
+    switch (key) {
+      case 'credential_capture':
+        return <Key className="w-4 h-4 text-amber-400" />;
+      case 'fake_environment':
+        return <Database className="w-4 h-4 text-cyan-400" />;
+      case 'throttle':
+        return <Clock className="w-4 h-4 text-blue-400" />;
+      case 'decoy_resource':
+        return <Cpu className="w-4 h-4 text-purple-400" />;
+      case 'session_terminate':
+        return <Flame className="w-4 h-4 text-rose-400" />;
+      default:
+        return <Shield className="w-4 h-4 text-teal-400" />;
+    }
+  };
+
   return (
-    <main className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <main className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-[1600px] mx-auto text-slate-100">
+      {/* Header HUD */}
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Adaptive Defense & Response Policies</h1>
-          <p className="text-gray-500 mt-1">
-            Dynamic deception strategies mapped and assigned based on real-time adversary intent classification
+          <div className="flex items-center gap-2 mb-1">
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono tracking-widest uppercase bg-cyan-950/80 text-cyan-400 border border-cyan-500/30">
+              Active Defense Layer
+            </span>
+            <span className="flex h-2 w-2 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500" />
+            </span>
+            <span className="text-xs font-mono text-cyan-300">Policy Engine Online</span>
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white font-mono flex items-center gap-3">
+            <Zap className="w-7 h-7 text-cyan-400" />
+            ADAPTIVE DECEPTION & ACTIVE MITIGATION
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-2xl font-mono">
+            Dynamic deception strategies and synthetic canary injections mapped deterministically from real-time adversary intent vectors
           </p>
         </div>
+
+        {/* Action Controls */}
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="search"
-              placeholder="Search adaptations, IP, intent..."
+              placeholder="Search policies, IPs, intents..."
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
                 setCurrentPage(1);
               }}
-              className="w-64 pl-10 pr-4 py-2 text-sm bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              className="w-56 sm:w-64 pl-9 pr-3 py-2 text-xs bg-[#050a18]/90 border border-cyan-500/20 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono transition-all"
             />
           </div>
+
           <select
             value={selectedStrategy}
             onChange={(e) => {
               setSelectedStrategy(e.target.value);
               setCurrentPage(1);
             }}
-            className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white min-w-[220px]"
+            className="px-3 py-2 text-xs bg-[#050a18]/90 border border-cyan-500/20 rounded-lg text-slate-200 focus:outline-none focus:border-cyan-400 font-mono min-w-[200px]"
           >
-            <option value="all">All Response Policies ({adaptations.length})</option>
+            <option value="all">ALL STRATEGIES ({adaptations.length})</option>
             {strategyKeys.map((k) => (
               <option key={k} value={k}>
-                {strategies[k]?.name || k.replace(/_/g, ' ')} ({strategyCounts[k] || 0})
+                {strategies[k]?.name.toUpperCase() || k.toUpperCase()} ({strategyCounts[k] || 0})
               </option>
             ))}
           </select>
+
           <button
             onClick={loadData}
             disabled={isRefreshing}
-            className="p-2 rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors disabled:opacity-50"
-            title="Refresh adaptations"
+            className="p-2 rounded-lg border border-cyan-500/20 bg-[#050a18]/90 text-cyan-400 hover:text-cyan-300 hover:border-cyan-500/40 transition-colors disabled:opacity-50"
+            title="Refresh policies"
           >
             <RefreshCw className={cn('w-4 h-4', isRefreshing && 'animate-spin')} />
           </button>
         </div>
       </div>
 
-      {/* Transparent Information Banner */}
-      <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-start gap-3">
-        <Info className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-        <div className="text-xs text-blue-800 leading-relaxed">
-          <p className="font-semibold text-sm mb-0.5 text-blue-900">
-            Policy Assigned (Inferred from Intent Classifier)
-          </p>
-          The Adaptive Engine evaluates honeypot session intent vectors and matches them to active deception playbooks.
-          Playbooks execute canary token injections, latency throttling, or deception resource responses in real-time.
+      {/* Cyber Deception Pipeline Ribbon */}
+      <div className="glass-panel p-4 border border-cyan-500/20 rounded-xl relative overflow-hidden">
+        <div className="flex items-center justify-between mb-3 border-b border-cyan-500/10 pb-2">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-cyan-400" />
+            <span className="text-xs font-mono font-bold tracking-wider text-cyan-300 uppercase">
+              Autonomous Adaptive Deception Pipeline
+            </span>
+          </div>
+          <span className="text-[11px] font-mono text-slate-400">
+            Real-Time State Machine: <span className="text-emerald-400 font-bold">SYNCHRONIZED</span>
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-center relative">
+          <div className="p-2.5 rounded-lg bg-cyan-950/30 border border-cyan-500/20 flex flex-col items-center justify-center">
+            <span className="text-[10px] font-mono text-cyan-400 font-bold tracking-widest">PHASE 01</span>
+            <span className="text-xs font-bold text-slate-200 mt-0.5">ATTACKER RECON</span>
+            <span className="text-[10px] text-slate-400 font-mono mt-0.5">Cowrie SSH / Telnet Probe</span>
+          </div>
+
+          <div className="p-2.5 rounded-lg bg-cyan-950/30 border border-cyan-500/20 flex flex-col items-center justify-center">
+            <span className="text-[10px] font-mono text-cyan-400 font-bold tracking-widest">PHASE 02</span>
+            <span className="text-xs font-bold text-slate-200 mt-0.5">INTENT INFERENCE</span>
+            <span className="text-[10px] text-slate-400 font-mono mt-0.5">NLP Classifier & MITRE Map</span>
+          </div>
+
+          <div className="p-2.5 rounded-lg bg-cyan-950/30 border border-cyan-500/20 flex flex-col items-center justify-center">
+            <span className="text-[10px] font-mono text-cyan-400 font-bold tracking-widest">PHASE 03</span>
+            <span className="text-xs font-bold text-slate-200 mt-0.5">POLICY RESOLUTION</span>
+            <span className="text-[10px] text-slate-400 font-mono mt-0.5">Adaptive Engine Strategy Matrix</span>
+          </div>
+
+          <div className="p-2.5 rounded-lg bg-cyan-950/30 border border-cyan-500/20 flex flex-col items-center justify-center">
+            <span className="text-[10px] font-mono text-cyan-400 font-bold tracking-widest">PHASE 04</span>
+            <span className="text-xs font-bold text-slate-200 mt-0.5">SYNTHETIC INJECTION</span>
+            <span className="text-[10px] text-slate-400 font-mono mt-0.5">Canary Tokens & Mock Targets</span>
+          </div>
+
+          <div className="p-2.5 rounded-lg bg-cyan-950/30 border border-cyan-500/20 flex flex-col items-center justify-center">
+            <span className="text-[10px] font-mono text-cyan-400 font-bold tracking-widest">PHASE 05</span>
+            <span className="text-xs font-bold text-slate-200 mt-0.5">CONTAINMENT</span>
+            <span className="text-[10px] text-slate-400 font-mono mt-0.5">TTP Extraction & Severance</span>
+          </div>
         </div>
       </div>
 
       {/* Strategy Catalog Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
         {strategyKeys.map((k) => {
           const count = strategyCounts[k] || 0;
           const isSelected = selectedStrategy === k;
+          const strat = strategies[k];
 
           return (
             <div
@@ -262,121 +368,163 @@ export default function AdaptationsPage() {
                 setCurrentPage(1);
               }}
               className={cn(
-                'card p-4 cursor-pointer transition-all border-2 select-none',
-                isSelected ? 'border-primary-500 bg-primary-50/20' : 'border-transparent hover:border-gray-200'
+                'glass-panel p-3.5 rounded-xl cursor-pointer transition-all duration-200 border flex flex-col justify-between group select-none',
+                isSelected
+                  ? 'border-cyan-400 bg-cyan-950/40 shadow-neon'
+                  : 'border-cyan-500/20 hover:border-cyan-500/50 bg-[#070e22]/80 hover:bg-[#091533]'
               )}
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="p-2 rounded-lg bg-primary-100 text-primary-600">
-                  <Zap className="w-4 h-4" />
-                </span>
-                <span className="font-mono text-lg font-bold text-gray-900">{count}</span>
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="p-2 rounded-lg bg-cyan-950/60 border border-cyan-500/30">
+                    {getStrategyIcon(k)}
+                  </span>
+                  <span className="font-mono text-lg font-bold text-cyan-300">
+                    {count.toLocaleString()}
+                  </span>
+                </div>
+                <p className="font-mono text-xs font-bold text-white group-hover:text-cyan-300 transition-colors line-clamp-1">
+                  {strat?.name || k}
+                </p>
+                <p className="text-[11px] text-slate-400 line-clamp-2 mt-1 font-sans leading-relaxed">
+                  {strat?.description}
+                </p>
               </div>
-              <p className="font-medium text-xs text-gray-900 line-clamp-1">{strategies[k]?.name || k}</p>
-              <p className="text-[11px] text-gray-500 line-clamp-2 mt-1">{strategies[k]?.description}</p>
+
+              <div className="mt-3 pt-2 border-t border-cyan-500/10 flex items-center justify-between text-[10px] font-mono">
+                <span className={cn('px-1.5 py-0.5 rounded border', strat?.badgeColor || 'border-cyan-500/30 text-cyan-300')}>
+                  {isSelected ? 'ACTIVE FILTER' : 'SELECT'}
+                </span>
+                <span className="text-slate-500">
+                  {adaptations.length > 0 ? ((count / adaptations.length) * 100).toFixed(0) : 0}%
+                </span>
+              </div>
             </div>
           );
         })}
       </div>
 
-      {/* Adaptations Log Table */}
-      <div className="card">
-        <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+      {/* Policy Enforcement & Execution Log Table */}
+      <div className="glass-panel border border-cyan-500/20 rounded-xl overflow-hidden">
+        <div className="p-4 border-b border-cyan-500/20 flex flex-wrap items-center justify-between gap-3 bg-[#050a18]/60">
           <div>
-            <h2 className="text-base font-semibold text-gray-900">Policy Assignment & Execution Log</h2>
-            <p className="text-xs text-gray-500">Chronological list of adaptive strategies assigned to sessions</p>
+            <h2 className="text-sm font-mono font-bold text-white tracking-wider flex items-center gap-2 uppercase">
+              <Shield className="w-4 h-4 text-cyan-400" />
+              POLICY ASSIGNMENT & EXECUTION LOG
+            </h2>
+            <p className="text-xs text-slate-400 font-mono mt-0.5">
+              Chronological ledger of deception strategies dynamically assigned to attacker sessions
+            </p>
           </div>
-          <span className="text-xs font-medium text-gray-500">{filteredAdaptations.length} records</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono text-cyan-300 px-2.5 py-1 rounded bg-cyan-950/80 border border-cyan-500/30">
+              {filteredAdaptations.length.toLocaleString()} RECORDS
+            </span>
+          </div>
         </div>
-        <div className="table-container">
-          <table className="table">
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
             <thead>
-              <tr>
-                <th>Time</th>
-                <th>Session</th>
-                <th>Attacker IP</th>
-                <th>Country</th>
-                <th>Triggering Intent</th>
-                <th>Assigned Strategy</th>
-                <th>Deception Action</th>
-                <th>Status</th>
+              <tr className="border-b border-cyan-500/20 bg-[#050a18]/80 text-[10px] font-mono text-cyan-300 uppercase tracking-widest">
+                <th className="py-3 px-4">TIMESTAMP</th>
+                <th className="py-3 px-4">SESSION ID</th>
+                <th className="py-3 px-4">ATTACKER IP</th>
+                <th className="py-3 px-4">ORIGIN</th>
+                <th className="py-3 px-4">TRIGGERING INTENT</th>
+                <th className="py-3 px-4">ASSIGNED POLICY</th>
+                <th className="py-3 px-4">DECEPTION ACTION</th>
+                <th className="py-3 px-4 text-right">STATUS</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-cyan-500/10 font-mono">
               {paginatedAdaptations.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-12 text-center text-gray-500">
-                    No policy assignments match your search or filter.
+                  <td colSpan={8} className="py-12 text-center text-slate-500 font-mono">
+                    No active deception policies match the search or filter criteria.
                   </td>
                 </tr>
               ) : (
                 paginatedAdaptations.map((a) => {
                   const norm = normalizeIntent(a.intent);
+                  const strat = strategies[a.strategy];
 
                   return (
-                    <tr key={a.id}>
-                      <td className="text-xs text-gray-500 font-mono whitespace-nowrap">
+                    <tr
+                      key={a.id}
+                      className="hover:bg-cyan-950/20 transition-colors group text-slate-300"
+                    >
+                      <td className="py-3 px-4 whitespace-nowrap text-cyan-400/80 font-mono text-[11px]">
                         {formatTimestamp(a.timestamp)}
                       </td>
-                      <td>
-                        <div className="flex items-center gap-1 font-mono text-xs">
+
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5 font-mono">
                           <Link
                             href={`/sessions/${a.session_id}`}
-                            className="text-primary-600 hover:underline font-semibold"
+                            className="text-cyan-400 hover:text-cyan-300 hover:underline font-bold"
                           >
-                            {a.session_id.slice(0, 10)}...
+                            {a.session_id.slice(0, 8)}...
                           </Link>
                           <button
                             onClick={(e) => handleCopy(a.session_id, `sess-${a.id}`, e)}
-                            className="text-gray-400 hover:text-gray-600 p-0.5"
+                            className="text-slate-500 hover:text-cyan-300 transition-colors p-0.5"
                             title="Copy session ID"
                           >
                             {copiedKey === `sess-${a.id}` ? (
-                              <Check className="w-3 h-3 text-green-600" />
+                              <Check className="w-3 h-3 text-emerald-400" />
                             ) : (
                               <Copy className="w-3 h-3" />
                             )}
                           </button>
                         </div>
                       </td>
-                      <td>
-                        <div className="flex items-center gap-1 font-mono text-xs text-gray-800">
+
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5 font-mono text-slate-200">
                           <span>{a.attacker_ip}</span>
                           <button
                             onClick={(e) => handleCopy(a.attacker_ip, `ip-${a.id}`, e)}
-                            className="text-gray-400 hover:text-gray-600 p-0.5"
+                            className="text-slate-500 hover:text-cyan-300 transition-colors p-0.5"
                             title="Copy IP"
                           >
                             {copiedKey === `ip-${a.id}` ? (
-                              <Check className="w-3 h-3 text-green-600" />
+                              <Check className="w-3 h-3 text-emerald-400" />
                             ) : (
                               <Copy className="w-3 h-3" />
                             )}
                           </button>
                         </div>
                       </td>
-                      <td className="text-xs text-gray-600 truncate max-w-[120px]" title={a.country}>
+
+                      <td className="py-3 px-4 whitespace-nowrap text-slate-400 text-[11px]">
                         {a.country}
                       </td>
-                      <td>
+
+                      <td className="py-3 px-4 whitespace-nowrap">
                         <span
-                          className={cn('badge text-xs', getIntentColor(a.intent))}
+                          className={cn('inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono border', getIntentColor(a.intent))}
                           title={norm.description}
                         >
                           {norm.label}
                         </span>
                       </td>
-                      <td>
-                        <span className="badge bg-blue-100 text-blue-800 text-xs font-medium">
-                          {strategies[a.strategy]?.name || a.strategy.replace(/_/g, ' ')}
+
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <span className={cn('inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-mono border font-semibold', strat?.badgeColor || 'border-cyan-500/30 text-cyan-300 bg-cyan-950/40')}>
+                          {getStrategyIcon(a.strategy)}
+                          {strat?.name || a.strategy.replace(/_/g, ' ')}
                         </span>
                       </td>
-                      <td className="text-xs text-gray-700 max-w-sm truncate" title={a.action}>
+
+                      <td className="py-3 px-4 max-w-xs truncate text-[11px] text-slate-300 font-sans" title={a.action}>
                         {a.action}
                       </td>
-                      <td>
-                        <span className="badge bg-emerald-100 text-emerald-800 text-xs font-semibold">
-                          {a.status}
+
+                      <td className="py-3 px-4 whitespace-nowrap text-right">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950/60 border border-emerald-500/30 text-emerald-400">
+                          <CheckCircle2 className="w-3 h-3" />
+                          {a.status.toUpperCase()}
                         </span>
                       </td>
                     </tr>
@@ -387,29 +535,30 @@ export default function AdaptationsPage() {
           </table>
         </div>
 
+        {/* Pagination Bar */}
         {totalPages > 1 && (
-          <div className="p-4 border-t border-gray-200 flex items-center justify-between">
-            <div className="text-sm text-gray-500">
+          <div className="p-3 border-t border-cyan-500/20 bg-[#050a18]/70 flex items-center justify-between text-xs font-mono">
+            <div className="text-slate-400">
               Showing {(currentPage - 1) * adaptationsPerPage + 1} to{' '}
               {Math.min(currentPage * adaptationsPerPage, filteredAdaptations.length)} of{' '}
-              {filteredAdaptations.length} adaptations
+              {filteredAdaptations.length} records
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
-                className="p-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1.5 rounded bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-900/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 aria-label="Previous page"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <span className="text-sm font-medium text-gray-700">
-                Page {currentPage} of {totalPages}
+              <span className="text-slate-300 font-bold px-2">
+                PAGE {currentPage} / {totalPages}
               </span>
               <button
                 onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
-                className="p-2 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1.5 rounded bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-900/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 aria-label="Next page"
               >
                 <ChevronRight className="w-4 h-4" />

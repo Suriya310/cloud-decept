@@ -4,13 +4,8 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import {
   Search,
-  Filter,
   AlertTriangle,
   Shield,
-  Eye,
-  MapPin,
-  Clock,
-  Terminal,
   FileText,
   RefreshCw,
   Layers,
@@ -18,6 +13,8 @@ import {
   Copy,
   Check,
   Flame,
+  Radio,
+  ExternalLink,
 } from 'lucide-react';
 import { cn, formatTimestamp, getSeverityColor, getIntentColor } from '@/lib/utils';
 import { useDashboardStore } from '@/lib/store';
@@ -91,10 +88,9 @@ export default function ThreatIntelPage() {
         threat: evaluateThreat(s.threat_score ?? s.skill_level),
       }))
       .filter((item) => item.threat.isHighRisk)
-      .slice(0, 10);
+      .slice(0, 8);
   }, [sessionsArray]);
 
-  // Filtered IOCs
   const filteredIOCs = useMemo(() => {
     return iocsArray.filter((ioc) => {
       const q = searchQuery.toLowerCase();
@@ -110,7 +106,6 @@ export default function ThreatIntelPage() {
     });
   }, [iocsArray, searchQuery, selectedSeverity]);
 
-  // Filtered Techniques
   const filteredTechniques = useMemo(() => {
     return techniquesArray.filter((t) => {
       const q = searchQuery.toLowerCase();
@@ -118,35 +113,37 @@ export default function ThreatIntelPage() {
     });
   }, [techniquesArray, searchQuery]);
 
-  // Connection status
-  const isApiHealthy = connectionStatus?.connected ?? false;
-
   return (
-    <main className="p-6 space-y-6">
-      {/* Header & Controls */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div className="space-y-6 font-mono">
+      {/* Header Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-3 border-b border-cyan-500/15">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Threat Intelligence & MITRE Correlation</h1>
-          <p className="text-gray-500 mt-1">
-            Real-time adversary technique tagging, IOC identification, and historical threat distribution
+          <h1 className="text-xl sm:text-2xl font-bold tracking-wider text-white uppercase flex items-center gap-2.5">
+            <Shield className="w-5 h-5 text-cyan-400" />
+            <span>THREAT INTELLIGENCE & MITRE MATRIX</span>
+          </h1>
+          <p className="text-xs text-slate-400 mt-1">
+            Authoritative ClickHouse adversary classifications, PostgreSQL IOC extractions, and MITRE technique frequency
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+
+        <div className="flex flex-wrap items-center gap-2.5">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-400/60" />
             <input
               type="search"
-              placeholder="Search threats, IOCs, techniques..."
+              placeholder="Search IOCs, techniques, hashes..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-64 pl-10 pr-4 py-2 text-sm bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              className="w-64 pl-9 pr-3 py-1.5 text-xs rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
             />
           </div>
+
           {viewMode === 'iocs' && (
             <select
               value={selectedSeverity}
               onChange={(e) => setSelectedSeverity(e.target.value)}
-              className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white"
+              className="px-2.5 py-1.5 text-xs rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 focus:outline-none focus:border-cyan-400"
             >
               <option value="all">All Severities</option>
               <option value="critical">Critical</option>
@@ -155,44 +152,45 @@ export default function ThreatIntelPage() {
               <option value="low">Low</option>
             </select>
           )}
+
           <button
             onClick={loadAll}
             disabled={isRefreshing}
-            className="p-2 rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors disabled:opacity-50"
+            className="p-1.5 rounded-lg bg-[#070e22] border border-cyan-500/30 text-slate-400 hover:text-cyan-300 transition-colors disabled:opacity-50"
             title="Refresh threat intel"
           >
-            <RefreshCw className={cn('w-4 h-4', isRefreshing && 'animate-spin')} />
+            <RefreshCw className={cn('w-4 h-4', isRefreshing && 'animate-spin text-cyan-400')} />
           </button>
         </div>
       </div>
 
-      {/* View Mode Switcher */}
-      <div className="flex border-b border-gray-200">
+      {/* Cyber Mode Switcher */}
+      <div className="flex border-b border-cyan-500/15">
         <button
           onClick={() => setViewMode('overview')}
           className={cn(
-            'px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-2',
+            'px-4 py-2 text-xs font-bold border-b-2 transition-all flex items-center gap-2',
             viewMode === 'overview'
-              ? 'border-primary-600 text-primary-600 font-semibold'
-              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              ? 'border-cyan-400 text-cyan-300 bg-cyan-500/10'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
           )}
         >
-          <Shield className="w-4 h-4" />
-          Threat Overview
+          <Shield className="w-3.5 h-3.5" />
+          THREAT OVERVIEW
         </button>
         <button
           onClick={() => setViewMode('iocs')}
           className={cn(
-            'px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-2',
+            'px-4 py-2 text-xs font-bold border-b-2 transition-all flex items-center gap-2',
             viewMode === 'iocs'
-              ? 'border-primary-600 text-primary-600 font-semibold'
-              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              ? 'border-cyan-400 text-cyan-300 bg-cyan-500/10'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
           )}
         >
-          <Database className="w-4 h-4" />
-          Indicators of Compromise (IOCs)
+          <Database className="w-3.5 h-3.5" />
+          IOC FEED
           {iocsArray.length > 0 && (
-            <span className="ml-1 px-2 py-0.5 text-xs bg-gray-100 text-gray-700 rounded-full font-mono">
+            <span className="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-slate-800 text-slate-300 border border-slate-700">
               {iocsArray.length}
             </span>
           )}
@@ -200,324 +198,195 @@ export default function ThreatIntelPage() {
         <button
           onClick={() => setViewMode('techniques')}
           className={cn(
-            'px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-2',
+            'px-4 py-2 text-xs font-bold border-b-2 transition-all flex items-center gap-2',
             viewMode === 'techniques'
-              ? 'border-primary-600 text-primary-600 font-semibold'
-              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              ? 'border-cyan-400 text-cyan-300 bg-cyan-500/10'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
           )}
         >
-          <Layers className="w-4 h-4" />
-          MITRE ATT&CK Matrix
+          <Layers className="w-3.5 h-3.5" />
+          MITRE ATT&CK MATRIX
           {techniquesArray.length > 0 && (
-            <span className="ml-1 px-2 py-0.5 text-xs bg-gray-100 text-gray-700 rounded-full font-mono">
+            <span className="ml-1 px-1.5 py-0.2 rounded text-[10px] bg-slate-800 text-slate-300 border border-slate-700">
               {techniquesArray.length}
             </span>
           )}
         </button>
       </div>
 
-      {/* OVERVIEW TAB */}
+      {/* VIEW: OVERVIEW */}
       {viewMode === 'overview' && (
         <div className="space-y-6">
-          {/* Key Metric Cards - Authoritative All-Time ClickHouse Distribution */}
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                Threat Classification (All-Time Authoritative)
-              </h2>
-              <span className="text-xs text-gray-400">Primary ClickHouse Telemetry</span>
+          {/* 4 Threat Classification Tiers */}
+          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="glass-panel p-4 rounded-xl border border-rose-500/30 relative overflow-hidden">
+              <div className="flex items-center justify-between text-slate-400 text-[10px] uppercase mb-1">
+                <span>CRITICAL THREATS</span>
+                <Flame className="w-4 h-4 text-rose-400 animate-pulse" />
+              </div>
+              <div className="text-2xl font-black text-rose-400 glow-rose">
+                {(threatDistribution.critical || 0).toLocaleString()}
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">Skill level 8 - 10 • Exploit payload</p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="card p-5 border-l-4 border-red-500 bg-red-50/20">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Critical Threats</p>
-                    <p className="text-2xl font-bold text-red-600 mt-1">
-                      {(threatDistribution.critical || 0).toLocaleString()}
-                    </p>
-                    <p className="text-[11px] text-gray-500 mt-0.5">Skill rating 8 - 10</p>
-                  </div>
-                  <div className="p-3 bg-red-100 rounded-xl">
-                    <Flame className="w-6 h-6 text-red-600" />
-                  </div>
-                </div>
-              </div>
 
-              <div className="card p-5 border-l-4 border-orange-500 bg-orange-50/20">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">High Threats</p>
-                    <p className="text-2xl font-bold text-orange-600 mt-1">
-                      {(threatDistribution.high || 0).toLocaleString()}
-                    </p>
-                    <p className="text-[11px] text-gray-500 mt-0.5">Skill rating 5 - 7</p>
-                  </div>
-                  <div className="p-3 bg-orange-100 rounded-xl">
-                    <AlertTriangle className="w-6 h-6 text-orange-600" />
-                  </div>
-                </div>
+            <div className="glass-panel p-4 rounded-xl border border-orange-500/30">
+              <div className="flex items-center justify-between text-slate-400 text-[10px] uppercase mb-1">
+                <span>HIGH THREATS</span>
+                <AlertTriangle className="w-4 h-4 text-orange-400" />
               </div>
+              <div className="text-2xl font-black text-orange-400">
+                {(threatDistribution.high || 0).toLocaleString()}
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">Skill level 5 - 7 • Active probing</p>
+            </div>
 
-              <div className="card p-5 border-l-4 border-amber-500 bg-amber-50/20">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Medium Threats</p>
-                    <p className="text-2xl font-bold text-amber-600 mt-1">
-                      {(threatDistribution.medium || 0).toLocaleString()}
-                    </p>
-                    <p className="text-[11px] text-gray-500 mt-0.5">Skill rating 3 - 4</p>
-                  </div>
-                  <div className="p-3 bg-amber-100 rounded-xl">
-                    <Shield className="w-6 h-6 text-amber-600" />
-                  </div>
-                </div>
+            <div className="glass-panel p-4 rounded-xl border border-amber-500/30">
+              <div className="flex items-center justify-between text-slate-400 text-[10px] uppercase mb-1">
+                <span>MEDIUM THREATS</span>
+                <Shield className="w-4 h-4 text-amber-400" />
               </div>
+              <div className="text-2xl font-black text-amber-400">
+                {(threatDistribution.medium || 0).toLocaleString()}
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">Skill level 3 - 4 • Discovery scan</p>
+            </div>
 
-              <div className="card p-5 border-l-4 border-emerald-500 bg-emerald-50/20">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Low Threats</p>
-                    <p className="text-2xl font-bold text-emerald-600 mt-1">
-                      {(threatDistribution.low || 0).toLocaleString()}
-                    </p>
-                    <p className="text-[11px] text-gray-500 mt-0.5">Automated script probes (1 - 2)</p>
-                  </div>
-                  <div className="p-3 bg-emerald-100 rounded-xl">
-                    <Shield className="w-6 h-6 text-emerald-600" />
-                  </div>
-                </div>
+            <div className="glass-panel p-4 rounded-xl border border-emerald-500/30">
+              <div className="flex items-center justify-between text-slate-400 text-[10px] uppercase mb-1">
+                <span>LOW THREATS</span>
+                <Shield className="w-4 h-4 text-emerald-400" />
               </div>
+              <div className="text-2xl font-black text-emerald-400">
+                {(threatDistribution.low || 0).toLocaleString()}
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">Skill level 1 - 2 • Automated bot probe</p>
             </div>
           </div>
 
-          {/* Top Intents */}
-          <div className="card">
-            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+          {/* High-Risk Sessions Investigation */}
+          <div className="glass-panel rounded-2xl overflow-hidden border border-cyan-500/20 shadow-2xl">
+            <div className="p-4 border-b border-cyan-500/15 flex items-center justify-between">
               <div>
-                <h2 className="text-base font-semibold text-gray-900">MITRE Intent Distribution</h2>
-                <p className="text-xs text-gray-500">Adversary intent classified from command sequences</p>
+                <h2 className="text-xs font-bold uppercase tracking-wider text-white">
+                  HIGH-RISK FORENSIC INCIDENTS
+                </h2>
+                <p className="text-[10px] text-slate-400 mt-0.5">Sessions flagged with High or Critical capability</p>
               </div>
-              <span className="text-xs font-medium text-gray-500">
-                {topIntents.reduce((acc, i) => acc + i.count, 0).toLocaleString()} total occurrences
-              </span>
+              <Link href="/sessions" className="text-xs text-cyan-400 hover:text-cyan-300 font-bold">
+                VIEW ALL →
+              </Link>
             </div>
-            <div className="p-4">
-              {topIntents.length === 0 ? (
-                <p className="text-gray-500 text-sm py-4 text-center">No intent data available</p>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {topIntents.map((item) => {
-                    const norm = normalizeIntent(item.intent);
-                    return (
-                      <span
-                        key={item.intent}
-                        className={cn('badge text-xs px-3 py-1', getIntentColor(item.intent))}
-                        title={norm.description}
-                      >
-                        {norm.label} ({item.count.toLocaleString()})
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
 
-          {/* High-Risk Sessions & Recent Threat Activity */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* High-Risk Sessions */}
-            <div className="card">
-              <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-                <div>
-                  <h2 className="text-base font-semibold text-gray-900">High-Risk Sessions</h2>
-                  <p className="text-xs text-gray-500">Sessions evaluated as High or Critical severity</p>
-                </div>
-                <Link href="/sessions" className="text-xs text-primary-600 hover:text-primary-700 font-medium">
-                  View all sessions →
-                </Link>
-              </div>
-              <div className="table-container max-h-96 overflow-y-auto">
-                <table className="table">
-                  <thead className="sticky top-0 bg-white z-10">
+            <div className="table-container">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Session ID</th>
+                    <th>Attacker IP</th>
+                    <th>Country</th>
+                    <th>Threat Level</th>
+                    <th>Commands</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {highRiskSessions.length === 0 ? (
                     <tr>
-                      <th>Session</th>
-                      <th>Attacker</th>
-                      <th>Country</th>
-                      <th>Threat Assessment</th>
+                      <td colSpan={6} className="px-4 py-12 text-center text-slate-500 text-xs">
+                        No active high-risk sessions detected.
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {highRiskSessions.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="px-4 py-8 text-center text-gray-500 text-xs">
-                          No active high-risk sessions detected in current sample
-                        </td>
-                      </tr>
-                    ) : (
-                      highRiskSessions.map(({ session, threat }) => {
-                        const ip = session.src_ip ?? session.attacker_ip ?? 'unknown';
-                        const country = getCountryName(session.src_country || session.country);
+                  ) : (
+                    highRiskSessions.map(({ session, threat }) => {
+                      const ip = session.src_ip ?? session.attacker_ip ?? 'unknown';
+                      const country = getCountryName(session.src_country || session.country);
 
-                        return (
-                          <tr key={session.session_id} className="hover:bg-gray-50">
-                            <td className="font-mono text-xs">
-                              <Link
-                                href={`/sessions/${session.session_id}`}
-                                className="text-primary-600 hover:underline font-semibold"
-                              >
-                                {session.session_id.slice(0, 12)}...
-                              </Link>
-                            </td>
-                            <td>
-                              <div className="flex items-center gap-1.5 font-mono text-xs">
-                                <span>{ip}</span>
-                                <button
-                                  onClick={(e) => handleCopy(ip, `ip-${session.session_id}`, e)}
-                                  className="text-gray-400 hover:text-gray-600 p-0.5"
-                                  title="Copy IP"
-                                >
-                                  {copiedKey === `ip-${session.session_id}` ? (
-                                    <Check className="w-3 h-3 text-green-600" />
-                                  ) : (
-                                    <Copy className="w-3 h-3" />
-                                  )}
-                                </button>
-                              </div>
-                            </td>
-                            <td className="text-xs text-gray-600 truncate max-w-[120px]" title={country}>
-                              {country}
-                            </td>
-                            <td>
-                              <span
-                                className={cn(
-                                  'badge text-xs font-bold',
-                                  threat.badgeBg,
-                                  threat.badgeColor
-                                )}
-                                title={threat.description}
-                              >
-                                {threat.label}
-                              </span>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Recent Analyzed Activity */}
-            <div className="card">
-              <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-                <div>
-                  <h2 className="text-base font-semibold text-gray-900">Recent Analyzed Sessions</h2>
-                  <p className="text-xs text-gray-500">Live honeypot session threat assessments</p>
-                </div>
-              </div>
-              <div className="p-4 space-y-3 max-h-96 overflow-y-auto">
-                {sessionsArray.slice(0, 7).map((session) => {
-                  const threat = evaluateThreat(session.threat_score ?? session.skill_level);
-                  const ip = session.src_ip ?? session.attacker_ip ?? 'unknown';
-
-                  return (
-                    <Link
-                      key={session.session_id}
-                      href={`/sessions/${session.session_id}`}
-                      className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50 transition-colors"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={cn(
-                            'w-9 h-9 rounded-lg flex items-center justify-center',
-                            threat.badgeBg,
-                            threat.badgeColor
-                          )}
-                        >
-                          <Shield className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <p className="font-mono text-xs font-semibold text-gray-900">
-                            {session.session_id.slice(0, 14)}...
-                          </p>
-                          <p className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
-                            <MapPin className="w-3 h-3 text-gray-400" />
-                            <span>{ip}</span>
-                            <span>•</span>
-                            <span>{getCountryName(session.src_country || session.country)}</span>
-                          </p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <span
-                          className={cn(
-                            'badge text-xs font-bold',
-                            threat.badgeBg,
-                            threat.badgeColor
-                          )}
-                        >
-                          {threat.label}
-                        </span>
-                        <p className="text-[11px] text-gray-400 mt-1 font-mono">
-                          {formatTimestamp(session.start_time)}
-                        </p>
-                      </div>
-                    </Link>
-                  );
-                })}
-              </div>
+                      return (
+                        <tr key={session.session_id} className="text-xs">
+                          <td>
+                            <Link href={`/sessions/${session.session_id}`} className="font-bold text-cyan-400 hover:underline">
+                              {session.session_id.slice(0, 12)}...
+                            </Link>
+                          </td>
+                          <td className="text-white font-bold">{ip}</td>
+                          <td className="text-slate-300">{country}</td>
+                          <td>
+                            <span className={cn('badge text-[10px] font-bold', threat.badgeClass)}>
+                              {threat.label}
+                            </span>
+                          </td>
+                          <td className="text-white">{(session.command_count ?? 0).toLocaleString()}</td>
+                          <td>
+                            <Link
+                              href={`/sessions/${session.session_id}`}
+                              className="text-xs text-cyan-400 hover:text-cyan-200 underline"
+                            >
+                              Inspect Console
+                            </Link>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
       )}
 
-      {/* IOCs TAB */}
+      {/* VIEW: IOC STREAM */}
       {viewMode === 'iocs' && (
-        <div className="card">
-          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="glass-panel rounded-2xl overflow-hidden border border-cyan-500/20 shadow-2xl">
+          <div className="p-4 border-b border-cyan-500/15 flex items-center justify-between">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Extracted Indicators of Compromise (IOCs)</h2>
-              <p className="text-xs text-gray-500">Autonomous extraction from commands, downloaded artifacts, and payloads</p>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-white">
+                INDICATORS OF COMPROMISE (IOCS)
+              </h2>
+              <p className="text-[10px] text-slate-400 mt-0.5">Payloads, IPs, and command artifacts</p>
             </div>
-            <span className="text-xs font-medium text-gray-500">{filteredIOCs.length} indicators found</span>
+            <span className="text-xs text-cyan-400 font-bold">{filteredIOCs.length} indicators indexed</span>
           </div>
+
           <div className="table-container">
             <table className="table">
               <thead>
                 <tr>
                   <th>Type</th>
-                  <th>Indicator Value</th>
+                  <th>Indicator Artifact Value</th>
                   <th>Severity</th>
-                  <th>Context</th>
-                  <th>MITRE Techniques</th>
+                  <th>Context Description</th>
+                  <th>Techniques</th>
                   <th>Confidence</th>
-                  <th>First Observed</th>
+                  <th>Observed</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredIOCs.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-gray-500">
-                      No indicators match the search criteria.
+                    <td colSpan={7} className="px-4 py-16 text-center text-slate-500 text-xs">
+                      No indicators match the search or severity criteria.
                     </td>
                   </tr>
                 ) : (
                   filteredIOCs.map((ioc, idx) => (
-                    <tr key={ioc.id || idx}>
+                    <tr key={ioc.id || idx} className="text-xs">
                       <td>
-                        <span className="badge bg-blue-100 text-blue-800 text-xs">{ioc.ioc_type}</span>
+                        <span className="badge text-[10px] bg-cyan-950 text-cyan-300 border-cyan-500/30 font-bold">
+                          {ioc.ioc_type}
+                        </span>
                       </td>
-                      <td className="font-mono text-xs font-semibold">
+                      <td className="font-bold text-white max-w-sm truncate">
                         <div className="flex items-center gap-1.5">
                           <span>{ioc.ioc_value}</span>
                           <button
                             onClick={(e) => handleCopy(ioc.ioc_value, `ioc-${idx}`, e)}
-                            className="text-gray-400 hover:text-gray-600 p-0.5"
-                            title="Copy IOC value"
+                            className="text-slate-500 hover:text-cyan-300"
+                            title="Copy IOC"
                           >
                             {copiedKey === `ioc-${idx}` ? (
-                              <Check className="w-3 h-3 text-green-600" />
+                              <Check className="w-3 h-3 text-emerald-400" />
                             ) : (
                               <Copy className="w-3 h-3" />
                             )}
@@ -525,26 +394,24 @@ export default function ThreatIntelPage() {
                         </div>
                       </td>
                       <td>
-                        <span className={cn('badge text-xs', getSeverityColor(ioc.severity || 'medium'))}>
+                        <span className={cn('badge text-[10px]', getSeverityColor(ioc.severity || 'medium'))}>
                           {ioc.severity || 'medium'}
                         </span>
                       </td>
-                      <td className="text-xs text-gray-600 max-w-xs truncate">{ioc.context || '—'}</td>
+                      <td className="text-slate-400 max-w-xs truncate">{ioc.context || '—'}</td>
                       <td>
                         <div className="flex flex-wrap gap-1">
                           {(ioc.mitre_techniques || []).map((t) => (
-                            <span key={t} className="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-700 rounded font-mono">
+                            <span key={t} className="px-1.5 py-0.2 rounded text-[10px] bg-slate-900 text-slate-300 border border-slate-700 font-mono">
                               {t}
                             </span>
                           ))}
                         </div>
                       </td>
-                      <td>
-                        <span className="font-mono text-xs font-semibold">
-                          {Math.round((ioc.confidence || 1) * 100)}%
-                        </span>
+                      <td className="text-cyan-300 font-bold">
+                        {Math.round((ioc.confidence || 1) * 100)}%
                       </td>
-                      <td className="text-xs text-gray-500 whitespace-nowrap">
+                      <td className="text-slate-400 whitespace-nowrap">
                         {formatTimestamp(ioc.created_at)}
                       </td>
                     </tr>
@@ -556,40 +423,45 @@ export default function ThreatIntelPage() {
         </div>
       )}
 
-      {/* TECHNIQUES TAB */}
+      {/* VIEW: MITRE ATT&CK MATRIX */}
       {viewMode === 'techniques' && (
-        <div className="card">
-          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="glass-panel rounded-2xl overflow-hidden border border-cyan-500/20 shadow-2xl p-6">
+          <div className="flex items-center justify-between mb-4 border-b border-cyan-500/15 pb-3">
             <div>
-              <h2 className="text-base font-semibold text-gray-900">Correlated MITRE ATT&CK Techniques</h2>
-              <p className="text-xs text-gray-500">Techniques mapped by Rule-Based & Pattern Summarizers</p>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-2">
+                <Layers className="w-4 h-4 text-cyan-400" />
+                OBSERVED MITRE ATT&CK MATRIX
+              </h2>
+              <p className="text-[10px] text-slate-400 mt-0.5">Techniques correlated against captured command sequences</p>
             </div>
-            <span className="text-xs font-medium text-gray-500">{filteredTechniques.length} techniques identified</span>
+            <span className="text-xs font-bold text-cyan-400">{filteredTechniques.length} techniques active</span>
           </div>
-          <div className="p-4">
-            {filteredTechniques.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
-                <Layers className="w-12 h-12 text-gray-300 mx-auto mb-2" />
-                <p>No techniques captured yet</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {filteredTechniques.map((tech) => (
-                  <div key={tech.technique} className="p-4 bg-gray-50 rounded-lg border border-gray-200 flex items-center justify-between">
-                    <div>
-                      <p className="font-mono text-sm font-semibold text-primary-700">{tech.technique}</p>
-                      <p className="text-xs text-gray-500 mt-1">Observed in honeypot attacks</p>
-                    </div>
-                    <span className="px-2.5 py-1 bg-primary-100 text-primary-800 rounded-full font-mono text-xs font-bold">
+
+          {filteredTechniques.length === 0 ? (
+            <div className="text-center py-16 text-slate-500 text-xs">
+              <Layers className="w-10 h-10 mx-auto text-slate-600 mb-2" />
+              <p>No MITRE techniques indexed yet.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {filteredTechniques.map((tech) => (
+                <div
+                  key={tech.technique}
+                  className="p-3.5 rounded-xl bg-[#070e22] border border-cyan-500/20 hover:border-cyan-400/40 transition-all text-xs"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-cyan-300">{tech.technique}</span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-950 text-cyan-400 border border-cyan-500/30">
                       {tech.count}x
                     </span>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  <p className="text-[11px] text-slate-400 mt-1">Observed in honeypot telemetry</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
-    </main>
+    </div>
   );
 }

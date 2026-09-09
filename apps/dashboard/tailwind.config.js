@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
+  darkMode: 'class',
   content: [
     './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
     './src/components/**/*.{js,ts,jsx,tsx,mdx}',
@@ -8,6 +9,25 @@ module.exports = {
   theme: {
     extend: {
       colors: {
+        cyber: {
+          950: '#020612',
+          900: '#040816',
+          850: '#070e22',
+          800: '#0a142e',
+          750: '#0f1d40',
+          700: '#142654',
+          600: '#1e3878',
+          500: '#2c4fa3',
+        },
+        neon: {
+          cyan: '#00f0ff',
+          teal: '#00ffc4',
+          emerald: '#10b981',
+          amber: '#f59e0b',
+          rose: '#ff3366',
+          purple: '#b026ff',
+          blue: '#3b82f6',
+        },
         primary: {
           50: '#f0fdf4',
           100: '#dcfce7',
@@ -45,9 +65,32 @@ module.exports = {
           900: '#78350f',
         },
       },
+      boxShadow: {
+        'neon-cyan': '0 0 20px rgba(6, 182, 212, 0.35)',
+        'neon-teal': '0 0 20px rgba(20, 184, 166, 0.35)',
+        'neon-rose': '0 0 20px rgba(244, 63, 94, 0.35)',
+        'neon-amber': '0 0 20px rgba(245, 158, 11, 0.35)',
+        'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
+      },
+      keyframes: {
+        'flow': {
+          '0%': { strokeDashoffset: '100' },
+          '100%': { strokeDashoffset: '0' },
+        },
+        'radar': {
+          '0%': { transform: 'rotate(0deg)' },
+          '100%': { transform: 'rotate(360deg)' },
+        },
+        'pulse-glow': {
+          '0%, 100%': { opacity: '0.6', transform: 'scale(1)' },
+          '50%': { opacity: '1', transform: 'scale(1.05)' },
+        },
+      },
       animation: {
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-        'spin-slow': 'spin 2s linear infinite',
+        'pulse-glow': 'pulse-glow 2.5s ease-in-out infinite',
+        'spin-slow': 'spin 12s linear infinite',
+        'flow': 'flow 3s linear infinite',
       },
     },
   },

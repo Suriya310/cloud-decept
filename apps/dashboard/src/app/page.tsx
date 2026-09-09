@@ -18,9 +18,13 @@ import {
   Sparkles,
   ExternalLink,
   Flame,
+  Radio,
+  Crosshair,
+  Zap,
+  Key,
+  ShieldAlert,
 } from 'lucide-react';
 import { cn, formatTimestamp, getIntentColor } from '@/lib/utils';
-import { StatCard } from '@/components/StatCard';
 import { GeographicMap } from '@/components/GeographicMap';
 import { useDashboardStats } from '@/hooks/useDashboardStats';
 import { useDashboardStore } from '@/lib/store';
@@ -82,7 +86,6 @@ export default function OverviewPage() {
     }
   }, [refreshStats, fetchSessions, fetchTopCommands, fetchConnectionStatus]);
 
-  // Initial load and WebSocket / SSE subscription
   useEffect(() => {
     loadData();
     const unsubscribe = subscribeToEvents();
@@ -104,7 +107,6 @@ export default function OverviewPage() {
   const realTimeEventsArray = realTimeEvents ?? [];
   const topCommandsArray = topCommands ?? [];
 
-  // System status
   const isApiHealthy = connectionStatus?.connected ?? false;
 
   // High risk sessions (threat level high or critical)
@@ -123,113 +125,158 @@ export default function OverviewPage() {
     return [...sessionsArray]
       .filter((s) => s.src_ip || s.attacker_ip)
       .sort((a, b) => (b.command_count || 0) - (a.command_count || 0))
-      .slice(0, 7);
+      .slice(0, 6);
   }, [sessionsArray]);
 
-  // Total high-risk count from all-time threat distribution
   const highRiskCount = (threatDistribution.critical || 0) + (threatDistribution.high || 0);
 
   return (
-    <main className="p-6 space-y-6">
-      {/* Top Header Row */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div className="space-y-6">
+      {/* Top SOC HUD Bar */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-1 border-b border-cyan-500/10">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Deception Overview</h1>
-          <p className="text-gray-500 mt-1">
-            Authoritative honeypot telemetry, global attack surface, and real-time defense posture
-          </p>
+          <div className="flex items-center gap-3">
+            <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-cyan-950/80 border border-cyan-400/30 text-cyan-400 shadow-md shadow-cyan-950">
+              <Crosshair className="w-5 h-5 animate-spin-slow" />
+            </span>
+            <div>
+              <h1 className="text-xl sm:text-2xl font-black font-mono tracking-wider text-white uppercase flex items-center gap-2">
+                <span>SOC THREAT COMMAND CENTER</span>
+                <span className="text-[10px] tracking-widest text-emerald-400 bg-emerald-950/80 border border-emerald-500/40 px-2 py-0.5 rounded font-mono font-bold">
+                  AUTONOMOUS DECEPTION ACTIVE
+                </span>
+              </h1>
+              <p className="text-xs text-slate-400 font-mono mt-0.5">
+                Primary Honeypot Cluster: <span className="text-amber-300 font-bold">AWS US-EAST-1</span> • Real-time Adversary Trajectories & Attack Surface
+              </p>
+            </div>
+          </div>
         </div>
+
         <div className="flex items-center gap-3">
-          <span
-            className={cn(
-              'px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5',
-              isApiHealthy ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-            )}
-          >
-            <span
-              className={cn(
-                'w-2 h-2 rounded-full',
-                isApiHealthy ? 'bg-green-600 animate-pulse' : 'bg-red-600'
-              )}
+          <label className="flex items-center gap-2 text-xs font-mono text-slate-400 cursor-pointer select-none bg-[#070e22] px-3 py-1.5 rounded-lg border border-cyan-500/20">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+              className="w-3.5 h-3.5 text-cyan-500 border-slate-700 rounded bg-slate-900 focus:ring-cyan-400"
             />
-            {isApiHealthy ? 'SYSTEM ONLINE' : 'SYSTEM OFFLINE'}
-          </span>
+            <span>AUTO-SYNC (30s)</span>
+          </label>
+
           <button
             onClick={loadData}
             disabled={isRefreshing || statsLoading}
-            className="p-2 rounded-lg border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors disabled:opacity-50"
-            aria-label="Refresh dashboard data"
-            title="Refresh telemetry"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/30 text-cyan-300 hover:text-white hover:border-cyan-400 text-xs font-mono font-bold transition-all disabled:opacity-50"
+            title="Force telemetry sync"
           >
-            <RefreshCw className={cn('w-4 h-4', (isRefreshing || statsLoading) && 'animate-spin')} />
+            <RefreshCw className={cn('w-3.5 h-3.5', (isRefreshing || statsLoading) && 'animate-spin')} />
+            <span>SYNC</span>
           </button>
         </div>
       </div>
 
       {/* Backend API Disconnected Alert */}
       {(!isApiHealthy || statsError) && (
-        <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-3">
-          <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+        <div className="p-4 bg-rose-950/40 border border-rose-500/40 rounded-xl flex items-center gap-3 text-rose-300 text-xs font-mono">
+          <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0" />
           <div>
-            <p className="font-medium text-amber-800">Backend API unreachable</p>
-            <p className="text-sm text-amber-700">
-              Unable to reach CloudDecept API service. Showing cached or local state.
-            </p>
+            <p className="font-bold uppercase tracking-wider">TELEMETRY STREAM DISCONNECTED</p>
+            <p className="text-slate-400 mt-0.5">Unable to establish handshake with CloudDecept API service. Displaying cached telemetry state.</p>
           </div>
         </div>
       )}
 
-      {/* Key Metrics Row (Authoritative all-time + 24h metrics) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        <StatCard
-          title="Active Sessions"
-          value={activeSessions}
-          icon={<Shield className="w-6 h-6" />}
-          iconBg="bg-emerald-100"
-          iconColor="text-emerald-600"
-          trend="up"
-        />
-        <StatCard
-          title="Total Sessions"
-          value={totalSessions.toLocaleString()}
-          icon={<Users className="w-6 h-6" />}
-          iconBg="bg-blue-100"
-          iconColor="text-blue-600"
-          trend="up"
-        />
-        <StatCard
-          title="Total Commands"
-          value={totalCommands.toLocaleString()}
-          icon={<Terminal className="w-6 h-6" />}
-          iconBg="bg-indigo-100"
-          iconColor="text-indigo-600"
-          trend="up"
-        />
-        <StatCard
-          title="Unique Attackers"
-          value={uniqueAttackers.toLocaleString()}
-          icon={<Globe className="w-6 h-6" />}
-          iconBg="bg-purple-100"
-          iconColor="text-purple-600"
-          trend="up"
-        />
-        <StatCard
-          title="Commands (24h)"
-          value={recentCommands24h.toLocaleString()}
-          icon={<Clock className="w-6 h-6" />}
-          iconBg="bg-teal-100"
-          iconColor="text-teal-600"
-        />
-        <StatCard
-          title="High-Risk Threats"
-          value={highRiskCount.toLocaleString()}
-          icon={<Flame className="w-6 h-6" />}
-          iconBg="bg-rose-100"
-          iconColor="text-rose-600"
-        />
+      {/* Central HUD Metrics Layer (Cinematic Cyber Pill Dock) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        {/* Metric 1: Active Sessions */}
+        <div className="glass-panel p-4 rounded-xl relative overflow-hidden border border-emerald-500/30">
+          <div className="absolute top-0 right-0 w-16 h-16 bg-emerald-500/10 rounded-full blur-xl pointer-events-none" />
+          <div className="flex items-center justify-between text-slate-400 text-[10px] font-mono uppercase tracking-wider mb-1">
+            <span>ACTIVE SESSIONS</span>
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          </div>
+          <div className="text-2xl font-black font-mono text-emerald-400 tracking-tight glow-emerald">
+            {activeSessions}
+          </div>
+          <p className="text-[10px] font-mono text-slate-400 mt-1 flex items-center gap-1">
+            <span className="text-emerald-400 font-bold">LIVE</span> in-flight probes
+          </p>
+        </div>
+
+        {/* Metric 2: Total Sessions */}
+        <div className="glass-panel p-4 rounded-xl relative overflow-hidden border border-cyan-500/25">
+          <div className="flex items-center justify-between text-slate-400 text-[10px] font-mono uppercase tracking-wider mb-1">
+            <span>TOTAL SESSIONS</span>
+            <Users className="w-3.5 h-3.5 text-cyan-400/80" />
+          </div>
+          <div className="text-2xl font-black font-mono text-white tracking-tight glow-cyan">
+            {totalSessions.toLocaleString()}
+          </div>
+          <p className="text-[10px] font-mono text-slate-400 mt-1">
+            All-time ClickHouse records
+          </p>
+        </div>
+
+        {/* Metric 3: Total Commands */}
+        <div className="glass-panel p-4 rounded-xl relative overflow-hidden border border-cyan-500/25">
+          <div className="flex items-center justify-between text-slate-400 text-[10px] font-mono uppercase tracking-wider mb-1">
+            <span>TOTAL COMMANDS</span>
+            <Terminal className="w-3.5 h-3.5 text-cyan-400/80" />
+          </div>
+          <div className="text-2xl font-black font-mono text-white tracking-tight">
+            {totalCommands.toLocaleString()}
+          </div>
+          <p className="text-[10px] font-mono text-slate-400 mt-1">
+            Deduplicated executions
+          </p>
+        </div>
+
+        {/* Metric 4: Unique Attackers */}
+        <div className="glass-panel p-4 rounded-xl relative overflow-hidden border border-purple-500/30">
+          <div className="flex items-center justify-between text-slate-400 text-[10px] font-mono uppercase tracking-wider mb-1">
+            <span>UNIQUE ATTACKERS</span>
+            <Globe className="w-3.5 h-3.5 text-purple-400/80" />
+          </div>
+          <div className="text-2xl font-black font-mono text-purple-300 tracking-tight">
+            {uniqueAttackers.toLocaleString()}
+          </div>
+          <p className="text-[10px] font-mono text-slate-400 mt-1">
+            Distinct adversarial IPs
+          </p>
+        </div>
+
+        {/* Metric 5: Commands 24h */}
+        <div className="glass-panel p-4 rounded-xl relative overflow-hidden border border-teal-500/30">
+          <div className="flex items-center justify-between text-slate-400 text-[10px] font-mono uppercase tracking-wider mb-1">
+            <span>COMMANDS (24H)</span>
+            <Clock className="w-3.5 h-3.5 text-teal-400/80" />
+          </div>
+          <div className="text-2xl font-black font-mono text-teal-300 tracking-tight">
+            {recentCommands24h.toLocaleString()}
+          </div>
+          <p className="text-[10px] font-mono text-slate-400 mt-1">
+            Last 24 hours activity
+          </p>
+        </div>
+
+        {/* Metric 6: High-Risk Threats */}
+        <div className="glass-panel p-4 rounded-xl relative overflow-hidden border border-rose-500/30">
+          <div className="absolute top-0 right-0 w-16 h-16 bg-rose-500/10 rounded-full blur-xl pointer-events-none" />
+          <div className="flex items-center justify-between text-slate-400 text-[10px] font-mono uppercase tracking-wider mb-1">
+            <span>HIGH-RISK THREATS</span>
+            <Flame className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
+          </div>
+          <div className="text-2xl font-black font-mono text-rose-400 tracking-tight glow-rose">
+            {highRiskCount.toLocaleString()}
+          </div>
+          <p className="text-[10px] font-mono text-slate-400 mt-1">
+            Severity level ≥ 5 (High/Crit)
+          </p>
+        </div>
       </div>
 
-      {/* Interactive Geographic Attack Map */}
+      {/* Centerpiece: Real-World Geographic Attack Map */}
       <div className="w-full">
         <GeographicMap
           data={topCountries}
@@ -238,359 +285,223 @@ export default function OverviewPage() {
         />
       </div>
 
-      {/* Main Content Grid */}
+      {/* Operational Intelligence Triad */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* LEFT TWO COLUMNS */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Attacker Intelligence & Intent Analysis Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Attacker Intelligence */}
-            <div className="card flex flex-col">
-              <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-                <div>
-                  <h2 className="text-base font-semibold text-gray-900">ATTACKER INTELLIGENCE</h2>
-                  <p className="text-xs text-gray-500">Most active sessions by captured activity</p>
-                </div>
-                <Link
-                  href="/sessions"
-                  className="text-xs text-primary-600 hover:text-primary-700 flex items-center gap-1 font-medium"
-                >
-                  View all
-                  <ExternalLink className="w-3 h-3" />
-                </Link>
-              </div>
-              <div className="p-4 flex-1">
-                {topAttackerSessions.length === 0 ? (
-                  <div className="text-center py-10 text-gray-500">
-                    <Users className="w-10 h-10 mx-auto text-gray-300 mb-2" />
-                    <p className="text-sm">No session data available</p>
-                    <p className="text-xs text-gray-400 mt-1">Connect to SSH honeypot to generate telemetry</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {topAttackerSessions.map((session) => {
-                      const ip = session.src_ip || session.attacker_ip || 'unknown';
-                      const countryName = getCountryName(session.src_country || session.country);
-                      const threat = evaluateThreat(session.threat_score ?? session.skill_level);
-
-                      return (
-                        <div
-                          key={session.session_id}
-                          className="p-3 rounded-lg border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-colors flex items-center justify-between gap-2"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <Link
-                                href={`/sessions/${session.session_id}`}
-                                className="font-mono text-sm font-semibold text-gray-900 hover:text-primary-600 transition-colors truncate"
-                              >
-                                {ip}
-                              </Link>
-                              <button
-                                onClick={() => handleCopy(ip, `ip-${session.session_id}`)}
-                                className="text-gray-400 hover:text-gray-600 p-0.5 rounded transition-colors"
-                                title="Copy IP address"
-                                aria-label="Copy IP address"
-                              >
-                                {copiedKey === `ip-${session.session_id}` ? (
-                                  <Check className="w-3.5 h-3.5 text-green-600" />
-                                ) : (
-                                  <Copy className="w-3.5 h-3.5" />
-                                )}
-                              </button>
-                            </div>
-                            <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
-                              <MapPin className="w-3 h-3 text-gray-400" />
-                              <span className="truncate">{countryName}</span>
-                            </p>
-                          </div>
-
-                          <div className="text-right flex-shrink-0 flex items-center gap-3">
-                            <div>
-                              <p className="text-sm font-bold text-gray-900">
-                                {(session.command_count ?? 0).toLocaleString()}
-                              </p>
-                              <p className="text-[10px] text-gray-400 uppercase tracking-wider">cmds</p>
-                            </div>
-                            <span
-                              className={cn(
-                                'px-2 py-0.5 rounded text-xs font-semibold',
-                                threat.badgeBg,
-                                threat.badgeColor
-                              )}
-                              title={threat.description}
-                            >
-                              {threat.label}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+        {/* Column 1: Live Attack Activity Stream */}
+        <div className="glass-panel rounded-2xl flex flex-col border border-cyan-500/20">
+          <div className="p-4 border-b border-cyan-500/15 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="p-1.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400">
+                <Radio className="w-4 h-4 animate-pulse" />
+              </span>
+              <div>
+                <h2 className="text-xs font-bold font-mono tracking-wider text-white uppercase">
+                  LIVE ATTACK ACTIVITY
+                </h2>
+                <p className="text-[10px] text-slate-400 font-mono">Real-time honeypot sensor stream</p>
               </div>
             </div>
-
-            {/* MITRE Intent Analysis (All-Time Authoritative) */}
-            <div className="card flex flex-col">
-              <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-                <div>
-                  <h2 className="text-base font-semibold text-gray-900">INTENT ANALYSIS</h2>
-                  <p className="text-xs text-gray-500">MITRE ATT&CK objective classification (All-Time)</p>
-                </div>
-                <span className="text-xs font-medium text-gray-500">
-                  {topIntents.reduce((acc, i) => acc + i.count, 0).toLocaleString()} events
-                </span>
-              </div>
-              <div className="p-4 flex-1">
-                {topIntents.length === 0 ? (
-                  <div className="text-center py-10 text-gray-500">
-                    <Activity className="w-10 h-10 mx-auto text-gray-300 mb-2" />
-                    <p className="text-sm">No classified intents available</p>
-                    <p className="text-xs text-gray-400 mt-1">Intent engine classifies captured commands</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {topIntents.slice(0, 7).map((item, idx) => {
-                      const maxCount = topIntents[0]?.count || 1;
-                      const percentage = Math.min(100, Math.round((item.count / maxCount) * 100));
-                      const normalized = normalizeIntent(item.intent);
-
-                      return (
-                        <div key={item.intent} className="space-y-1">
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="font-medium text-gray-800 flex items-center gap-1.5">
-                              <span className="text-gray-400 font-mono">{idx + 1}.</span>
-                              {normalized.label}
-                            </span>
-                            <span className="font-semibold text-gray-900 font-mono">
-                              {item.count.toLocaleString()}
-                            </span>
-                          </div>
-                          <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-primary-600 rounded-full transition-all duration-300"
-                              style={{ width: `${percentage}%` }}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
+            <span className="text-[10px] font-mono font-bold text-emerald-400 px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/30">
+              STREAMING
+            </span>
           </div>
 
-          {/* Live Honeypot Attack Activity */}
-          <div className="card">
-            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-red-100 rounded-lg">
-                  <Activity className="w-5 h-5 text-red-600" />
-                </div>
-                <div>
-                  <h2 className="text-base font-semibold text-gray-900">LIVE ATTACK ACTIVITY</h2>
-                  <p className="text-xs text-gray-500">Real-time event stream from deception network</p>
-                </div>
+          <div className="p-3.5 flex-1 max-h-[380px] overflow-y-auto scrollbar-thin space-y-2">
+            {realTimeEventsArray.length === 0 ? (
+              <div className="text-center py-12 text-slate-500 font-mono text-xs">
+                <Activity className="w-8 h-8 mx-auto text-slate-600 mb-2" />
+                <p className="text-slate-400">Awaiting live event triggers...</p>
+                <p className="text-[10px] text-slate-500 mt-1">Connect to SSH port 2222 to generate live stream</p>
               </div>
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={autoRefresh}
-                    onChange={(e) => setAutoRefresh(e.target.checked)}
-                    className="w-3.5 h-3.5 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
-                  />
-                  <span>Auto-refresh (30s)</span>
-                </label>
-              </div>
-            </div>
-            <div className="p-4 max-h-80 overflow-y-auto scrollbar-thin">
-              {realTimeEventsArray.length === 0 ? (
-                <div className="text-center py-10 text-gray-500">
-                  <Activity className="w-10 h-10 mx-auto text-gray-300 mb-2" />
-                  <p className="text-sm font-medium text-gray-600">Waiting for live attack events...</p>
-                  <p className="text-xs text-gray-400 mt-1">
-                    Connect to Cowrie SSH (port 2222) to observe live command captures
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {realTimeEventsArray.slice(0, 20).map((event, index) => (
-                    <div
-                      key={index}
-                      className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors"
-                    >
-                      <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-primary-100 flex items-center justify-center">
-                        <Activity className="w-4 h-4 text-primary-600" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-semibold text-gray-900 capitalize">
-                            {event.type?.replace(/_/g, ' ') || 'Attack Event'}
-                          </span>
-                          <span className="text-[11px] text-gray-500">
-                            {event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : 'Just now'}
-                          </span>
-                        </div>
-                        <pre className="text-xs font-mono text-gray-700 mt-1 overflow-x-auto p-2 bg-white rounded border border-gray-200">
-                          {typeof event.data === 'string'
-                            ? event.data
-                            : JSON.stringify(event.data, null, 2)}
-                        </pre>
-                      </div>
+            ) : (
+              realTimeEventsArray.slice(0, 20).map((event, idx) => (
+                <div
+                  key={idx}
+                  className="p-2.5 rounded-lg bg-[#070e22]/90 border border-cyan-500/15 hover:border-cyan-400/40 transition-all font-mono text-xs flex items-start gap-2.5"
+                >
+                  <span className="w-2 h-2 rounded-full bg-cyan-400 mt-1 flex-shrink-0 animate-ping" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="font-bold text-cyan-300 uppercase tracking-wider">
+                        {event.type?.replace(/_/g, ' ') || 'Attack Vector'}
+                      </span>
+                      <span className="text-slate-500">
+                        {event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : 'Just now'}
+                      </span>
                     </div>
-                  ))}
+                    <pre className="text-[11px] text-slate-300 mt-1 overflow-x-auto p-1.5 rounded bg-black/40 border border-slate-800">
+                      {typeof event.data === 'string'
+                        ? event.data
+                        : JSON.stringify(event.data, null, 2)}
+                    </pre>
+                  </div>
                 </div>
-              )}
-            </div>
+              ))
+            )}
           </div>
         </div>
 
-        {/* RIGHT COLUMN */}
-        <div className="space-y-6">
-          {/* Top Executed Commands */}
-          <div className="card flex flex-col">
-            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-              <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-                <Terminal className="w-5 h-5 text-gray-600" />
-                TOP EXECUTED COMMANDS
-              </h2>
-              <Link
-                href="/commands"
-                className="text-xs text-primary-600 hover:text-primary-700 flex items-center gap-1 font-medium"
-              >
-                View all
-                <ExternalLink className="w-3 h-3" />
-              </Link>
+        {/* Column 2: Attacker Intelligence & High Risk Sessions */}
+        <div className="glass-panel rounded-2xl flex flex-col border border-cyan-500/20">
+          <div className="p-4 border-b border-cyan-500/15 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="p-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400">
+                <Crosshair className="w-4 h-4" />
+              </span>
+              <div>
+                <h2 className="text-xs font-bold font-mono tracking-wider text-white uppercase">
+                  ATTACKER PROFILES
+                </h2>
+                <p className="text-[10px] text-slate-400 font-mono">Most active adversary sessions</p>
+              </div>
             </div>
-            <div className="p-4 bg-gray-950 rounded-b-lg font-mono text-xs flex-1 max-h-96 overflow-y-auto">
-              {topCommandsArray.length === 0 ? (
-                <div className="text-center py-10 text-gray-400">
-                  <Terminal className="w-10 h-10 mx-auto text-gray-600 mb-2" />
-                  <p>No commands captured yet</p>
-                  <p className="text-[11px] text-gray-500 mt-1">Interact with honeypot to record commands</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {topCommandsArray.slice(0, 15).map((cmd, index) => {
-                    const cmdKey = `cmd-${index}`;
-                    return (
-                      <div
-                        key={index}
-                        className="flex items-center justify-between gap-2 border-b border-gray-800/60 pb-2 group"
-                      >
-                        <span
-                          className="text-emerald-400 truncate max-w-[180px]"
-                          title={cmd.command}
-                        >
-                          {cmd.command}
-                        </span>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <span className="text-gray-400 text-[11px]">
-                            {cmd.executions.toLocaleString()}x
-                          </span>
-                          <button
-                            onClick={() => handleCopy(cmd.command, cmdKey)}
-                            className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-white transition-opacity p-0.5"
-                            title="Copy command"
-                            aria-label="Copy command"
-                          >
-                            {copiedKey === cmdKey ? (
-                              <Check className="w-3 h-3 text-green-400" />
-                            ) : (
-                              <Copy className="w-3 h-3" />
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+            <Link
+              href="/sessions"
+              className="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-bold"
+            >
+              INVESTIGATE →
+            </Link>
           </div>
 
-          {/* High-Risk Detected Sessions */}
-          <div className="card">
-            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-semibold text-gray-900 flex items-center gap-1.5">
-                  <Flame className="w-4 h-4 text-rose-600" />
-                  HIGH-RISK SESSIONS
-                </h2>
-                <p className="text-xs text-gray-500">Skill level ≥ 5 or Critical severity</p>
+          <div className="p-3.5 flex-1 max-h-[380px] overflow-y-auto scrollbar-thin space-y-2.5">
+            {topAttackerSessions.length === 0 ? (
+              <div className="text-center py-12 text-slate-500 font-mono text-xs">
+                <Users className="w-8 h-8 mx-auto text-slate-600 mb-2" />
+                <p>No active attacker profiles available</p>
               </div>
-              <Link
-                href="/sessions"
-                className="text-xs text-primary-600 hover:text-primary-700 flex items-center gap-1 font-medium"
-              >
-                View all
-                <ExternalLink className="w-3 h-3" />
-              </Link>
-            </div>
-            <div className="p-4 space-y-3">
-              {highRiskSessions.length === 0 ? (
-                <div className="text-center py-6 text-gray-500">
-                  <Shield className="w-8 h-8 mx-auto text-gray-300 mb-1" />
-                  <p className="text-xs">No active high-risk sessions detected</p>
-                </div>
-              ) : (
-                highRiskSessions.map(({ session, threat }) => (
-                  <Link
+            ) : (
+              topAttackerSessions.map((session) => {
+                const ip = session.src_ip || session.attacker_ip || 'unknown';
+                const country = getCountryName(session.src_country || session.country);
+                const threat = evaluateThreat(session.threat_score ?? session.skill_level);
+
+                return (
+                  <div
                     key={session.session_id}
-                    href={`/sessions/${session.session_id}`}
-                    className="block p-3 bg-rose-50/70 border border-rose-200 rounded-lg hover:bg-rose-100/70 transition-colors"
+                    className="p-2.5 rounded-lg bg-[#070e22]/90 border border-cyan-500/15 hover:border-cyan-400/40 transition-all font-mono text-xs flex items-center justify-between gap-3"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="font-mono text-xs font-bold text-gray-900 truncate">
-                          {session.session_id.slice(0, 16)}...
-                        </p>
-                        <p className="text-[11px] text-gray-600 flex items-center gap-1 mt-0.5">
-                          <MapPin className="w-3 h-3 text-rose-500" />
-                          <span>{session.src_ip || session.attacker_ip || 'unknown'}</span>
-                          <span>•</span>
-                          <span>{getCountryName(session.src_country || session.country)}</span>
-                        </p>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <Link
+                          href={`/sessions/${session.session_id}`}
+                          className="font-bold text-white hover:text-cyan-400 transition-colors truncate text-xs"
+                        >
+                          {ip}
+                        </Link>
+                        <button
+                          onClick={() => handleCopy(ip, `ip-${session.session_id}`)}
+                          className="text-slate-500 hover:text-cyan-300 p-0.5"
+                          title="Copy IP"
+                        >
+                          {copiedKey === `ip-${session.session_id}` ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
+                        <MapPin className="w-3 h-3 text-cyan-400" />
+                        <span className="truncate">{country}</span>
+                      </p>
+                    </div>
+
+                    <div className="text-right flex-shrink-0 flex items-center gap-2.5">
+                      <div>
+                        <span className="text-xs font-bold text-white block">
+                          {(session.command_count ?? 0).toLocaleString()}
+                        </span>
+                        <span className="text-[9px] text-slate-500 uppercase">cmds</span>
                       </div>
                       <span
                         className={cn(
-                          'px-2 py-0.5 rounded text-xs font-bold flex-shrink-0',
-                          threat.badgeBg,
-                          threat.badgeColor
+                          'badge text-[10px] font-bold px-2 py-0.5',
+                          threat.badgeClass
                         )}
+                        title={threat.description}
                       >
                         {threat.label}
                       </span>
                     </div>
-                  </Link>
-                ))
-              )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Column 3: MITRE Intent Taxonomy & Adaptive Policies */}
+        <div className="glass-panel rounded-2xl flex flex-col border border-cyan-500/20">
+          <div className="p-4 border-b border-cyan-500/15 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="p-1.5 rounded-lg bg-purple-500/10 border border-purple-500/30 text-purple-400">
+                <Shield className="w-4 h-4" />
+              </span>
+              <div>
+                <h2 className="text-xs font-bold font-mono tracking-wider text-white uppercase">
+                  MITRE ATT&CK INTENTS
+                </h2>
+                <p className="text-[10px] text-slate-400 font-mono">Classified objective taxonomy</p>
+              </div>
             </div>
+            <Link
+              href="/threat-intel"
+              className="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-bold"
+            >
+              MATRIX →
+            </Link>
           </div>
 
-          {/* Adaptive Response Policy Status */}
-          <div className="card p-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold text-gray-900">Adaptive Defense Status</h3>
-              <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-blue-100 text-blue-800">
-                POLICY ACTIVE
-              </span>
-            </div>
-            <p className="text-xs text-gray-600">
-              Autonomous canary credential injection, latency throttling, and honeypot deception strategies are continuously enforced.
-            </p>
-            <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
-              <span>Strategy Engine</span>
-              <Link href="/adaptations" className="text-primary-600 hover:underline font-medium">
-                View Policy Rules →
-              </Link>
+          <div className="p-3.5 flex-1 max-h-[380px] overflow-y-auto scrollbar-thin space-y-3 font-mono">
+            {topIntents.length === 0 ? (
+              <div className="text-center py-12 text-slate-500 font-mono text-xs">
+                <Shield className="w-8 h-8 mx-auto text-slate-600 mb-2" />
+                <p>No classified intent vectors</p>
+              </div>
+            ) : (
+              topIntents.slice(0, 6).map((item, idx) => {
+                const norm = normalizeIntent(item.intent);
+                const maxVal = topIntents[0]?.count || 1;
+                const pct = Math.min(100, Math.round((item.count / maxVal) * 100));
+
+                return (
+                  <div key={item.intent} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-300 flex items-center gap-1.5 truncate">
+                        <span className="text-cyan-500/70 font-bold">{idx + 1}.</span>
+                        <span className="font-semibold">{norm.label}</span>
+                      </span>
+                      <span className="text-cyan-400 font-bold">
+                        {item.count.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
+                      <div
+                        className="h-full bg-gradient-to-r from-cyan-500 to-teal-400 rounded-full"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })
+            )}
+
+            {/* Micro Adaptive Response HUD */}
+            <div className="mt-4 pt-3 border-t border-cyan-500/15">
+              <div className="flex items-center justify-between text-[11px] mb-1.5">
+                <span className="font-bold text-white flex items-center gap-1">
+                  <Zap className="w-3.5 h-3.5 text-amber-400" />
+                  ADAPTIVE DEFENSE
+                </span>
+                <span className="text-[10px] text-emerald-400 font-bold">ENGAGED</span>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                Canary AWS credentials, latency throttling, and decoy storage targets are dynamically injected upon reconnaissance intent detection.
+              </p>
             </div>
           </div>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

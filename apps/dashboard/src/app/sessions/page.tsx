@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   Search,
   Filter,
@@ -119,9 +120,13 @@ export default function SessionsPage() {
   const totalSessions = stats?.total_sessions ?? sessionsArray.length;
   const activeSessions = stats?.active_sessions ?? sessionsArray.filter((s) => s.status === 'active').length;
 
+  const router = useRouter();
+
   const handleRowClick = (session: any) => {
     setSelectedSession(session);
-    fetchSession(session.session_id);
+    if (session?.session_id) {
+      router.push(`/sessions/${session.session_id}`);
+    }
   };
 
   const exportToCSV = () => {

@@ -12,9 +12,11 @@ import {
 } from 'lucide-react';
 import { useDashboardStore } from '@/lib/store';
 import { useSidebar } from '@/lib/SidebarContext';
+import { useRouter } from 'next/navigation';
 
 export function Header() {
-  const { connectionStatus, fetchConnectionStatus } = useDashboardStore();
+  const router = useRouter();
+  const { connectionStatus, fetchConnectionStatus, fetchStats } = useDashboardStore();
   const { collapsed, setCollapsed } = useSidebar();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -32,7 +34,10 @@ export function Header() {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
-      await fetchConnectionStatus();
+      await Promise.all([
+        fetchConnectionStatus(),
+        fetchStats(24),
+      ]);
     } finally {
       setTimeout(() => setIsRefreshing(false), 500);
     }
@@ -58,6 +63,11 @@ export function Header() {
             <input
               type="search"
               placeholder="Search threat events, IPs, MITRE techniques..."
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+                  router.push(`/sessions`);
+                }
+              }}
               className="w-full pl-9 pr-12 py-1.5 text-xs font-mono rounded-lg bg-[#070e22] border border-cyan-500/20 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/30 transition-all"
               aria-label="Global SOC search"
             />

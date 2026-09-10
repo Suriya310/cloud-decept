@@ -171,9 +171,8 @@ export const api = {
 
   // Stats
   getStats: (hours?: number): Promise<Stats> => {
-    const url = new URL(`${API_BASE}/stats`, typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
-    if (hours) url.searchParams.set('hours', hours.toString());
-    return fetchJson<Stats>(url.toString());
+    const search = hours ? `?hours=${hours}` : '';
+    return fetchJson<Stats>(`${API_BASE}/stats${search}`);
   },
 
   // Connection health check
@@ -234,6 +233,7 @@ export const api = {
 
   // Real-time events (SSE)
   subscribeToEvents: (onEvent: (event: any) => void) => {
+    if (typeof window === 'undefined') return () => {};
     try {
       const eventSource = new EventSource(`${COLLECTOR_BASE}/events/stream?streams=honeypot:sessions,honeypot:commands,honeypot:auth`);
       eventSource.onmessage = (event) => {

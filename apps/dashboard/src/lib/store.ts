@@ -71,6 +71,14 @@ const defaultFilters = {
 
 // Transform backend session data to include UI-compatible fields
 export function transformSession(s: any): Session {
+  if (!s || typeof s !== 'object') {
+    return {
+      session_id: '',
+      attacker_ip: '',
+      start_time: new Date().toISOString(),
+      commands_executed: 0,
+    } as Session;
+  }
   // A session is closed only if it has an explicit end_time different from start_time with duration or disconnect reason
   const isClosed = Boolean(
     s.end_time &&
@@ -80,15 +88,15 @@ export function transformSession(s: any): Session {
   );
   return {
     ...s,
-    src_ip: s.attacker_ip,
-    src_country: s.country,
-    command_count: s.commands_executed ?? 0,
-    intent_history: s.intent ? [s.intent] : [],
+    src_ip: s.attacker_ip || s.src_ip || '',
+    src_country: s.country || s.src_country || '',
+    command_count: s.commands_executed ?? s.command_count ?? 0,
+    intent_history: s.intent ? [s.intent] : (s.intent_history || []),
     skill_level: typeof s.skill_level === 'number' ? s.skill_level : 0,
     threat_score: typeof s.skill_level === 'number' ? s.skill_level : 0,
-    tactics: [],
+    tactics: s.tactics || [],
     status: isClosed ? 'closed' : 'active',
-    auth_success: s.credentials_tried && s.credentials_tried > 0 ? (s.commands_executed > 0) : undefined,
+    auth_success: s.credentials_tried && s.credentials_tried > 0 ? ((s.commands_executed ?? 0) > 0) : undefined,
   };
 }
 
@@ -231,6 +239,8 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   },
 
   fetchStats: async (hours: number = 24) => {
+    // Deduplicate concurrent calls to prevent state collision
+    if (get().statsLoading) return;
     set({ statsLoading: true, statsError: null });
     try {
       const data = await api.getStats(hours);
@@ -302,14 +312,11 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
       unsubscribe = api.subscribeToEvents((event) => {
         get().addRealTimeEvent(event);
       });
-      set({ isConnected: true });
     } catch (error) {
       console.error('Failed to subscribe to events:', error);
-      set({ isConnected: false });
     }
     return () => {
       if (unsubscribe) unsubscribe();
-      set({ isConnected: false });
     };
   },
 }));

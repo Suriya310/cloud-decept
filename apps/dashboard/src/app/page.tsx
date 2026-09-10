@@ -77,7 +77,7 @@ export default function OverviewPage() {
   const loadData = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      await Promise.all([
+      await Promise.allSettled([
         refreshStats(),
         fetchSessions({ limit: 50, hours: 8760 }),
         fetchTopCommands(24, 20),
@@ -89,11 +89,18 @@ export default function OverviewPage() {
     }
   }, [refreshStats, fetchSessions, fetchTopCommands, fetchTopAttackers, fetchConnectionStatus]);
 
+  // Initial load on mount
   useEffect(() => {
     loadData();
+  }, [loadData]);
+
+  // Isolated real-time event subscription (never tied to loadData re-renders)
+  useEffect(() => {
     const unsubscribe = subscribeToEvents();
-    return unsubscribe;
-  }, [loadData, subscribeToEvents]);
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [subscribeToEvents]);
 
   // Auto-refresh stats every 30 seconds
   useEffect(() => {
@@ -127,36 +134,36 @@ export default function OverviewPage() {
   // Top Attacker sessions sorted by command count (fallback)
   const topAttackerSessions = useMemo(() => {
     return [...sessionsArray]
-      .filter((s) => s.src_ip || s.attacker_ip)
+      .filter((s) => s && (s.src_ip || s.attacker_ip))
       .sort((a, b) => (b.command_count || 0) - (a.command_count || 0))
       .slice(0, 6);
   }, [sessionsArray]);
 
   // Authoritative Attacker Profiles: prioritize /attackers/top API, fallback to top sessions
   const displayedAttackers = useMemo(() => {
-    if (topAttackers && topAttackers.length > 0) {
+    if (Array.isArray(topAttackers) && topAttackers.length > 0) {
       return topAttackers.slice(0, 6).map((a) => ({
         sessionId: undefined,
-        ip: a.attacker_ip,
-        country: getCountryName(a.country),
-        commandCount: a.total_commands ?? 0,
-        sessionCount: a.total_sessions ?? a.sessions ?? 1,
-        threat: evaluateThreat(a.max_skill_level ?? 1),
-        intent: a.primary_intent || 'reconnaissance',
+        ip: a?.attacker_ip || 'unknown',
+        country: getCountryName(a?.country),
+        commandCount: a?.total_commands ?? 0,
+        sessionCount: a?.total_sessions ?? a?.sessions ?? 1,
+        threat: evaluateThreat(a?.max_skill_level ?? 1),
+        intent: a?.primary_intent || 'reconnaissance',
       }));
     }
     return topAttackerSessions.map((s) => ({
-      sessionId: s.session_id,
-      ip: s.src_ip || s.attacker_ip || 'unknown',
-      country: getCountryName(s.src_country || s.country),
-      commandCount: s.command_count ?? 0,
+      sessionId: s?.session_id,
+      ip: s?.src_ip || s?.attacker_ip || 'unknown',
+      country: getCountryName(s?.src_country || s?.country),
+      commandCount: s?.command_count ?? 0,
       sessionCount: 1,
-      threat: evaluateThreat(s.threat_score ?? s.skill_level),
-      intent: s.intent || 'unknown',
+      threat: evaluateThreat(s?.threat_score ?? s?.skill_level),
+      intent: s?.intent || 'unknown',
     }));
   }, [topAttackers, topAttackerSessions]);
 
-  const highRiskCount = (threatDistribution.critical || 0) + (threatDistribution.high || 0);
+  const highRiskCount = ((threatDistribution?.critical) || 0) + ((threatDistribution?.high) || 0);
 
   return (
     <div className="space-y-6">

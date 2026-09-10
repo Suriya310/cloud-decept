@@ -158,7 +158,7 @@ export function GeographicMap({
   const { countryStatsMap, maxCount, sortedData } = useMemo(() => {
     const map = new Map<string, number>();
     let max = 1;
-    const cleanList = (data || []).filter((d) => d && d.country);
+    const cleanList = (data || []).filter((d) => d && d.country && typeof d.country === 'string');
 
     cleanList.forEach((d) => {
       const code = d.country.toUpperCase();
@@ -188,6 +188,7 @@ export function GeographicMap({
     }> = [];
 
     sortedData.forEach((item) => {
+      if (!item || !item.country || typeof item.country !== 'string') return;
       const code = item.country.toUpperCase();
       const count = item.count;
       const share = totalSessions > 0 ? (count / totalSessions) * 100 : 0;
@@ -661,6 +662,7 @@ export function GeographicMap({
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
           {sortedData.slice(0, 6).map((item) => {
+            if (!item || !item.country || typeof item.country !== 'string') return null;
             const code = item.country.toUpperCase();
             const share = totalSessions > 0 ? (item.count / totalSessions) * 100 : 0;
             const isSelected = selectedCountry === code;

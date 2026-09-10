@@ -20,7 +20,7 @@ export function useDashboardStats(options: { autoRefreshIntervalMs?: number } = 
 
   const refresh = useCallback(async () => {
     // Canonical time window: default 24h (which returns all-time totals + 24h recent metrics + authoritative charts)
-    await Promise.all([
+    await Promise.allSettled([
       fetchStats(24),
       fetchConnectionStatus(),
     ]);

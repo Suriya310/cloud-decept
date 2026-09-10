@@ -161,6 +161,19 @@ class EventCollector:
         # Publish to stream
         msg_id = await self.redis.xadd(stream_name, {"data": event_data})
         logger.info(f"XADD success: stream={stream_name} msg_id={msg_id} event_id={event.event_id}")
+
+        # Maintain real-time active sessions set in Redis
+        if event_type_name in ("session_start", "sessionstart") and getattr(event, "session_id", None):
+            try:
+                await self.redis.sadd("clouddecept:active_sessions", event.session_id)
+            except Exception as e:
+                logger.debug(f"Failed to add active session {event.session_id} to Redis: {e}")
+        elif event_type_name in ("session_end", "sessionend") and getattr(event, "session_id", None):
+            try:
+                await self.redis.srem("clouddecept:active_sessions", event.session_id)
+            except Exception as e:
+                logger.debug(f"Failed to remove active session {event.session_id} from Redis: {e}")
+
         return msg_id
 
     def _get_stream_for_event(self, event: BaseEvent) -> str:
@@ -1312,7 +1325,7 @@ async def debug_pipeline():
 @app.get("/events/stream")
 async def event_stream(
     request: Request,
-    streams: str = "honeypot:events",
+    streams: str = "honeypot:sessions,honeypot:commands,honeypot:auth",
     last_id: str = "0",
     limit: int = 100,
 ):
@@ -1320,14 +1333,18 @@ async def event_stream(
     Server-Sent Events endpoint for real-time event streaming.
 
     Query params:
-    - streams: comma-separated list of stream names (default: honeypot:events)
+    - streams: comma-separated list of stream names (default: honeypot:sessions,honeypot:commands,honeypot:auth)
     - last_id: resume from this message ID (default: "0" for all)
     - limit: max events per poll (default: 100)
     """
     stream_list = [s.strip() for s in streams.split(",") if s.strip()]
 
     if not stream_list:
-        stream_list = [StreamNames.HONEYPOT_EVENTS]
+        stream_list = [
+            StreamNames.SESSION_EVENTS,
+            StreamNames.COMMAND_EVENTS,
+            StreamNames.AUTH_EVENTS,
+        ]
 
     async def event_generator():
         # Send initial connection event

@@ -42,44 +42,44 @@ interface StrategyInfo {
 
 const STRATEGY_DEFINITIONS: Record<string, StrategyInfo> = {
   credential_capture: {
-    name: 'Credential Capture Decoy',
-    description: 'Injects synthetic canary AWS credentials and deceptive SSH keys into bash environment',
-    action_template: 'Injected canary credentials into environment and filesystem',
+    name: 'Credential Decoy Strategy',
+    description: 'Autonomous strategy targeting credential access attempts with simulated decoy keys and canary triggers',
+    action_template: 'Strategy Assigned: Decoy credential response profile',
     icon: 'Key',
     badgeColor: 'border-amber-500/40 text-amber-300 bg-amber-950/40',
   },
   fake_environment: {
-    name: 'Synthetic Cloud Environment',
-    description: 'Presents deceptive cloud resource listings and mock system configurations',
-    action_template: 'Returned deceptive cloud resource inventory and instance metadata',
+    name: 'Synthetic Environment Strategy',
+    description: 'Autonomous strategy responding to system discovery and enumeration with synthetic host profiles',
+    action_template: 'Strategy Assigned: Synthetic environment response profile',
     icon: 'Database',
     badgeColor: 'border-cyan-500/40 text-cyan-300 bg-cyan-950/40',
   },
   throttle: {
-    name: 'Latency Throttling',
-    description: 'Introduces artificial delays to slow automated scanning tools and brute-forcers',
-    action_template: 'Applied dynamic command latency delay (500ms - 2000ms)',
+    name: 'Latency Throttling Strategy',
+    description: 'Autonomous strategy introducing command latency delays to disrupt automated brute-forcing',
+    action_template: 'Strategy Assigned: Dynamic command latency profile',
     icon: 'Clock',
     badgeColor: 'border-blue-500/40 text-blue-300 bg-blue-950/40',
   },
   decoy_resource: {
-    name: 'Decoy Cloud Storage Targets',
-    description: 'Spawns decoy S3 buckets and mock database endpoints to capture exfiltration',
-    action_template: 'Exposed decoy cloud storage targets and honeytokens',
+    name: 'Decoy Cloud Storage Strategy',
+    description: 'Autonomous strategy targeting exfiltration/lateral movement with decoy asset lures',
+    action_template: 'Strategy Assigned: Decoy cloud storage resource profile',
     icon: 'Cpu',
     badgeColor: 'border-purple-500/40 text-purple-300 bg-purple-950/40',
   },
   session_terminate: {
-    name: 'Containment Termination',
-    description: 'Terminates active session upon critical system-level compromise attempt',
-    action_template: 'Session severed immediately to isolate honeypot host',
+    name: 'Containment Termination Strategy',
+    description: 'Containment policy flagging severe privilege escalation or destructive host escape attempts',
+    action_template: 'Strategy Assigned: Containment termination trigger',
     icon: 'Flame',
     badgeColor: 'border-rose-500/40 text-rose-300 bg-rose-950/40',
   },
   alert_only: {
-    name: 'Passive Observation',
-    description: 'Passive telemetry recording, behavioral fingerprinting, and MITRE ATT&CK correlation',
-    action_template: 'Logged session telemetry and mapped MITRE techniques',
+    name: 'Passive Telemetry & Profiling',
+    description: 'Continuous session telemetry logging, MITRE ATT&CK technique extraction, and behavioural profiling',
+    action_template: 'Strategy Assigned: Passive telemetry and MITRE mapping',
     icon: 'Terminal',
     badgeColor: 'border-teal-500/40 text-teal-300 bg-teal-950/40',
   },
@@ -182,7 +182,7 @@ export default function AdaptationsPage() {
           strategy,
           action,
           threat_score: session.threat_score ?? 0,
-          status: 'Policy Enforced',
+          status: 'Strategy Assigned',
         };
       });
     });
@@ -410,10 +410,10 @@ export default function AdaptationsPage() {
           <div>
             <h2 className="text-sm font-mono font-bold text-white tracking-wider flex items-center gap-2 uppercase">
               <Shield className="w-4 h-4 text-cyan-400" />
-              POLICY ASSIGNMENT & EXECUTION LOG
+              ADAPTIVE STRATEGY RESOLUTION & POLICY DECISION LOG
             </h2>
             <p className="text-xs text-slate-400 font-mono mt-0.5">
-              Chronological ledger of deception strategies dynamically assigned to attacker sessions
+              Chronological ledger of deception strategies dynamically mapped from attacker intent by the Adaptive Engine
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -432,8 +432,8 @@ export default function AdaptationsPage() {
                 <th className="py-3 px-4">ATTACKER IP</th>
                 <th className="py-3 px-4">ORIGIN</th>
                 <th className="py-3 px-4">TRIGGERING INTENT</th>
-                <th className="py-3 px-4">ASSIGNED POLICY</th>
-                <th className="py-3 px-4">DECEPTION ACTION</th>
+                <th className="py-3 px-4">ASSIGNED STRATEGY</th>
+                <th className="py-3 px-4">ACTION PROFILE</th>
                 <th className="py-3 px-4 text-right">STATUS</th>
               </tr>
             </thead>
@@ -522,8 +522,8 @@ export default function AdaptationsPage() {
                       </td>
 
                       <td className="py-3 px-4 whitespace-nowrap text-right">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-950/60 border border-emerald-500/30 text-emerald-400">
-                          <CheckCircle2 className="w-3 h-3" />
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950/60 border border-cyan-500/30 text-cyan-400">
+                          <CheckCircle2 className="w-3 h-3 text-cyan-400" />
                           {a.status.toUpperCase()}
                         </span>
                       </td>

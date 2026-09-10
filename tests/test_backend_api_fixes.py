@@ -240,6 +240,73 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
         sql_joined = " ".join(executed_queries)
         self.assertIn("skill_level >= 5", sql_joined)
 
+    async def test_command_response_includes_exit_code_and_duration(self):
+        """Verify /sessions/{id}/commands returns exit_code and duration_ms."""
+        ch_res = MagicMock()
+        ch_res.named_results.return_value = [
+            {
+                "event_id": "cmd-1",
+                "session_id": "s123",
+                "timestamp": datetime.now(timezone.utc),
+                "command": "uname -a",
+                "arguments": ["-a"],
+                "output": "Linux 5.15.0-x86_64",
+                "intent": "system_discovery",
+                "intent_confidence": 0.9,
+                "mitre_techniques": ["T1082"],
+                "exit_code": 0,
+                "duration_ms": 12,
+            }
+        ]
+        self.mock_ch.query.return_value = ch_res
+
+        res = await api_main.get_session_commands("s123")
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0].exit_code, 0)
+        self.assertEqual(res[0].duration_ms, 12)
+
+    async def test_active_session_returns_none_end_time(self):
+        """Verify active in-flight sessions return end_time=None instead of placeholder."""
+        now = datetime.now(timezone.utc)
+        ch_res = MagicMock()
+        ch_res.named_results.return_value = [
+            {
+                "session_id": "s-active",
+                "start_time": now,
+                "end_time": now,
+                "attacker_ip": "1.2.3.4",
+                "country": "US",
+                "duration_seconds": 0,
+                "commands_executed": 3,
+                "credentials_tried": 1,
+                "intent": "system_discovery",
+                "skill_level": 2,
+                "disconnection_reason": "",
+                "protocol": "ssh",
+                "files_transferred": 0,
+            }
+        ]
+        self.mock_ch.query.return_value = ch_res
+
+        sessions = await api_main.list_sessions(limit=10)
+        self.assertEqual(len(sessions), 1)
+        self.assertIsNone(sessions[0].end_time)
+
+    def test_intent_classifier_classifies_unix_discovery_commands(self):
+        """Verify RuleBasedClassifier detects standard unix discovery commands."""
+        import importlib.util
+        classifier_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "services", "intent-engine", "src", "classifier.py")
+        )
+        spec = importlib.util.spec_from_file_location("classifier_mod", classifier_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        clf = mod.RuleBasedClassifier()
+
+        result = clf.classify(["whoami", "id", "uname -a"])
+        self.assertIn(result.intent, ["system_discovery", "account_discovery"])
+        self.assertGreater(result.confidence, 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()

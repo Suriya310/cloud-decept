@@ -71,7 +71,13 @@ const defaultFilters = {
 
 // Transform backend session data to include UI-compatible fields
 export function transformSession(s: any): Session {
-  const isClosed = s.end_time && !String(s.end_time).startsWith('1970');
+  // A session is closed only if it has an explicit end_time different from start_time with duration or disconnect reason
+  const isClosed = Boolean(
+    s.end_time &&
+    !String(s.end_time).startsWith('1970') &&
+    s.end_time !== s.start_time &&
+    (s.duration_seconds > 0 || (s.duration && s.duration > 0) || s.disconnection_reason)
+  );
   return {
     ...s,
     src_ip: s.attacker_ip,

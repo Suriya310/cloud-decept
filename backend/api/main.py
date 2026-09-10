@@ -322,6 +322,8 @@ class CommandResponse(BaseModel):
     command: str
     arguments: list[str] = []
     output: Optional[str] = None
+    exit_code: Optional[int] = 0
+    duration_ms: Optional[int] = 0
     intent: Optional[str] = None
     mitre_techniques: list[str] = []
 
@@ -480,15 +482,34 @@ async def get_stats(
     recent_unique_attackers = int(recent_unique_attackers_raw or 0)
 
     # ============================================================
-    # ACTIVE SESSIONS (no end_time)
+    # ACTIVE SESSIONS (Live In-Flight Honeypot Sockets)
     # ============================================================
-    # end_time is a non-nullable DateTime in ClickHouse.
-    # Active sessions have end_time = epoch (1970-01-01 00:00:00).
-    # Do NOT compare DateTime to empty string '' - causes CANNOT_PARSE_DATETIME.
-    active_sessions_raw = await run_ch_command(
-        "SELECT count() FROM clouddecept.sessions WHERE end_time = '1970-01-01 00:00:00'"
-    )
-    active_sessions = int(active_sessions_raw or 0)
+    active_sessions = 0
+    if redis_client:
+        try:
+            r_active = await redis_client.scard("clouddecept:active_sessions")
+            if r_active is not None and r_active > 0:
+                active_sessions = int(r_active)
+        except Exception as e:
+            logger.debug(f"Redis active_sessions query failed: {e}")
+
+    if active_sessions == 0:
+        # Fallback to ClickHouse active sessions (unclosed within last 2 hours)
+        try:
+            active_sessions_raw = await run_ch_command(
+                f"""
+                SELECT count() FROM clouddecept.sessions
+                WHERE end_time = start_time
+                  AND duration_seconds = 0
+                  AND (disconnection_reason = '' OR disconnection_reason IS NULL)
+                  AND start_time >= '{recent_str}'
+                  AND start_time <= now()
+                """
+            )
+            active_sessions = int(active_sessions_raw or 0)
+        except Exception as e:
+            logger.debug(f"ClickHouse active_sessions query failed: {e}")
+            active_sessions = 0
 
     # ============================================================
     # TOP INTENTS (all-time)
@@ -521,29 +542,58 @@ async def get_stats(
     top_countries = top_countries_res.named_results()
 
     # ============================================================
-    # THREAT DISTRIBUTION (based on skill_level)
+    # THREAT DISTRIBUTION (Authoritative PostgreSQL + ClickHouse)
     # ============================================================
-    # skill_level: 1-10, map to threat levels
-    # 1-2: Low, 3-4: Medium, 5-7: High, 8-10: Critical, 0: Unclassified
-    threat_dist_res = await run_ch_query(
-        """
-        SELECT
-            sum(if(skill_level >= 8, 1, 0)) as critical,
-            sum(if(skill_level >= 5 AND skill_level < 8, 1, 0)) as high,
-            sum(if(skill_level >= 3 AND skill_level < 5, 1, 0)) as medium,
-            sum(if(skill_level < 3 AND skill_level > 0, 1, 0)) as low,
-            sum(if(skill_level = 0, 1, 0)) as unclassified
-        FROM clouddecept.sessions
-        """
-    )
-    threat_dist = threat_dist_res.named_results()
+    pg_threat_counts = {}
+    if postgres_pool:
+        try:
+            conn = postgres_pool.getconn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT lower(severity), count(*)
+                        FROM threat_intelligence
+                        WHERE severity IS NOT NULL AND severity != ''
+                        GROUP BY lower(severity)
+                        """
+                    )
+                    for sev, cnt in cur.fetchall():
+                        pg_threat_counts[sev] = int(cnt)
+            finally:
+                postgres_pool.putconn(conn)
+        except Exception as e:
+            logger.warning(f"Failed to query PostgreSQL threat distribution: {e}")
 
-    # Convert generator to list for subscriptable access
-    threat_rows = list(threat_dist)
-
-    threat_distribution = []
-    if threat_rows:
-        row = threat_rows[0]
+    if pg_threat_counts:
+        crit = pg_threat_counts.get("critical", 0)
+        high = pg_threat_counts.get("high", 0)
+        med = pg_threat_counts.get("medium", 0)
+        low = pg_threat_counts.get("low", 0)
+        eval_total = crit + high + med + low
+        unclassified = max(0, total_sessions - eval_total)
+        threat_distribution = [
+            {"level": "Critical", "count": crit},
+            {"level": "High", "count": high},
+            {"level": "Medium", "count": med},
+            {"level": "Low", "count": low},
+            {"level": "Unclassified", "count": unclassified},
+        ]
+    else:
+        # Fallback to ClickHouse skill_level
+        threat_dist_res = await run_ch_query(
+            """
+            SELECT
+                sum(if(skill_level >= 8, 1, 0)) as critical,
+                sum(if(skill_level >= 5 AND skill_level < 8, 1, 0)) as high,
+                sum(if(skill_level >= 3 AND skill_level < 5, 1, 0)) as medium,
+                sum(if(skill_level < 3 AND skill_level > 0, 1, 0)) as low,
+                sum(if(skill_level = 0, 1, 0)) as unclassified
+            FROM clouddecept.sessions
+            """
+        )
+        threat_rows = list(threat_dist_res.named_results())
+        row = threat_rows[0] if threat_rows else {}
         threat_distribution = [
             {"level": "Critical", "count": int(row.get("critical") or 0)},
             {"level": "High", "count": int(row.get("high") or 0)},
@@ -553,28 +603,36 @@ async def get_stats(
         ]
 
     # ============================================================
-    # SESSIONS PER HOUR (last 24 hours)
+    # SESSIONS PER HOUR (last 24 hours, chronological)
     # ============================================================
     sessions_per_hour_res = await run_ch_query(
         f"""
         SELECT
-            formatDateTime(toStartOfHour(start_time), '%H:%M') as hour,
+            toStartOfHour(start_time) as hour_dt,
             count() as cnt
         FROM clouddecept.sessions
-        WHERE start_time >= '{day_ago_str}'
-        GROUP BY hour
-        ORDER BY hour
+        WHERE start_time >= '{day_ago_str}' AND start_time <= now()
+        GROUP BY hour_dt
+        ORDER BY hour_dt ASC
         """
     )
-    sessions_per_hour = sessions_per_hour_res.named_results()
-
-    sessions_per_hour_formatted = [
-        {"hour": r["hour"], "count": int(r["cnt"])}
-        for r in sessions_per_hour
-    ]
+    sessions_per_hour_formatted = []
+    for r in sessions_per_hour_res.named_results():
+        h_dt = r.get("hour_dt")
+        if isinstance(h_dt, datetime):
+            h_str = h_dt.strftime('%H:00')
+            d_str = h_dt.strftime('%Y-%m-%d %H:00')
+        else:
+            h_str = str(h_dt)[11:16] if len(str(h_dt)) >= 16 else str(h_dt)
+            d_str = str(h_dt)[:16]
+        sessions_per_hour_formatted.append({
+            "hour": h_str,
+            "date": d_str,
+            "count": int(r["cnt"]),
+        })
 
     # ============================================================
-    # COMMANDS PER DAY (last 7 days)
+    # COMMANDS PER DAY (last 7 days, up to now)
     # ============================================================
     commands_per_day_res = await run_ch_query(
         f"""
@@ -582,9 +640,9 @@ async def get_stats(
             toDate(timestamp) as day,
             uniqExact(event_id) as cnt
         FROM clouddecept.commands
-        WHERE timestamp >= '{week_ago_str}'
+        WHERE timestamp >= '{week_ago_str}' AND timestamp <= now()
         GROUP BY day
-        ORDER BY day
+        ORDER BY day ASC
         """
     )
     commands_per_day = commands_per_day_res.named_results()
@@ -598,7 +656,7 @@ async def get_stats(
     ]
 
     # ============================================================
-    # SESSIONS PER DAY (last 7 days, authoritative deduplicated count)
+    # SESSIONS PER DAY (last 7 days, up to now)
     # ============================================================
     sessions_per_day_res = await run_ch_query(
         f"""
@@ -606,9 +664,9 @@ async def get_stats(
             toDate(start_time) as day,
             uniqExact(session_id) as cnt
         FROM clouddecept.sessions
-        WHERE start_time >= '{week_ago_str}'
+        WHERE start_time >= '{week_ago_str}' AND start_time <= now()
         GROUP BY day
-        ORDER BY day
+        ORDER BY day ASC
         """
     )
     sessions_per_day_formatted = [
@@ -673,7 +731,8 @@ async def list_sessions(
         f"""
         SELECT session_id, start_time, end_time, duration_seconds,
                attacker_ip, country, protocol, commands_executed,
-               files_transferred, credentials_tried, intent, skill_level
+               files_transferred, credentials_tried, intent, skill_level,
+               disconnection_reason
         FROM clouddecept.sessions
         WHERE {where_sql}
         ORDER BY start_time DESC
@@ -681,7 +740,21 @@ async def list_sessions(
         """
     )).named_results()
 
-    return [SessionSummary(**r) for r in results]
+    formatted_sessions = []
+    for r in results:
+        sess_dict = dict(r)
+        # An active session in ClickHouse has end_time placeholder equal to start_time, duration 0, and no disconnect reason
+        is_active = (
+            sess_dict.get("end_time") == sess_dict.get("start_time") and
+            int(sess_dict.get("duration_seconds") or 0) == 0 and
+            not sess_dict.get("disconnection_reason")
+        )
+        if is_active:
+            sess_dict["end_time"] = None
+        sess_dict.pop("disconnection_reason", None)
+        formatted_sessions.append(SessionSummary(**sess_dict))
+
+    return formatted_sessions
 
 
 @app.get("/sessions/{session_id}", response_model=SessionSummary)
@@ -723,6 +796,15 @@ async def get_session(session_id: str):
             sess_dict["credentials_tried"] = int(actual_auth)
     except Exception:
         pass
+
+    # Active session check
+    if (
+        sess_dict.get("end_time") == sess_dict.get("start_time") and
+        int(sess_dict.get("duration_seconds") or 0) == 0 and
+        not sess_dict.get("disconnection_reason")
+    ):
+        sess_dict["end_time"] = None
+    sess_dict.pop("disconnection_reason", None)
 
     return SessionSummary(**sess_dict)
 
@@ -1069,12 +1151,18 @@ async def top_attackers(
 
     results = (await run_ch_query(
         f"""
-        SELECT attacker_ip, country, count() as sessions,
-               uniq(session_id) as unique_sessions,
+        SELECT attacker_ip,
+               any(country) as country,
+               count() as sessions,
+               uniqExact(session_id) as unique_sessions,
+               sum(commands_executed) as total_commands,
+               max(skill_level) as max_skill_level,
+               any(intent) as primary_intent,
                max(start_time) as last_seen
         FROM clouddecept.sessions
-        WHERE start_time >= '{since_str}'
-        GROUP BY attacker_ip, country
+        WHERE start_time >= '{since_str}' AND start_time <= now()
+          AND attacker_ip != '' AND attacker_ip IS NOT NULL
+        GROUP BY attacker_ip
         ORDER BY sessions DESC
         LIMIT {limit_val}
         """

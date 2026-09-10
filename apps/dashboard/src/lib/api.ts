@@ -36,12 +36,13 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   // Sessions
-  getSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string }) => {
+  getSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string; min_skill_level?: number }) => {
     const search = new URLSearchParams();
     if (params?.limit) search.set('limit', params.limit.toString());
     if (params?.offset) search.set('offset', params.offset.toString());
     if (params?.hours) search.set('hours', params.hours.toString());
     if (params?.intent && params.intent !== 'all') search.set('intent', params.intent);
+    if (params?.min_skill_level !== undefined) search.set('min_skill_level', params.min_skill_level.toString());
     // Backend returns array directly: SessionSummary[]
     return fetchJson<any[]>(`${API_BASE}/sessions?${search}`).then(sessions => ({
       sessions: Array.isArray(sessions) ? sessions : [],
@@ -234,7 +235,7 @@ export const api = {
   // Real-time events (SSE)
   subscribeToEvents: (onEvent: (event: any) => void) => {
     try {
-      const eventSource = new EventSource(`${COLLECTOR_BASE}/events/stream`);
+      const eventSource = new EventSource(`${COLLECTOR_BASE}/events/stream?streams=honeypot:sessions,honeypot:commands,honeypot:auth`);
       eventSource.onmessage = (event) => {
         try {
           onEvent(JSON.parse(event.data));

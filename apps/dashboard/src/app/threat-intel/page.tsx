@@ -17,8 +17,10 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { cn, formatTimestamp, getSeverityColor, getIntentColor } from '@/lib/utils';
-import { useDashboardStore } from '@/lib/store';
+import { useDashboardStore, transformSession } from '@/lib/store';
 import { useDashboardStats } from '@/hooks/useDashboardStats';
+import { api } from '@/lib/api';
+import { Session } from '@/lib/types';
 import { getCountryName } from '@/lib/countries';
 import { normalizeIntent } from '@/lib/intents';
 import { evaluateThreat } from '@/lib/threatScore';
@@ -48,6 +50,7 @@ export default function ThreatIntelPage() {
   const [viewMode, setViewMode] = useState<'overview' | 'iocs' | 'techniques'>('overview');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [highRiskSessionsFromDb, setHighRiskSessionsFromDb] = useState<Session[]>([]);
 
   const handleCopy = useCallback(async (text: string, key: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -61,13 +64,18 @@ export default function ThreatIntelPage() {
   const loadAll = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      await Promise.all([
+      const [,,, highRiskData] = await Promise.all([
         refreshStats(),
         fetchSessions({ limit: 100, hours: 8760 }),
         fetchThreatIntelItems({ limit: 100 }),
+        api.getSessions({ min_skill_level: 5, limit: 20 }).catch(() => ({ sessions: [], total: 0 })),
         fetchMitreTechniques(),
         fetchConnectionStatus(),
       ]);
+      const sessionList = (highRiskData as any)?.sessions;
+      if (Array.isArray(sessionList) && sessionList.length > 0) {
+        setHighRiskSessionsFromDb(sessionList.map(transformSession));
+      }
     } finally {
       setIsRefreshing(false);
     }
@@ -82,14 +90,15 @@ export default function ThreatIntelPage() {
   const techniquesArray = mitreTechniques ?? [];
 
   const highRiskSessions = useMemo(() => {
-    return sessionsArray
+    const list = highRiskSessionsFromDb.length > 0 ? highRiskSessionsFromDb : sessionsArray;
+    return list
       .map((s) => ({
         session: s,
         threat: evaluateThreat(s.threat_score ?? s.skill_level),
       }))
       .filter((item) => item.threat.isHighRisk)
       .slice(0, 8);
-  }, [sessionsArray]);
+  }, [highRiskSessionsFromDb, sessionsArray]);
 
   const filteredIOCs = useMemo(() => {
     return iocsArray.filter((ioc) => {
@@ -269,9 +278,9 @@ export default function ThreatIntelPage() {
             <div className="p-4 border-b border-cyan-500/15 flex items-center justify-between">
               <div>
                 <h2 className="text-xs font-bold uppercase tracking-wider text-white">
-                  HIGH-RISK FORENSIC INCIDENTS
+                  HIGH-RISK FORENSIC INCIDENTS (SKILL LEVEL ≥ 5)
                 </h2>
-                <p className="text-[10px] text-slate-400 mt-0.5">Sessions flagged with High or Critical capability</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">Authoritative sessions flagged with High or Critical capability</p>
               </div>
               <Link href="/sessions" className="text-xs text-cyan-400 hover:text-cyan-300 font-bold">
                 VIEW ALL →
@@ -293,8 +302,8 @@ export default function ThreatIntelPage() {
                 <tbody>
                   {highRiskSessions.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-12 text-center text-slate-500 text-xs">
-                        No active high-risk sessions detected.
+                      <td colSpan={6} className="px-4 py-12 text-center text-slate-500 text-xs font-mono">
+                        No high-risk or critical capability incidents recorded in active honeypot logs.
                       </td>
                     </tr>
                   ) : (

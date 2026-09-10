@@ -125,8 +125,12 @@ export interface MitreTechniqueCount {
 export interface TopAttacker {
   attacker_ip: string;
   country: string;
-  sessions: number;
-  unique_sessions: number;
+  sessions?: number;
+  total_sessions?: number;
+  unique_sessions?: number;
+  total_commands?: number;
+  max_skill_level?: number;
+  primary_intent?: string;
   last_seen?: string;
 }
 

@@ -162,12 +162,19 @@ class RuleBasedSummarizer:
         if intent_history:
             latest_intent = intent_history[-1]
             intent_to_objective = {
-                "cloud_recon": "system discovery",
+                "system_discovery": "system discovery",
+                "file_discovery": "file and directory discovery",
+                "account_discovery": "account discovery",
+                "network_discovery": "network discovery",
+                "process_discovery": "process discovery",
+                "ingress_tool_transfer": "tool transfer",
+                "cloud_recon": "cloud reconnaissance",
                 "credential_hunting": "credential theft",
                 "privilege_escalation": "privilege escalation",
                 "data_access": "data exfiltration",
                 "persistence": "establish persistence",
-                "lateral_movement": "lateral movement"
+                "lateral_movement": "lateral movement",
+                "defense_evasion": "defense evasion",
             }
             if latest_intent in intent_to_objective:
                 return intent_to_objective[latest_intent]

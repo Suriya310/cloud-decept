@@ -58,6 +58,8 @@ export default function OverviewPage() {
     realTimeEvents,
     topCommands,
     fetchTopCommands,
+    topAttackers,
+    fetchTopAttackers,
   } = useDashboardStore();
 
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -79,12 +81,13 @@ export default function OverviewPage() {
         refreshStats(),
         fetchSessions({ limit: 50, hours: 8760 }),
         fetchTopCommands(24, 20),
+        fetchTopAttackers(168, 10),
         fetchConnectionStatus(),
       ]);
     } finally {
       setIsRefreshing(false);
     }
-  }, [refreshStats, fetchSessions, fetchTopCommands, fetchConnectionStatus]);
+  }, [refreshStats, fetchSessions, fetchTopCommands, fetchTopAttackers, fetchConnectionStatus]);
 
   useEffect(() => {
     loadData();
@@ -98,10 +101,11 @@ export default function OverviewPage() {
     const interval = setInterval(() => {
       refreshStats();
       fetchTopCommands(24, 20);
+      fetchTopAttackers(168, 10);
       fetchConnectionStatus();
     }, 30000);
     return () => clearInterval(interval);
-  }, [autoRefresh, refreshStats, fetchTopCommands, fetchConnectionStatus]);
+  }, [autoRefresh, refreshStats, fetchTopCommands, fetchTopAttackers, fetchConnectionStatus]);
 
   const sessionsArray = sessions ?? [];
   const realTimeEventsArray = realTimeEvents ?? [];
@@ -120,13 +124,37 @@ export default function OverviewPage() {
       .slice(0, 6);
   }, [sessionsArray]);
 
-  // Top Attacker sessions sorted by command count
+  // Top Attacker sessions sorted by command count (fallback)
   const topAttackerSessions = useMemo(() => {
     return [...sessionsArray]
       .filter((s) => s.src_ip || s.attacker_ip)
       .sort((a, b) => (b.command_count || 0) - (a.command_count || 0))
       .slice(0, 6);
   }, [sessionsArray]);
+
+  // Authoritative Attacker Profiles: prioritize /attackers/top API, fallback to top sessions
+  const displayedAttackers = useMemo(() => {
+    if (topAttackers && topAttackers.length > 0) {
+      return topAttackers.slice(0, 6).map((a) => ({
+        sessionId: undefined,
+        ip: a.attacker_ip,
+        country: getCountryName(a.country),
+        commandCount: a.total_commands ?? 0,
+        sessionCount: a.total_sessions ?? a.sessions ?? 1,
+        threat: evaluateThreat(a.max_skill_level ?? 1),
+        intent: a.primary_intent || 'reconnaissance',
+      }));
+    }
+    return topAttackerSessions.map((s) => ({
+      sessionId: s.session_id,
+      ip: s.src_ip || s.attacker_ip || 'unknown',
+      country: getCountryName(s.src_country || s.country),
+      commandCount: s.command_count ?? 0,
+      sessionCount: 1,
+      threat: evaluateThreat(s.threat_score ?? s.skill_level),
+      intent: s.intent || 'unknown',
+    }));
+  }, [topAttackers, topAttackerSessions]);
 
   const highRiskCount = (threatDistribution.critical || 0) + (threatDistribution.high || 0);
 
@@ -307,13 +335,7 @@ export default function OverviewPage() {
           </div>
 
           <div className="p-3.5 flex-1 max-h-[380px] overflow-y-auto scrollbar-thin space-y-2">
-            {realTimeEventsArray.length === 0 ? (
-              <div className="text-center py-12 text-slate-500 font-mono text-xs">
-                <Activity className="w-8 h-8 mx-auto text-slate-600 mb-2" />
-                <p className="text-slate-400">Awaiting live event triggers...</p>
-                <p className="text-[10px] text-slate-500 mt-1">Connect to SSH port 2222 to generate live stream</p>
-              </div>
-            ) : (
+            {realTimeEventsArray.length > 0 ? (
               realTimeEventsArray.slice(0, 20).map((event, idx) => (
                 <div
                   key={idx}
@@ -337,6 +359,49 @@ export default function OverviewPage() {
                   </div>
                 </div>
               ))
+            ) : sessionsArray.length > 0 ? (
+              sessionsArray.slice(0, 8).map((session) => (
+                <div
+                  key={session.session_id}
+                  className="p-2.5 rounded-lg bg-[#070e22]/90 border border-cyan-500/15 hover:border-cyan-400/40 transition-all font-mono text-xs flex items-start gap-2.5"
+                >
+                  <span
+                    className={cn(
+                      'w-2 h-2 rounded-full mt-1.5 flex-shrink-0',
+                      session.status === 'active' ? 'bg-emerald-400 animate-ping' : 'bg-cyan-500/60'
+                    )}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="font-bold text-cyan-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <span>{session.status === 'active' ? 'IN-FLIGHT INTRUSION' : 'RECORDED TELEMETRY'}</span>
+                        {session.intent && (
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 font-mono">
+                            {session.intent}
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-slate-500">
+                        {formatTimestamp(session.start_time)}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-300 mt-1 flex items-center justify-between">
+                      <span className="font-bold text-white">
+                        {session.src_ip || session.attacker_ip} ({getCountryName(session.src_country || session.country)})
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        {session.command_count ?? 0} cmds executed
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-12 text-slate-500 font-mono text-xs">
+                <Activity className="w-8 h-8 mx-auto text-slate-600 mb-2" />
+                <p className="text-slate-400">Awaiting live event triggers...</p>
+                <p className="text-[10px] text-slate-500 mt-1">Connect to SSH port 2222 to generate live stream</p>
+              </div>
             )}
           </div>
         </div>
@@ -364,68 +429,73 @@ export default function OverviewPage() {
           </div>
 
           <div className="p-3.5 flex-1 max-h-[380px] overflow-y-auto scrollbar-thin space-y-2.5">
-            {topAttackerSessions.length === 0 ? (
+            {displayedAttackers.length === 0 ? (
               <div className="text-center py-12 text-slate-500 font-mono text-xs">
                 <Users className="w-8 h-8 mx-auto text-slate-600 mb-2" />
                 <p>No active attacker profiles available</p>
               </div>
             ) : (
-              topAttackerSessions.map((session) => {
-                const ip = session.src_ip || session.attacker_ip || 'unknown';
-                const country = getCountryName(session.src_country || session.country);
-                const threat = evaluateThreat(session.threat_score ?? session.skill_level);
-
-                return (
-                  <div
-                    key={session.session_id}
-                    className="p-2.5 rounded-lg bg-[#070e22]/90 border border-cyan-500/15 hover:border-cyan-400/40 transition-all font-mono text-xs flex items-center justify-between gap-3"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
+              displayedAttackers.map((attacker, idx) => (
+                <div
+                  key={attacker.sessionId || `${attacker.ip}-${idx}`}
+                  className="p-2.5 rounded-lg bg-[#070e22]/90 border border-cyan-500/15 hover:border-cyan-400/40 transition-all font-mono text-xs flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      {attacker.sessionId ? (
                         <Link
-                          href={`/sessions/${session.session_id}`}
+                          href={`/sessions/${attacker.sessionId}`}
                           className="font-bold text-white hover:text-cyan-400 transition-colors truncate text-xs"
                         >
-                          {ip}
+                          {attacker.ip}
                         </Link>
-                        <button
-                          onClick={() => handleCopy(ip, `ip-${session.session_id}`)}
-                          className="text-slate-500 hover:text-cyan-300 p-0.5"
-                          title="Copy IP"
-                        >
-                          {copiedKey === `ip-${session.session_id}` ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                      </div>
-                      <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
-                        <MapPin className="w-3 h-3 text-cyan-400" />
-                        <span className="truncate">{country}</span>
-                      </p>
-                    </div>
-
-                    <div className="text-right flex-shrink-0 flex items-center gap-2.5">
-                      <div>
-                        <span className="text-xs font-bold text-white block">
-                          {(session.command_count ?? 0).toLocaleString()}
+                      ) : (
+                        <span className="font-bold text-white truncate text-xs">
+                          {attacker.ip}
                         </span>
-                        <span className="text-[9px] text-slate-500 uppercase">cmds</span>
-                      </div>
-                      <span
-                        className={cn(
-                          'badge text-[10px] font-bold px-2 py-0.5',
-                          threat.badgeClass
-                        )}
-                        title={threat.description}
+                      )}
+                      <button
+                        onClick={() => handleCopy(attacker.ip, `ip-${attacker.ip}`)}
+                        className="text-slate-500 hover:text-cyan-300 p-0.5"
+                        title="Copy IP"
                       >
-                        {threat.label}
-                      </span>
+                        {copiedKey === `ip-${attacker.ip}` ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
                     </div>
+                    <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
+                      <MapPin className="w-3 h-3 text-cyan-400" />
+                      <span className="truncate">{attacker.country}</span>
+                      {attacker.sessionCount > 1 && (
+                        <span className="text-[10px] text-cyan-400/70 ml-1">
+                          • {attacker.sessionCount} sessions
+                        </span>
+                      )}
+                    </p>
                   </div>
-                );
-              })
+
+                  <div className="text-right flex-shrink-0 flex items-center gap-2.5">
+                    <div>
+                      <span className="text-xs font-bold text-white block">
+                        {attacker.commandCount.toLocaleString()}
+                      </span>
+                      <span className="text-[9px] text-slate-500 uppercase">cmds</span>
+                    </div>
+                    <span
+                      className={cn(
+                        'badge text-[10px] font-bold px-2 py-0.5',
+                        attacker.threat.badgeClass
+                      )}
+                      title={attacker.threat.description}
+                    >
+                      {attacker.threat.label}
+                    </span>
+                  </div>
+                </div>
+              ))
             )}
           </div>
         </div>

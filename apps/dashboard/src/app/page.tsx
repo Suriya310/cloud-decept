@@ -49,6 +49,8 @@ export default function OverviewPage() {
     refresh: refreshStats,
   } = useDashboardStats();
 
+  console.log('[CloudDecept] OVERVIEW STATS', stats);
+
   const {
     sessions,
     fetchSessions,

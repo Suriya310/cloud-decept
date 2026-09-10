@@ -100,6 +100,8 @@ export function transformSession(s: any): Session {
   };
 }
 
+let statsFetchPromise: Promise<any> | null = null;
+
 export const useDashboardStore = create<DashboardState & DashboardActions>((set, get) => ({
   // State
   sessions: [],
@@ -239,16 +241,26 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   },
 
   fetchStats: async (hours: number = 24) => {
-    // Deduplicate concurrent calls to prevent state collision
-    if (get().statsLoading) return;
-    set({ statsLoading: true, statsError: null });
-    try {
-      const data = await api.getStats(hours);
-      set({ stats: data, statsLoading: false, statsError: null });
-    } catch (error: any) {
-      console.error('Failed to fetch stats:', error);
-      set({ statsLoading: false, statsError: error?.message || 'Failed to load statistics' });
+    // If a fetch is already in flight, return the shared promise
+    if (statsFetchPromise) {
+      return statsFetchPromise;
     }
+    set({ statsLoading: true, statsError: null });
+    statsFetchPromise = (async () => {
+      try {
+        const rawData = await api.getStats(hours);
+        const data = (rawData as any)?.stats || (rawData as any)?.data || rawData;
+        console.log("[CloudDecept] STATS FETCHED", data);
+        set({ stats: data, statsLoading: false, statsError: null });
+        return data;
+      } catch (error: any) {
+        console.error('[CloudDecept] STATS FETCH ERROR:', error);
+        set({ statsLoading: false, statsError: error?.message || 'Failed to load statistics' });
+      } finally {
+        statsFetchPromise = null;
+      }
+    })();
+    return statsFetchPromise;
   },
 
   fetchAllTimeStats: async () => {

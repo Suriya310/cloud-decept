@@ -47,39 +47,40 @@ export function useDashboardStats(options: { autoRefreshIntervalMs?: number } = 
       low: 0,
       unclassified: 0,
     };
-    if (stats?.threat_distribution && Array.isArray(stats.threat_distribution)) {
-      for (const item of stats.threat_distribution) {
+    const list = stats?.threat_distribution || (stats as any)?.threatDistribution;
+    if (list && Array.isArray(list)) {
+      for (const item of list) {
         if (item && item.level) {
           map[item.level.toLowerCase()] = item.count || 0;
         }
       }
     }
     return map;
-  }, [stats?.threat_distribution]);
+  }, [stats?.threat_distribution, (stats as any)?.threatDistribution]);
 
   return {
     // Raw Stats Object
     stats,
 
     // Authoritative All-Time Global Metrics
-    totalSessions: stats?.total_sessions ?? 0,
-    totalCommands: stats?.total_commands ?? 0,
-    uniqueAttackers: stats?.unique_attackers ?? 0,
-    activeSessions: stats?.active_sessions ?? 0,
+    totalSessions: (stats as any)?.total_sessions ?? (stats as any)?.totalSessions ?? 0,
+    totalCommands: (stats as any)?.total_commands ?? (stats as any)?.totalCommands ?? 0,
+    uniqueAttackers: (stats as any)?.unique_attackers ?? (stats as any)?.uniqueAttackers ?? 0,
+    activeSessions: (stats as any)?.active_sessions ?? (stats as any)?.activeSessions ?? 0,
 
     // Authoritative Recent Window Metrics (Last 24h)
-    recentSessions24h: stats?.recent_sessions ?? 0,
-    recentCommands24h: stats?.recent_commands ?? 0,
-    recentAttackers24h: stats?.recent_unique_attackers ?? 0,
+    recentSessions24h: (stats as any)?.recent_sessions ?? (stats as any)?.recentSessions ?? 0,
+    recentCommands24h: (stats as any)?.recent_commands ?? (stats as any)?.recentCommands ?? 0,
+    recentAttackers24h: (stats as any)?.recent_unique_attackers ?? (stats as any)?.recentUniqueAttackers ?? 0,
 
     // Authoritative Chart Time-Series & Aggregations
-    topIntents: stats?.top_intents ?? [],
-    topCountries: stats?.top_countries ?? [],
+    topIntents: ((stats as any)?.top_intents ?? (stats as any)?.topIntents ?? []) as { intent: string; count: number }[],
+    topCountries: ((stats as any)?.top_countries ?? (stats as any)?.topCountries ?? []) as { country: string; count: number }[],
     threatDistribution: threatDistributionMap,
-    threatDistributionList: stats?.threat_distribution ?? [],
-    sessionsPerHour: stats?.sessions_per_hour ?? [],
-    commandsPerDay: stats?.commands_per_day ?? [],
-    sessionsPerDay: stats?.sessions_per_day ?? [],
+    threatDistributionList: ((stats as any)?.threat_distribution ?? (stats as any)?.threatDistribution ?? []) as { level: string; count: number }[],
+    sessionsPerHour: ((stats as any)?.sessions_per_hour ?? (stats as any)?.sessionsPerHour ?? []) as { hour: string; count: number }[],
+    commandsPerDay: ((stats as any)?.commands_per_day ?? (stats as any)?.commandsPerDay ?? []) as { date: string; count: number }[],
+    sessionsPerDay: ((stats as any)?.sessions_per_day ?? (stats as any)?.sessionsPerDay ?? []) as { date: string; count: number }[],
 
     // Connection & State
     isApiHealthy: connectionStatus?.connected ?? false,

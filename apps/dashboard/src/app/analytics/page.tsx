@@ -138,7 +138,7 @@ export default function AnalyticsPage() {
   // 3. Sessions over time (Last 7 Days)
   const sessionsDailyData = useMemo(() => {
     if (statsSessionsPerDay && statsSessionsPerDay.length > 0) {
-      return statsSessionsPerDay.map((item) => {
+      return statsSessionsPerDay.map((item: any) => {
         let label = item.date;
         try {
           label = format(new Date(item.date + 'T00:00:00Z'), 'MMM d');

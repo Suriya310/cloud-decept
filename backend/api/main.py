@@ -458,7 +458,7 @@ async def get_stats(
     # ALL-TIME TOTALS (no time filter) - primary fields
     # ============================================================
     # Use fully qualified table names to ensure correct database
-    total_sessions_raw = await run_ch_command("SELECT count() FROM clouddecept.sessions")
+    total_sessions_raw = await run_ch_command("SELECT uniqExact(session_id) FROM clouddecept.sessions")
     total_sessions = int(total_sessions_raw or 0)
     total_commands_raw = await run_ch_command("SELECT uniqExact(event_id) FROM clouddecept.commands")
     total_commands = int(total_commands_raw or 0)
@@ -469,7 +469,7 @@ async def get_stats(
     # RECENT WINDOW STATS (respects hours parameter)
     # ============================================================
     recent_sessions_raw = await run_ch_command(
-        f"SELECT count() FROM clouddecept.sessions WHERE start_time >= '{since_str}'"
+        f"SELECT uniqExact(session_id) FROM clouddecept.sessions WHERE start_time >= '{since_str}'"
     )
     recent_sessions = int(recent_sessions_raw or 0)
     recent_commands_raw = await run_ch_command(
@@ -498,7 +498,7 @@ async def get_stats(
         try:
             active_sessions_raw = await run_ch_command(
                 f"""
-                SELECT count() FROM clouddecept.sessions
+                SELECT uniqExact(session_id) FROM clouddecept.sessions
                 WHERE end_time = start_time
                   AND duration_seconds = 0
                   AND (disconnection_reason = '' OR disconnection_reason IS NULL)
@@ -516,7 +516,7 @@ async def get_stats(
     # ============================================================
     top_intents_res = await run_ch_query(
         """
-        SELECT intent, count() as cnt
+        SELECT intent, uniqExact(session_id) as cnt
         FROM clouddecept.sessions
         WHERE intent != '' AND intent IS NOT NULL
         GROUP BY intent
@@ -531,7 +531,7 @@ async def get_stats(
     # ============================================================
     top_countries_res = await run_ch_query(
         """
-        SELECT country, count() as cnt
+        SELECT country, uniqExact(session_id) as cnt
         FROM clouddecept.sessions
         WHERE country != '' AND country IS NOT NULL
         GROUP BY country
@@ -609,7 +609,7 @@ async def get_stats(
         f"""
         SELECT
             toStartOfHour(start_time) as hour_dt,
-            count() as cnt
+            uniqExact(session_id) as cnt
         FROM clouddecept.sessions
         WHERE start_time >= '{day_ago_str}' AND start_time <= now()
         GROUP BY hour_dt
@@ -1153,15 +1153,24 @@ async def top_attackers(
         f"""
         SELECT attacker_ip,
                any(country) as country,
-               count() as sessions,
+               uniqExact(session_id) as sessions,
                uniqExact(session_id) as unique_sessions,
-               sum(commands_executed) as total_commands,
-               max(skill_level) as max_skill_level,
+               sum(max_cmds) as total_commands,
+               max(skill) as max_skill_level,
                any(intent) as primary_intent,
-               max(start_time) as last_seen
-        FROM clouddecept.sessions
-        WHERE start_time >= '{since_str}' AND start_time <= now()
-          AND attacker_ip != '' AND attacker_ip IS NOT NULL
+               max(start_t) as last_seen
+        FROM (
+            SELECT attacker_ip, session_id,
+                   any(country) as country,
+                   max(commands_executed) as max_cmds,
+                   max(skill_level) as skill,
+                   any(intent) as intent,
+                   max(start_time) as start_t
+            FROM clouddecept.sessions
+            WHERE start_time >= '{since_str}' AND start_time <= now()
+              AND attacker_ip != '' AND attacker_ip IS NOT NULL
+            GROUP BY attacker_ip, session_id
+        )
         GROUP BY attacker_ip
         ORDER BY sessions DESC
         LIMIT {limit_val}

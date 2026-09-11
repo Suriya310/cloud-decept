@@ -16,7 +16,9 @@ import { useRouter } from 'next/navigation';
 
 export function Header() {
   const router = useRouter();
-  const { connectionStatus, fetchConnectionStatus, fetchStats } = useDashboardStore();
+  const connectionStatus = useDashboardStore((s) => s.connectionStatus);
+  const fetchConnectionStatus = useDashboardStore((s) => s.fetchConnectionStatus);
+  const fetchStats = useDashboardStore((s) => s.fetchStats);
   const { collapsed, setCollapsed } = useSidebar();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState(false);

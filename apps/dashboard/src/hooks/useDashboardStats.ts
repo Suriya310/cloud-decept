@@ -9,14 +9,12 @@ import { useDashboardStore } from '@/lib/store';
  * preventing contradictory metrics and stale subset calculations.
  */
 export function useDashboardStats(options: { autoRefreshIntervalMs?: number } = {}) {
-  const {
-    stats,
-    statsLoading,
-    statsError,
-    fetchStats,
-    connectionStatus,
-    fetchConnectionStatus,
-  } = useDashboardStore();
+  const stats = useDashboardStore((s) => s.stats);
+  const statsLoading = useDashboardStore((s) => s.statsLoading);
+  const statsError = useDashboardStore((s) => s.statsError);
+  const fetchStats = useDashboardStore((s) => s.fetchStats);
+  const connectionStatus = useDashboardStore((s) => s.connectionStatus);
+  const fetchConnectionStatus = useDashboardStore((s) => s.fetchConnectionStatus);
 
   const refresh = useCallback(async () => {
     // Canonical time window: default 24h (which returns all-time totals + 24h recent metrics + authoritative charts)

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import {
   Activity,
@@ -49,7 +49,10 @@ export default function OverviewPage() {
     refresh: refreshStats,
   } = useDashboardStats();
 
+  const renderCount = useRef(0);
+  renderCount.current++;
   if (typeof window !== 'undefined') {
+    console.log("[CD-RENDER]", renderCount.current, Date.now());
     console.log("[CD-DEBUG-5] OVERVIEW RENDER", {
       stats,
       total_sessions: (stats as any)?.total_sessions,
@@ -60,19 +63,18 @@ export default function OverviewPage() {
     });
   }
 
-  const {
-    sessions,
-    fetchSessions,
-    connectionStatus,
-    fetchConnectionStatus,
-    subscribeToEvents,
-    realTimeEvents,
-    topCommands,
-    fetchTopCommands,
-    topAttackers,
-    fetchTopAttackers,
-    fetchStats,
-  } = useDashboardStore();
+  // Granular Zustand selectors to prevent re-rendering on high-frequency store updates
+  const sessions = useDashboardStore((s) => s.sessions);
+  const fetchSessions = useDashboardStore((s) => s.fetchSessions);
+  const connectionStatus = useDashboardStore((s) => s.connectionStatus);
+  const fetchConnectionStatus = useDashboardStore((s) => s.fetchConnectionStatus);
+  const topCommands = useDashboardStore((s) => s.topCommands);
+  const fetchTopCommands = useDashboardStore((s) => s.fetchTopCommands);
+  const topAttackers = useDashboardStore((s) => s.topAttackers);
+  const fetchTopAttackers = useDashboardStore((s) => s.fetchTopAttackers);
+  const fetchStats = useDashboardStore((s) => s.fetchStats);
+  const subscribeToEvents = useDashboardStore((s) => s.subscribeToEvents);
+  const realTimeEvents = useDashboardStore((s) => s.realTimeEvents);
 
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -101,18 +103,19 @@ export default function OverviewPage() {
     }
   }, [fetchStats, fetchSessions, fetchTopCommands, fetchTopAttackers, fetchConnectionStatus]);
 
-  // Initial load on mount
+  // Initial load on mount - runs strictly ONCE on mount
   useEffect(() => {
     loadData();
-  }, [loadData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Isolated real-time event subscription (never tied to loadData re-renders)
-  useEffect(() => {
-    const unsubscribe = subscribeToEvents();
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
-  }, [subscribeToEvents]);
+  // TEMP DEBUG: SSE subscription disabled to test REST stats responsiveness without SSE event storm
+  // useEffect(() => {
+  //   const unsubscribe = subscribeToEvents();
+  //   return () => {
+  //     if (unsubscribe) unsubscribe();
+  //   };
+  // }, [subscribeToEvents]);
 
   // Auto-refresh stats every 30 seconds
   useEffect(() => {

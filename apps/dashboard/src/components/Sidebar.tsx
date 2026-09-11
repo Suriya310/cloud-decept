@@ -32,7 +32,7 @@ const navigation = [
 export function Sidebar() {
   const pathname = usePathname();
   const { collapsed, setCollapsed } = useSidebar();
-  const { connectionStatus } = useDashboardStore();
+  const connectionStatus = useDashboardStore((s) => s.connectionStatus);
 
   const isApiHealthy = connectionStatus?.connected ?? false;
   const clickhouseStatus = connectionStatus?.clickhouse ?? 'unknown';

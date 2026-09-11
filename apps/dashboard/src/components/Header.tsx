@@ -31,15 +31,14 @@ export function Header() {
     return () => clearInterval(timer);
   }, []);
 
-  // Guarantee connection status and authoritative stats initialization on initial mount
+  // Guarantee connection status initialization on initial mount
   useEffect(() => {
     fetchConnectionStatus();
-    fetchStats(24);
     const healthInterval = setInterval(() => {
       fetchConnectionStatus();
     }, 30000);
     return () => clearInterval(healthInterval);
-  }, [fetchConnectionStatus, fetchStats]);
+  }, [fetchConnectionStatus]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);

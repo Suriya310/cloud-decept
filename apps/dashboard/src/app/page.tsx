@@ -49,7 +49,16 @@ export default function OverviewPage() {
     refresh: refreshStats,
   } = useDashboardStats();
 
-  console.log('[CloudDecept] OVERVIEW STATS', stats);
+  if (typeof window !== 'undefined') {
+    console.log("[CD-DEBUG-5] OVERVIEW RENDER", {
+      stats,
+      total_sessions: (stats as any)?.total_sessions,
+      total_commands: (stats as any)?.total_commands,
+      unique_attackers: (stats as any)?.unique_attackers,
+      recent_commands: (stats as any)?.recent_commands,
+      active_sessions: (stats as any)?.active_sessions,
+    });
+  }
 
   const {
     sessions,
@@ -62,6 +71,7 @@ export default function OverviewPage() {
     fetchTopCommands,
     topAttackers,
     fetchTopAttackers,
+    fetchStats,
   } = useDashboardStore();
 
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -80,7 +90,7 @@ export default function OverviewPage() {
     setIsRefreshing(true);
     try {
       await Promise.allSettled([
-        refreshStats(),
+        fetchStats(24),
         fetchSessions({ limit: 50, hours: 8760 }),
         fetchTopCommands(24, 20),
         fetchTopAttackers(168, 10),
@@ -89,7 +99,7 @@ export default function OverviewPage() {
     } finally {
       setIsRefreshing(false);
     }
-  }, [refreshStats, fetchSessions, fetchTopCommands, fetchTopAttackers, fetchConnectionStatus]);
+  }, [fetchStats, fetchSessions, fetchTopCommands, fetchTopAttackers, fetchConnectionStatus]);
 
   // Initial load on mount
   useEffect(() => {
@@ -108,13 +118,13 @@ export default function OverviewPage() {
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => {
-      refreshStats();
+      fetchStats(24);
       fetchTopCommands(24, 20);
       fetchTopAttackers(168, 10);
       fetchConnectionStatus();
     }, 30000);
     return () => clearInterval(interval);
-  }, [autoRefresh, refreshStats, fetchTopCommands, fetchTopAttackers, fetchConnectionStatus]);
+  }, [autoRefresh, fetchStats, fetchTopCommands, fetchTopAttackers, fetchConnectionStatus]);
 
   const sessionsArray = sessions ?? [];
   const realTimeEventsArray = realTimeEvents ?? [];
@@ -223,6 +233,11 @@ export default function OverviewPage() {
           </div>
         </div>
       )}
+
+      {/* Temporary Hard Proof / Debug View */}
+      <pre className="p-2 bg-slate-900 text-cyan-300 text-[10px] font-mono rounded overflow-auto max-h-32 border border-cyan-500/30">
+        DEBUG_STATS: {JSON.stringify(stats, null, 2)}
+      </pre>
 
       {/* Central HUD Metrics Layer (Cinematic Cyber Pill Dock) */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">

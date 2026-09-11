@@ -241,6 +241,10 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   },
 
   fetchStats: async (hours: number = 24) => {
+    if (typeof window !== 'undefined') {
+      console.log("[CD-DEBUG-1] fetchStats CALLED", { hours });
+      console.log("[CD-DEBUG-3] STORE BEFORE", get().stats);
+    }
     // If a fetch is already in flight, return the shared promise
     if (statsFetchPromise) {
       return statsFetchPromise;
@@ -249,9 +253,17 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
     statsFetchPromise = (async () => {
       try {
         const rawData = await api.getStats(hours);
+        if (typeof window !== 'undefined') {
+          console.log("[CD-DEBUG-2] fetchStats RESPONSE", rawData);
+        }
         const data = (rawData as any)?.stats || (rawData as any)?.data || rawData;
-        console.log("[CloudDecept] STATS FETCHED", data);
+        if (typeof window !== 'undefined') {
+          console.log("[CD-DEBUG-4] STORE AFTER", data);
+        }
         set({ stats: data, statsLoading: false, statsError: null });
+        if (typeof window !== 'undefined') {
+          console.log("[CD-DEBUG-6] ZUSTAND DIRECT READ", useDashboardStore.getState().stats);
+        }
         return data;
       } catch (error: any) {
         console.error('[CloudDecept] STATS FETCH ERROR:', error);

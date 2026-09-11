@@ -26,12 +26,6 @@ export function useDashboardStats(options: { autoRefreshIntervalMs?: number } = 
     ]);
   }, [fetchStats, fetchConnectionStatus]);
 
-  useEffect(() => {
-    if (!stats && !statsLoading && !statsError) {
-      refresh();
-    }
-  }, [stats, statsLoading, statsError, refresh]);
-
   // Optional periodic background refresh
   useEffect(() => {
     if (!options.autoRefreshIntervalMs || options.autoRefreshIntervalMs <= 0) return;

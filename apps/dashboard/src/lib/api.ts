@@ -233,10 +233,11 @@ export const api = {
     fetchJson<any>(`${COLLECTOR_BASE}/health`),
 
   // Real-time events (SSE)
-  subscribeToEvents: (onEvent: (event: any) => void) => {
+  subscribeToEvents: (onEvent: (event: any) => void, onConnected?: () => void, onDisconnected?: () => void) => {
     if (typeof window === 'undefined') return () => {};
     try {
-      const eventSource = new EventSource(`${COLLECTOR_BASE}/events/stream?streams=honeypot:sessions,honeypot:commands,honeypot:auth`);
+      const eventSource = new EventSource(`${COLLECTOR_BASE}/events/live`);
+      eventSource.onopen = () => { if (onConnected) onConnected(); };
       eventSource.onmessage = (event) => {
         try {
           onEvent(JSON.parse(event.data));
@@ -245,6 +246,7 @@ export const api = {
         }
       };
       eventSource.onerror = () => {
+        if (onDisconnected) onDisconnected();
         eventSource.close();
       };
       return () => eventSource.close();

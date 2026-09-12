@@ -202,6 +202,8 @@ export interface DashboardState {
   sessionsError: string | null;
   realTimeEvents: RealTimeEvent[];
   isConnected: boolean;
+  isLiveConnected: boolean;
+  liveEventCount: number;
   filters: {
     status: string;
     intent: string;

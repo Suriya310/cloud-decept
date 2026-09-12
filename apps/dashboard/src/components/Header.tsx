@@ -17,6 +17,8 @@ import { useRouter } from 'next/navigation';
 export function Header() {
   const router = useRouter();
   const connectionStatus = useDashboardStore((s) => s.connectionStatus);
+  const isLiveConnected = useDashboardStore((s) => s.isLiveConnected);
+  const liveEventCount = useDashboardStore((s) => s.liveEventCount);
   const fetchConnectionStatus = useDashboardStore((s) => s.fetchConnectionStatus);
   const fetchStats = useDashboardStore((s) => s.fetchStats);
   const { collapsed, setCollapsed } = useSidebar();

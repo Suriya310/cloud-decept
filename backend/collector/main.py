@@ -1322,7 +1322,7 @@ async def debug_pipeline():
     return result
 
 
-@app.get("/events/stream")
+@app.get("/events/stream-deprecated-do-not-use")
 async def event_stream(
     request: Request,
     streams: str = "honeypot:sessions,honeypot:commands,honeypot:auth",
@@ -1400,6 +1400,86 @@ async def event_stream(
         },
     )
 
+
+
+@app.get("/events/live")
+async def live_events(request: Request):
+    """
+    Phase 13: Safe Live Event Stream Overlay.
+    - Starts strictly from the end of the streams ($).
+    - Exposes a normalized format, no Redis IDs exposed to client.
+    - Bounded rate limiting.
+    """
+    stream_list = [
+        StreamNames.SESSION_EVENTS,
+        StreamNames.COMMAND_EVENTS,
+        StreamNames.AUTH_EVENTS,
+    ]
+    
+    async def event_generator():
+        yield f"data: {{"type": "connected"}}\n\n"
+        
+        # Always start at the current end of all requested streams
+        last_ids = {stream: "$" for stream in stream_list}
+        
+        MAX_EVENTS_PER_POLL = 50
+        POLL_BLOCK_MS = 5000
+        
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                    
+                streams_dict = {stream: last_ids[stream] for stream in stream_list}
+                
+                try:
+                    results = await collector.redis.xread(
+                        streams_dict, count=MAX_EVENTS_PER_POLL, block=POLL_BLOCK_MS
+                    )
+                    
+                    if results:
+                        for stream_name, messages in results:
+                            for msg_id, msg_data in messages:
+                                last_ids[stream_name] = msg_id
+                                
+                                try:
+                                    raw = msg_data.get(b"data", msg_data.get("data", "{}"))
+                                    if isinstance(raw, bytes):
+                                        raw = raw.decode("utf-8")
+                                    envelope = json.loads(raw)
+                                    
+                                    payload = envelope.get("payload", {})
+                                    norm_event = {
+                                        "event_type": envelope.get("event_type"),
+                                        "session_id": payload.get("session_id"),
+                                        "timestamp": payload.get("timestamp"),
+                                        "attacker_ip": payload.get("attacker_ip") or payload.get("src_ip"),
+                                        "data": payload
+                                    }
+                                    
+                                    yield f"data: {json.dumps(norm_event)}\n\n"
+                                except Exception as e:
+                                    logger.error(f"Failed to parse live event: {e}")
+                except redis.ResponseError as e:
+                    logger.error(f"Error reading from streams: {e}")
+                    await asyncio.sleep(1)
+                    
+                await asyncio.sleep(0.1)
+                
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Live SSE stream error: {e}")
+            
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 if __name__ == "__main__":
     import uvicorn

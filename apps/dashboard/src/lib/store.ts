@@ -53,6 +53,7 @@ interface DashboardActions {
   addRealTimeEvent: (event: RealTimeEvent) => void;
   clearRealTimeEvents: () => void;
   setConnected: (connected: boolean) => void;
+  setLiveConnected: (connected: boolean) => void;
 
   // Filters
   setFilters: (filters: Partial<DashboardState['filters']>) => void;
@@ -106,6 +107,9 @@ export function transformSession(s: any): Session {
 
 let statsFetchPromise: Promise<any> | null = null;
 
+let eventBuffer: RealTimeEvent[] = [];
+let batchTimeout: ReturnType<typeof setTimeout> | null = null;
+
 export const useDashboardStore = create<DashboardState & DashboardActions>((set, get) => ({
   // State
   sessions: [],
@@ -124,6 +128,8 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   sessionsError: null,
   realTimeEvents: [],
   isConnected: false,
+  isLiveConnected: false,
+  liveEventCount: 0,
   connectionStatus: null,
   filters: defaultFilters,
   timeWindowHours: 24,
@@ -314,13 +320,31 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   },
 
   addRealTimeEvent: (event) => {
-    set((state) => ({
-      realTimeEvents: [event, ...state.realTimeEvents].slice(0, 100),
-    }));
+    // Ignore internal connection events from the backend
+    if (event && (event as any).type === "connected") return;
+    
+    eventBuffer.push(event);
+    set(state => ({ liveEventCount: state.liveEventCount + 1 }));
+    
+    if (!batchTimeout) {
+      batchTimeout = setTimeout(() => {
+        // Prevent buffer from growing unbounded if interval is delayed
+        const toAdd = eventBuffer.slice(-100).reverse(); // take most recent 100, newest first
+        set((state) => ({
+          realTimeEvents: [...toAdd, ...state.realTimeEvents].slice(0, 100),
+        }));
+        eventBuffer = [];
+        batchTimeout = null;
+      }, 500); // 500ms batching interval
+    }
   },
 
   clearRealTimeEvents: () => {
     set({ realTimeEvents: [] });
+  },
+
+  setLiveConnected: (connected) => {
+    set({ isLiveConnected: connected });
   },
 
   setConnected: (connected) => {
@@ -342,9 +366,11 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   subscribeToEvents: () => {
     let unsubscribe: (() => void) | null = null;
     try {
-      unsubscribe = api.subscribeToEvents((event) => {
-        get().addRealTimeEvent(event);
-      });
+      unsubscribe = api.subscribeToEvents(
+        (event) => get().addRealTimeEvent(event),
+        () => get().setLiveConnected(true),
+        () => get().setLiveConnected(false)
+      );
     } catch (error) {
       console.error('Failed to subscribe to events:', error);
     }

@@ -1437,8 +1437,10 @@ async def live_events(request: Request):
                         streams_dict, count=MAX_EVENTS_PER_POLL, block=POLL_BLOCK_MS
                     )
                     
+                    total_messages = 0
                     if results:
                         for stream_name, messages in results:
+                            total_messages += len(messages)
                             for msg_id, msg_data in messages:
                                 last_ids[stream_name] = msg_id
                                 
@@ -1460,11 +1462,20 @@ async def live_events(request: Request):
                                     yield f"data: {json.dumps(norm_event)}\n\n"
                                 except Exception as e:
                                     logger.error(f"Failed to parse live event: {e}")
+                    
+                    # Yield to event loop to avoid starving other requests during high load
+                    if total_messages == MAX_EVENTS_PER_POLL:
+                        # We hit the cap, meaning there might be more data immediately.
+                        # We yield to the event loop but don't sleep long, so we drain fast.
+                        await asyncio.sleep(0)
+                    else:
+                        # We didn't hit the cap. XREAD block means we waited. 
+                        # We can loop immediately or sleep briefly.
+                        await asyncio.sleep(0.01)
+                        
                 except redis.ResponseError as e:
                     logger.error(f"Error reading from streams: {e}")
                     await asyncio.sleep(1)
-                    
-                await asyncio.sleep(0.1)
                 
         except asyncio.CancelledError:
             pass

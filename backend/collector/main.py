@@ -1417,7 +1417,7 @@ async def live_events(request: Request):
     ]
     
     async def event_generator():
-        yield f"data: {{"type": "connected"}}\n\n"
+        yield 'data: {"type": "connected"}\n\n'
         
         # Always start at the current end of all requested streams
         last_ids = {stream: "$" for stream in stream_list}

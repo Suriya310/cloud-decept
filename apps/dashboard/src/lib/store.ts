@@ -324,6 +324,12 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
     if (event && (event as any).type === "connected") return;
     
     eventBuffer.push(event);
+    
+    // STRICT RAW BUFFER BOUNDS (Phase 13 Final Validation)
+    if (eventBuffer.length > 500) {
+      eventBuffer = eventBuffer.slice(-100);
+    }
+    
     set(state => ({ liveEventCount: state.liveEventCount + 1 }));
     
     if (!batchTimeout) {

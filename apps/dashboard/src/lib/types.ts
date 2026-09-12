@@ -25,6 +25,49 @@ export interface Session {
   threat_score?: number;
   tactics?: string[];
   status?: 'active' | 'closed' | 'failed' | 'timed_out' | 'stale';
+  assessment?: FinalAssessment;
+}
+
+export interface FinalAssessment {
+  status: 'classified' | 'insufficient_evidence' | 'unknown' | 'not_analyzed';
+  intent: string;
+  threat_level: 'low' | 'medium' | 'high' | 'critical' | 'unclassified';
+  threat_score: number;
+  skill_level: number;
+  mitre_techniques: string[];
+  tactics: string[];
+  confidence: number;
+  evidence_count: number;
+  analysis_status: 'completed' | 'insufficient_evidence' | 'pending';
+  analyzed_at?: string | null;
+  source: string;
+  provenance: string;
+}
+
+export interface AdaptiveDeceptionRecord {
+  status: 'NOT_EVALUATED' | 'EVALUATED_NO_ACTION' | 'PASSIVE_TELEMETRY' | 'DECEPTION_APPLIED' | 'FAILED';
+  action_taken: boolean;
+  decision: string;
+  reason: string;
+  strategy?: string;
+  details?: Record<string, any>;
+}
+
+export interface ForensicCaseFile {
+  case_id: string;
+  exported_at: string;
+  session: Session;
+  attacker: {
+    ip: string;
+    country: string;
+    asn?: string;
+  };
+  assessment: FinalAssessment;
+  auth_attempts: AuthEvent[];
+  commands: Command[];
+  timeline: any[];
+  threat_intel?: any;
+  adaptive_deception?: AdaptiveDeceptionRecord | null;
 }
 
 export interface Command {

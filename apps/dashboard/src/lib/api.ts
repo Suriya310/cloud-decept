@@ -109,11 +109,12 @@ export const api = {
   getThreatIntel: async (sessionId: string): Promise<any> => {
     try {
       const summary = await api.getSessionSummary(sessionId);
+      const uniqueTechs = Array.from(new Set(summary.mitre_techniques || []));
       return {
         session_id: summary.session_id,
         timestamp: summary.created_at,
         iocs: summary.iocs || [],
-        techniques: (summary.mitre_techniques || []).map((t) => ({
+        techniques: uniqueTechs.map((t) => ({
           technique_id: t,
           name: t,
           tactic: 'Discovery',
@@ -124,6 +125,7 @@ export const api = {
         tactic_summary: {},
         summary: {
           ...summary,
+          mitre_techniques: uniqueTechs,
           primary_objective: summary.intent,
           narrative: summary.summary,
           risk_level: summary.skill_level >= 7 ? 'critical' : summary.skill_level >= 4 ? 'high' : 'low',
@@ -134,6 +136,12 @@ export const api = {
       return null;
     }
   },
+
+  getCaseFile: (sessionId: string): Promise<any> =>
+    fetchJson<any>(`${API_BASE}/sessions/${sessionId}/case-file`),
+
+  getAssessment: (sessionId: string): Promise<any> =>
+    fetchJson<any>(`${API_BASE}/sessions/${sessionId}/assessment`),
 
   // Threat Intel Listing & MITRE
   listThreatIntel: (params?: { limit?: number; severity?: string; ioc_type?: string }): Promise<ThreatIntelItem[]> => {

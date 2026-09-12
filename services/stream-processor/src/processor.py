@@ -309,7 +309,7 @@ class EventProcessor:
                     update_payload["skill_level"] = intent_result.get("skill_level", 1)
 
                 await self.ai_clients.client.post(
-                    "http://event-collector:8000/update-session",
+                    f"{settings.event_collector_url}/update-session",
                     json=update_payload,
                 )
                 logger.info(f"Persisted update for session {session_id}: cmds={update_payload['commands_executed']}, auth={update_payload['credentials_tried']}")

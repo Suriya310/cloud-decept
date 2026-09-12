@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     intent_engine_url: str = "http://intent-engine:8001"
     adaptive_engine_url: str = "http://adaptive-engine:8002"
     threat_intel_url: str = "http://threat-intel:8005"
+    event_collector_url: str = "http://event-collector:8000"
 
     # HTTP Client
     http_timeout_seconds: int = 3

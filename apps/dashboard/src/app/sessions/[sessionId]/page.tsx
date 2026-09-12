@@ -25,6 +25,8 @@ import {
   CornerDownRight,
   ExternalLink,
   Search,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { cn, formatTimestamp, formatDuration } from '@/lib/utils';
 import { useDashboardStore } from '@/lib/store';
@@ -69,6 +71,7 @@ export default function SessionInvestigationPage() {
   const [adaptiveSession, setAdaptiveSession] = useState<any>(null);
   const [loadingAdaptive, setLoadingAdaptive] = useState(false);
   const [commandFilter, setCommandFilter] = useState('');
+  const [showRawPasswords, setShowRawPasswords] = useState(false);
 
   const handleCopy = useCallback(async (text: string | null | undefined, key: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -119,8 +122,36 @@ export default function SessionInvestigationPage() {
   const commandsList = commands ?? [];
   const ip = session?.src_ip ?? session?.attacker_ip ?? 'unknown';
   const countryName = getCountryName(session?.src_country || session?.country);
-  const threat = evaluateThreat(session?.threat_score ?? session?.skill_level);
-  const primaryIntent = normalizeIntent(session?.intent || (session?.intent_history && session.intent_history[0]));
+
+  // Canonical assessment reconciliation:
+  // Prefer reconciled session.assessment or threatIntel.summary to ensure one unified truth
+  const canonicalAssessment = useMemo(() => {
+    if (session?.assessment) return session.assessment;
+    if (threatIntel?.summary) {
+      const s = threatIntel.summary;
+      return {
+        status: 'analyzed',
+        threat_level: s.threat_level || s.risk_level || 'low',
+        threat_score: s.threat_score ?? session?.threat_score ?? (s.skill_level ? s.skill_level * 10 : 10),
+        intent: s.intent || s.primary_objective || 'system discovery',
+        skill_level: s.skill_level ?? session?.skill_level ?? 1,
+        mitre_techniques: s.mitre_techniques || [],
+        tactics: s.tactics || [],
+        confidence: s.confidence || 'high',
+        evidence_count: commandsList.length + authEvents.length,
+        analysis_status: 'completed',
+        analyzed_at: s.created_at || threatIntel.timestamp || new Date().toISOString(),
+        source: 'threat-intel-service',
+        provenance: 'postgresql:session_summaries',
+      };
+    }
+    return null;
+  }, [session, threatIntel, commandsList.length, authEvents.length]);
+
+  const effectiveSkillLevel = canonicalAssessment?.skill_level ?? session?.skill_level ?? 0;
+  const effectiveThreatScore = canonicalAssessment?.threat_score ?? session?.threat_score ?? (effectiveSkillLevel * 10);
+  const threat = evaluateThreat(effectiveThreatScore);
+  const primaryIntent = normalizeIntent(canonicalAssessment?.intent || session?.intent || (session?.intent_history && session.intent_history[0]));
 
   // Build the Unified Chronological Attack Timeline
   const unifiedTimeline = useMemo(() => {
@@ -147,7 +178,7 @@ export default function SessionInvestigationPage() {
       });
     }
 
-    // 2. Auth Attempts
+    // 2. Auth Attempts (Masked credentials in timeline)
     authEvents.forEach((auth, idx) => {
       const isSuccess = Boolean(auth.success);
       events.push({
@@ -161,7 +192,6 @@ export default function SessionInvestigationPage() {
         details: {
           'Username': auth.username,
           'Password': auth.password ? '••••••••' : '(empty / key)',
-          'Raw Password': auth.password || '(empty)',
           'Auth Method': auth.auth_method || 'password',
           'Result': isSuccess ? 'AUTHENTICATED - Interactive Shell Granted' : 'REJECTED - Bad Credentials',
         },
@@ -172,21 +202,21 @@ export default function SessionInvestigationPage() {
     // 3. Command Executions
     commandsList.forEach((cmd, idx) => {
       const cmdSuccess = cmd.exit_code === 0 || cmd.success;
-      const cmdIntent = normalizeIntent(cmd.intent);
+      const cmdIntent = cmd.intent ? normalizeIntent(cmd.intent) : null;
       events.push({
         id: cmd.event_id || cmd.id || `cmd-${idx}`,
         timestamp: cmd.timestamp,
         type: 'command',
         title: `COMMAND EXECUTED: $ ${cmd.command}`,
         status: cmdSuccess ? 'success' : 'warning',
-        badge: cmdIntent.label,
+        badge: cmdIntent ? cmdIntent.label : 'RAW TELEMETRY',
         summary: cmd.output ? `Output: ${cmd.output.slice(0, 100).replace(/\n/g, ' ')}...` : 'Executed with no stdout/stderr',
         details: {
           'Command': cmd.command,
           'Arguments': (cmd.arguments && cmd.arguments.length > 0) ? cmd.arguments.join(' ') : 'none',
           'Exit Code': cmd.exit_code !== undefined ? String(cmd.exit_code) : '0',
           'Execution Duration': `${cmd.duration_ms ?? 0} ms`,
-          'Intent Classification': cmdIntent.label,
+          'Intent Classification': cmdIntent ? cmdIntent.label : 'Evaluated in Session Threat Intel',
           'MITRE Techniques': (cmd.mitre_techniques && cmd.mitre_techniques.length > 0) ? cmd.mitre_techniques.join(', ') : 'Unmapped',
           'Output Content': cmd.output || '(empty output)',
         },
@@ -195,47 +225,25 @@ export default function SessionInvestigationPage() {
     });
 
     // 4. Adaptive Deception Actions
-    if (adaptiveSession) {
-      if (adaptiveSession.credential_attempts > 0 || adaptiveSession.privilege_escalation_attempts > 0) {
-        events.push({
-          id: `adapt-${session.session_id}`,
-          timestamp: session.start_time, // Anchor near session
-          type: 'adaptation',
-          title: 'ADAPTIVE DECEPTION ENGAGED',
-          status: 'warning',
-          badge: 'DECOY APPLIED',
-          summary: `Deception policy triggered: Synthetic credential decoys injected`,
-          details: {
-            'Credential Probes Logged': adaptiveSession.credential_attempts,
-            'Privilege Probes Logged': adaptiveSession.privilege_escalation_attempts,
-            'Policy Decision': 'Credential Decoy & Slowdown Injection',
-            'Deception Rationale': 'Attacker exhibited active reconnaissance, presenting synthetic cloud credentials to monitor exfiltration.',
-          },
-        });
-      }
-    }
-
-    // 5. Threat Assessment Event
-    if (threatIntel?.summary) {
-      const ti = threatIntel.summary;
+    if (adaptiveSession && (adaptiveSession.credential_attempts > 0 || adaptiveSession.privilege_escalation_attempts > 0)) {
       events.push({
-        id: `ti-${session.session_id}`,
-        timestamp: session.start_time,
-        type: 'threat_assessment',
-        title: 'THREAT INTELLIGENCE SUMMARY GENERATED',
-        status: 'info',
-        badge: `${threat.label.toUpperCase()} RISK`,
-        summary: ti.narrative || ti.summary || 'Adversary behavior analyzed against deception heuristics',
+        id: `adapt-${session.session_id}`,
+        timestamp: session.end_time || session.start_time,
+        type: 'adaptation',
+        title: 'ADAPTIVE DECEPTION ENGAGED',
+        status: 'warning',
+        badge: 'DECOY APPLIED',
+        summary: `Deception policy triggered: Synthetic credential decoys injected`,
         details: {
-          'Skill Level': `${session.skill_level ?? 0} / 10`,
-          'Primary Objective': ti.primary_objective || ti.intent || 'System Reconnaissance',
-          'MITRE Techniques Identified': (ti.mitre_techniques || []).join(', ') || 'None',
-          'IOCs Extracted': (ti.iocs || []).map((i: any) => typeof i === 'string' ? i : i.value).join(', ') || 'None',
+          'Credential Probes Logged': adaptiveSession.credential_attempts,
+          'Privilege Probes Logged': adaptiveSession.privilege_escalation_attempts,
+          'Policy Decision': 'Credential Decoy & Slowdown Injection',
+          'Deception Rationale': 'Attacker exhibited active reconnaissance, presenting synthetic cloud credentials to monitor exfiltration.',
         },
       });
     }
 
-    // 6. Session Termination
+    // 5. Session Termination
     if (session.end_time || (session.status === 'closed' || session.status === 'failed')) {
       const isCleanExit = commandsList.some(c => c.command.trim() === 'exit' || c.command.trim() === 'logout');
       const disconnectReason = session.disconnection_reason || (isCleanExit ? 'Attacker terminated session cleanly (exit command)' : 'Connection closed / Socket timeout');
@@ -258,9 +266,47 @@ export default function SessionInvestigationPage() {
       });
     }
 
-    // Sort chronologically ascending
-    return events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  }, [session, authEvents, commandsList, adaptiveSession, threatIntel, ip, countryName, primaryIntent, threat]);
+    // 6. Threat Assessment Event (Placed chronologically at time of analysis, AFTER evidence commands and termination)
+    if (threatIntel?.summary || canonicalAssessment) {
+      const ti = threatIntel?.summary || {};
+      const analysisTime = threatIntel?.timestamp || ti.created_at || canonicalAssessment?.analyzed_at || (session.end_time ? new Date(new Date(session.end_time).getTime() + 2000).toISOString() : new Date().toISOString());
+
+      events.push({
+        id: `ti-${session.session_id}`,
+        timestamp: analysisTime,
+        type: 'threat_assessment',
+        title: 'THREAT INTELLIGENCE ANALYSIS COMPLETED',
+        status: 'info',
+        badge: `${threat.label.toUpperCase()} (${effectiveSkillLevel}/10)`,
+        summary: ti.narrative || ti.summary || `Asynchronous behavioral analysis completed: Evaluated as ${primaryIntent.label} with skill rating ${effectiveSkillLevel}/10.`,
+        details: {
+          'Assessment Status': canonicalAssessment?.status || 'analyzed',
+          'Skill Level': `${effectiveSkillLevel} / 10`,
+          'Threat Score': `${effectiveThreatScore} / 100`,
+          'Primary Objective': primaryIntent.label,
+          'MITRE Techniques Identified': (ti.mitre_techniques || canonicalAssessment?.mitre_techniques || []).join(', ') || 'None',
+          'Analysis Source': canonicalAssessment?.source || 'threat-intel-service',
+          'Analysis Timestamp': analysisTime,
+        },
+      });
+    }
+
+    // Chronological ordering with logical type ordering fallback for identical timestamps
+    const typeOrder: Record<string, number> = {
+      connection: 1,
+      auth: 2,
+      command: 3,
+      adaptation: 4,
+      termination: 5,
+      threat_assessment: 6,
+    };
+
+    return events.sort((a, b) => {
+      const diff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      if (diff !== 0) return diff;
+      return (typeOrder[a.type] || 0) - (typeOrder[b.type] || 0);
+    });
+  }, [session, authEvents, commandsList, adaptiveSession, threatIntel, canonicalAssessment, ip, countryName, primaryIntent, threat, effectiveSkillLevel, effectiveThreatScore]);
 
   // Filtered commands list
   const filteredCommands = useMemo(() => {
@@ -274,27 +320,77 @@ export default function SessionInvestigationPage() {
   }, [commandsList, commandFilter]);
 
   // Export Case File JSON
-  const exportCaseFile = () => {
+  const exportCaseFile = async () => {
     if (!session) return;
+    try {
+      const canonicalCase = await api.getCaseFile(session.session_id);
+      if (canonicalCase && canonicalCase.case_id) {
+        const blob = new Blob([JSON.stringify(canonicalCase, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `clouddecept-case-${session.session_id.slice(0, 8)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        return;
+      }
+    } catch (err) {
+      console.warn('Backend canonical case endpoint unavailable, compiling client-side fallback:', err);
+    }
+
+    // Fallback: sanitized case data
+    const sanitizedAuth = authEvents.map(a => ({
+      timestamp: a.timestamp,
+      username: a.username,
+      password: a.password ? '••••••••' : '(empty / key)',
+      auth_method: a.auth_method || 'password',
+      success: Boolean(a.success),
+    }));
+
     const caseData = {
       case_id: `CASE-${session.session_id.slice(0, 8).toUpperCase()}`,
       exported_at: new Date().toISOString(),
-      session,
+      session: {
+        ...session,
+        intent: canonicalAssessment?.intent || session.intent,
+        skill_level: canonicalAssessment?.skill_level ?? session.skill_level,
+        threat_score: canonicalAssessment?.threat_score ?? session.threat_score,
+      },
       attacker: {
         ip,
         country: countryName,
         asn: session.asn,
       },
-      assessment: {
+      assessment: canonicalAssessment || {
+        status: 'preliminary',
         threat_level: threat.label,
+        threat_score: effectiveThreatScore,
         intent: primaryIntent.label,
-        skill_level: session.skill_level,
+        skill_level: effectiveSkillLevel,
+        mitre_techniques: Array.from(new Set(commandsList.flatMap(c => c.mitre_techniques || []))),
+        tactics: [],
+        confidence: 'medium',
+        evidence_count: commandsList.length + authEvents.length,
+        analysis_status: 'heuristic',
+        analyzed_at: new Date().toISOString(),
+        source: 'dashboard-heuristic',
+        provenance: 'fallback',
       },
-      auth_attempts: authEvents,
+      auth_attempts: sanitizedAuth,
       commands: commandsList,
       timeline: unifiedTimeline,
       threat_intel: threatIntel,
-      adaptive_deception: adaptiveSession,
+      adaptive_deception: adaptiveSession ? {
+        status: 'ACTIVE_DECEPTION',
+        action_taken: true,
+        details: adaptiveSession,
+      } : {
+        status: 'PASSIVE_TELEMETRY',
+        action_taken: false,
+        policy: 'baseline_emulation',
+        reason: 'No dynamic decoy triggers or privilege escalation traps breached during session duration',
+        timestamp: session.start_time,
+      },
     };
 
     const blob = new Blob([JSON.stringify(caseData, null, 2)], { type: 'application/json' });
@@ -417,10 +513,12 @@ export default function SessionInvestigationPage() {
           </div>
           <div className="text-sm font-bold text-white mt-1">
             <span className={cn('px-2 py-0.5 rounded text-[10px] font-bold border', threat.badgeClass)}>
-              {threat.label.toUpperCase()} ({session.skill_level ?? 0}/10)
+              {threat.label.toUpperCase()} ({effectiveSkillLevel}/10)
             </span>
           </div>
-          <div className="text-[10px] text-slate-400 mt-1">Skill Assessment</div>
+          <div className="text-[10px] text-slate-400 mt-1">
+            {canonicalAssessment ? 'Reconciled Threat Intel' : 'Preliminary Heuristic'}
+          </div>
         </div>
 
         {/* Primary Intent */}
@@ -693,6 +791,10 @@ export default function SessionInvestigationPage() {
       {/* TAB 2: COMMAND FORENSICS TERMINAL */}
       {activeTab === 'commands' && (
         <div className="space-y-4">
+          <div className="p-3 bg-[#070e22] rounded-xl border border-cyan-500/15 text-xs text-slate-400">
+            <span>Telemetry Notice: Commands are ingested as raw execution telemetry. Intent classification is evaluated at session level by Threat Intelligence and mapped to MITRE ATT&CK techniques below.</span>
+          </div>
+
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#070e22] p-3 rounded-xl border border-cyan-500/20">
             <div className="relative flex-1 max-w-md">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-400/60" />
@@ -739,9 +841,15 @@ export default function SessionInvestigationPage() {
 
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] text-slate-400">{formatTimestamp(cmd.timestamp)}</span>
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-500/30">
-                          {intentInfo.label}
-                        </span>
+                        {cmd.intent ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-500/30">
+                            {intentInfo.label}
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono text-slate-400 bg-slate-900 border border-slate-800">
+                            RAW TELEMETRY
+                          </span>
+                        )}
                         {cmd.exit_code === 0 ? (
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/30">
                             EXIT 0
@@ -818,6 +926,19 @@ export default function SessionInvestigationPage() {
             </div>
           </div>
 
+          <div className="flex items-center justify-between px-1">
+            <span className="text-xs text-slate-400">
+              Credential records captured by honeypot authentication layer.
+            </span>
+            <button
+              onClick={() => setShowRawPasswords(!showRawPasswords)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#070e22] border border-cyan-500/25 text-xs text-slate-300 hover:text-cyan-300 hover:border-cyan-400 transition-all"
+            >
+              {showRawPasswords ? <EyeOff className="w-3.5 h-3.5 text-cyan-400" /> : <Eye className="w-3.5 h-3.5 text-slate-400" />}
+              <span>{showRawPasswords ? 'Mask Credentials' : 'Reveal Raw Passwords'}</span>
+            </button>
+          </div>
+
           <div className="rounded-xl border border-cyan-500/20 bg-[#070e22] overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -845,7 +966,7 @@ export default function SessionInvestigationPage() {
                         <td className="py-2.5 px-4 text-slate-300">
                           {a.password ? (
                             <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                              {a.password}
+                              {showRawPasswords ? a.password : '••••••••'}
                             </span>
                           ) : (
                             <span className="text-slate-600 italic">(none / key)</span>
@@ -878,40 +999,61 @@ export default function SessionInvestigationPage() {
       {/* TAB 4: THREAT INTEL & DECEPTION REASONING */}
       {activeTab === 'intelligence' && (
         <div className="space-y-4">
-          {/* Deception Reasoning Flow */}
+          {/* Deception Reasoning Flow / Active vs Passive Telemetry */}
           <div className="p-4 rounded-xl bg-[#070e22] border border-cyan-500/20 space-y-3">
             <h3 className="text-xs font-bold text-white uppercase flex items-center gap-2">
               <Zap className="w-4 h-4 text-cyan-400" />
-              <span>AUTONOMOUS DECEPTION DECISION CHAIN</span>
+              <span>DECEPTION ENGINE STATUS & STRATEGY</span>
             </h3>
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-center text-xs">
-              <div className="p-3 rounded-lg bg-[#040816] border border-cyan-500/15">
-                <span className="text-[10px] text-slate-400 block uppercase">1. OBSERVED BEHAVIOR</span>
-                <span className="font-bold text-white mt-1 block">
-                  {commandsList.length > 0 ? `${commandsList.length} Shell Commands` : `${authEvents.length} Auth Probes`}
-                </span>
+            {adaptiveSession && (adaptiveSession.credential_attempts > 0 || adaptiveSession.privilege_escalation_attempts > 0) ? (
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-center text-xs">
+                <div className="p-3 rounded-lg bg-[#040816] border border-cyan-500/15">
+                  <span className="text-[10px] text-slate-400 block uppercase">1. OBSERVED BEHAVIOR</span>
+                  <span className="font-bold text-white mt-1 block">
+                    {commandsList.length > 0 ? `${commandsList.length} Shell Commands` : `${authEvents.length} Auth Probes`}
+                  </span>
+                </div>
+                <div className="p-3 rounded-lg bg-[#040816] border border-cyan-500/15">
+                  <span className="text-[10px] text-slate-400 block uppercase">2. INTENT CLASSIFIED</span>
+                  <span className="font-bold text-cyan-300 mt-1 block">{primaryIntent.label}</span>
+                </div>
+                <div className="p-3 rounded-lg bg-[#040816] border border-cyan-500/15">
+                  <span className="text-[10px] text-slate-400 block uppercase">3. THREAT ASSESSMENT</span>
+                  <span className="font-bold text-amber-300 mt-1 block">{threat.label.toUpperCase()} ({effectiveSkillLevel}/10)</span>
+                </div>
+                <div className="p-3 rounded-lg bg-[#040816] border border-cyan-500/15">
+                  <span className="text-[10px] text-slate-400 block uppercase">4. POLICY DECISION</span>
+                  <span className="font-bold text-purple-300 mt-1 block">
+                    Active Decoy Strategy
+                  </span>
+                </div>
+                <div className="p-3 rounded-lg bg-[#040816] border border-cyan-500/15">
+                  <span className="text-[10px] text-slate-400 block uppercase">5. DECEPTION ACTION</span>
+                  <span className="font-bold text-emerald-300 mt-1 block">
+                    Synthetic Decoys Injected
+                  </span>
+                </div>
               </div>
-              <div className="p-3 rounded-lg bg-[#040816] border border-cyan-500/15">
-                <span className="text-[10px] text-slate-400 block uppercase">2. INTENT CLASSIFIED</span>
-                <span className="font-bold text-cyan-300 mt-1 block">{primaryIntent.label}</span>
+            ) : (
+              <div className="p-4 rounded-lg bg-[#040816] border border-cyan-500/15 space-y-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-500/30">
+                    PASSIVE_TELEMETRY
+                  </span>
+                  <span className="text-slate-300 font-bold uppercase tracking-wider">
+                    Baseline Emulation Mode
+                  </span>
+                </div>
+                <p className="text-slate-400 leading-relaxed">
+                  No active decoy actions, synthetic tokens, or dynamic privilege escalation traps were deployed for this session.
+                  The honeypot maintained standard high-fidelity Cowrie emulation and recorded raw telemetry for asynchronous Threat Intelligence analysis.
+                </p>
+                <div className="text-[11px] text-slate-500 border-t border-cyan-500/10 pt-2 flex items-center justify-between">
+                  <span>Policy Reason: Probes evaluated as preliminary discovery without high-privilege token access</span>
+                  <span className="font-mono text-cyan-400">Dynamic Threshold Breached: False</span>
+                </div>
               </div>
-              <div className="p-3 rounded-lg bg-[#040816] border border-cyan-500/15">
-                <span className="text-[10px] text-slate-400 block uppercase">3. THREAT ASSESSMENT</span>
-                <span className="font-bold text-amber-300 mt-1 block">{threat.label.toUpperCase()} ({session.skill_level}/10)</span>
-              </div>
-              <div className="p-3 rounded-lg bg-[#040816] border border-cyan-500/15">
-                <span className="text-[10px] text-slate-400 block uppercase">4. POLICY DECISION</span>
-                <span className="font-bold text-purple-300 mt-1 block">
-                  {adaptiveSession ? 'Active Decoy Strategy' : 'Fallback Policy'}
-                </span>
-              </div>
-              <div className="p-3 rounded-lg bg-[#040816] border border-cyan-500/15">
-                <span className="text-[10px] text-slate-400 block uppercase">5. DECEPTION ACTION</span>
-                <span className="font-bold text-emerald-300 mt-1 block">
-                  Emulated Environment Sustained
-                </span>
-              </div>
-            </div>
+            )}
           </div>
 
           {/* AI Narrative & Heuristics */}
@@ -919,7 +1061,7 @@ export default function SessionInvestigationPage() {
             <div className="text-xs font-bold text-cyan-300 uppercase">HEURISTIC FORENSIC NARRATIVE</div>
             <p className="text-xs text-slate-300 leading-relaxed">
               {threatIntel?.summary?.narrative || threatIntel?.summary?.summary || (
-                `Attacker from ${ip} (${countryName}) connected via ${session.protocol || 'SSH'}. During the ${formatDuration(session.duration_seconds || 0)} window, the actor performed ${authEvents.length} authentication attempts and executed ${commandsList.length} commands. Classification evaluated the objective as ${primaryIntent.label} with an adversary skill tier of ${session.skill_level ?? 0}/10.`
+                `Attacker from ${ip} (${countryName}) connected via ${session.protocol || 'SSH'}. During the ${formatDuration(session.duration_seconds || 0)} window, the actor performed ${authEvents.length} authentication attempts and executed ${commandsList.length} commands. Classification evaluated the objective as ${primaryIntent.label} with an adversary skill tier of ${effectiveSkillLevel}/10.`
               )}
             </p>
           </div>

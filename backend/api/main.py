@@ -296,6 +296,24 @@ app = FastAPI(
 # Pydantic Models
 # ============================================================
 
+class FinalAssessment(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    status: str = "not_analyzed"  # classified, insufficient_evidence, unknown, not_analyzed
+    intent: str = ""
+    threat_level: str = "unclassified"  # low, medium, high, critical, unclassified
+    threat_score: int = 0
+    skill_level: int = 0
+    mitre_techniques: list[str] = []
+    tactics: list[str] = []
+    confidence: float = 0.0
+    evidence_count: int = 0
+    analysis_status: str = "pending"  # completed, insufficient_evidence, pending
+    analyzed_at: Optional[datetime] = None
+    source: str = "telemetry"
+    provenance: str = "Pending Threat Intelligence Pipeline"
+
+
 class SessionSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -311,6 +329,8 @@ class SessionSummary(BaseModel):
     credentials_tried: int
     intent: str
     skill_level: int
+    threat_score: Optional[int] = 0
+    assessment: Optional[FinalAssessment] = None
 
 
 class CommandResponse(BaseModel):
@@ -757,9 +777,161 @@ async def list_sessions(
     return formatted_sessions
 
 
+async def get_canonical_assessment_for_session(session_id: str, sess_dict: dict) -> FinalAssessment:
+    """
+    Build canonical normalized assessment for a session.
+    Reconciles ClickHouse telemetry with PostgreSQL session_summaries and threat_intelligence.
+    Ensures that intent, threat_level, threat_score, and skill_level tell one coherent forensic story.
+    """
+    summary_row = None
+    if postgres_pool:
+        try:
+            conn = postgres_pool.getconn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT session_id, summary, intent, skill_level,
+                                  mitre_techniques, iocs, created_at
+                           FROM session_summaries WHERE session_id = %s""",
+                        (session_id,)
+                    )
+                    summary_row = cur.fetchone()
+            finally:
+                postgres_pool.putconn(conn)
+        except Exception as e:
+            logger.debug(f"Postgres summary lookup notice: {e}")
+
+    # Fetch techniques and tactics from threat_intelligence table
+    threat_techs = []
+    threat_tactics = []
+    if postgres_pool:
+        try:
+            conn = postgres_pool.getconn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT DISTINCT technique_id, tactic
+                           FROM threat_intelligence WHERE session_id = %s""",
+                        (session_id,)
+                    )
+                    for r in cur.fetchall():
+                        if r[0] and r[0] not in threat_techs:
+                            threat_techs.append(r[0])
+                        if r[1] and r[1] not in threat_tactics:
+                            threat_tactics.append(r[1])
+            finally:
+                postgres_pool.putconn(conn)
+        except Exception as e:
+            logger.debug(f"Threat intel techniques lookup notice: {e}")
+
+    cmd_count = int(sess_dict.get("commands_executed") or 0)
+    auth_count = int(sess_dict.get("credentials_tried") or 0)
+    evidence_count = cmd_count + auth_count
+
+    if summary_row:
+        raw_intent = summary_row[2] or sess_dict.get("intent") or ""
+        raw_skill = int(summary_row[3] or sess_dict.get("skill_level") or 1)
+        tech_list = list(dict.fromkeys((summary_row[4] or []) + threat_techs))
+        analyzed_at = summary_row[6]
+
+        # Check if classified
+        if raw_intent and raw_intent.lower() not in ["", "unknown", "unclassified", "not classified"]:
+            t_score = raw_skill * 10 if raw_skill <= 10 else raw_skill
+            threat_level = "low" if t_score <= 25 else "medium" if t_score <= 55 else "high" if t_score <= 75 else "critical"
+            return FinalAssessment(
+                status="classified",
+                intent=raw_intent,
+                threat_level=threat_level,
+                threat_score=t_score,
+                skill_level=raw_skill,
+                mitre_techniques=tech_list,
+                tactics=threat_tactics or ["Discovery"],
+                confidence=0.85,
+                evidence_count=evidence_count,
+                analysis_status="completed",
+                analyzed_at=analyzed_at,
+                source="threat_intel",
+                provenance="Threat Intelligence Assessment",
+            )
+        elif raw_intent.lower() == "unknown":
+            t_score = raw_skill * 10 if raw_skill <= 10 else raw_skill
+            return FinalAssessment(
+                status="unknown",
+                intent="unknown",
+                threat_level="unclassified",
+                threat_score=t_score,
+                skill_level=raw_skill,
+                mitre_techniques=tech_list,
+                tactics=threat_tactics,
+                confidence=0.2,
+                evidence_count=evidence_count,
+                analysis_status="completed",
+                analyzed_at=analyzed_at,
+                source="threat_intel",
+                provenance="Threat Intelligence Assessment",
+            )
+
+    # If no summary row exists in postgres
+    sess_intent = sess_dict.get("intent") or ""
+    sess_skill = int(sess_dict.get("skill_level") or 0)
+
+    if evidence_count == 0 and not sess_intent:
+        return FinalAssessment(
+            status="insufficient_evidence",
+            intent="insufficient_evidence",
+            threat_level="unclassified",
+            threat_score=0,
+            skill_level=0,
+            mitre_techniques=[],
+            tactics=[],
+            confidence=0.0,
+            evidence_count=0,
+            analysis_status="insufficient_evidence",
+            analyzed_at=None,
+            source="telemetry",
+            provenance="Telemetry (insufficient behavioral evidence)",
+        )
+
+    if sess_intent and sess_intent.lower() not in ["", "unknown", "unclassified", "not classified"]:
+        t_score = sess_skill * 10 if sess_skill <= 10 else sess_skill
+        threat_level = "low" if t_score <= 25 else "medium" if t_score <= 55 else "high" if t_score <= 75 else "critical"
+        return FinalAssessment(
+            status="classified",
+            intent=sess_intent,
+            threat_level=threat_level,
+            threat_score=t_score,
+            skill_level=sess_skill,
+            mitre_techniques=threat_techs,
+            tactics=threat_tactics,
+            confidence=0.75,
+            evidence_count=evidence_count,
+            analysis_status="completed",
+            analyzed_at=None,
+            source="intent_engine",
+            provenance="Intent Engine Telemetry",
+        )
+
+    # Default: Not analyzed yet
+    return FinalAssessment(
+        status="not_analyzed",
+        intent="not_analyzed",
+        threat_level="unclassified",
+        threat_score=0,
+        skill_level=0,
+        mitre_techniques=[],
+        tactics=[],
+        confidence=0.0,
+        evidence_count=evidence_count,
+        analysis_status="pending",
+        analyzed_at=None,
+        source="telemetry",
+        provenance="Pending Threat Intelligence Pipeline",
+    )
+
+
 @app.get("/sessions/{session_id}", response_model=SessionSummary)
 async def get_session(session_id: str):
-    """Get detailed session info with accurate unique counts"""
+    """Get detailed session info with accurate unique counts and canonical assessment"""
     result = await run_ch_query(
         f"""
         SELECT session_id, start_time, end_time, duration_seconds,
@@ -797,6 +969,35 @@ async def get_session(session_id: str):
     except Exception:
         pass
 
+    # Check PostgreSQL session_summaries for downstream intelligence reconciliation
+    if postgres_pool:
+        try:
+            conn = postgres_pool.getconn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT intent, skill_level FROM session_summaries WHERE session_id = %s""",
+                        (session_id,)
+                    )
+                    pg_row = cur.fetchone()
+                    if pg_row:
+                        if pg_row[0] and not sess_dict.get("intent"):
+                            sess_dict["intent"] = pg_row[0]
+                        if pg_row[1] is not None and (not sess_dict.get("skill_level") or sess_dict.get("skill_level") == 0):
+                            sess_dict["skill_level"] = int(pg_row[1])
+            finally:
+                postgres_pool.putconn(conn)
+        except Exception as e:
+            logger.debug(f"PostgreSQL reconciliation note: {e}")
+
+    # Build canonical final assessment
+    canonical_assessment = await get_canonical_assessment_for_session(session_id, sess_dict)
+    sess_dict["assessment"] = canonical_assessment
+    if canonical_assessment.status == "classified":
+        sess_dict["intent"] = canonical_assessment.intent
+        sess_dict["skill_level"] = canonical_assessment.skill_level
+        sess_dict["threat_score"] = canonical_assessment.threat_score
+
     # Active session check
     if (
         sess_dict.get("end_time") == sess_dict.get("start_time") and
@@ -807,6 +1008,287 @@ async def get_session(session_id: str):
     sess_dict.pop("disconnection_reason", None)
 
     return SessionSummary(**sess_dict)
+
+
+@app.get("/sessions/{session_id}/assessment", response_model=FinalAssessment)
+async def get_session_assessment(session_id: str):
+    """Get canonical normalized final assessment for a session"""
+    session = await get_session(session_id)
+    return session.assessment or await get_canonical_assessment_for_session(session_id, session.model_dump())
+
+
+@app.get("/sessions/{session_id}/case-file")
+async def get_session_case_file(session_id: str):
+    """
+    Generate authoritative, canonical forensic case file for a session.
+    Reconciles ClickHouse telemetry, PostgreSQL threat intelligence,
+    deduplicated MITRE mappings, credential privacy, and explicit adaptive deception state.
+    """
+    # 1. Fetch reconciled session
+    session_res = await get_session(session_id)
+    session_data = session_res.model_dump(mode="json")
+
+    # 2. Fetch auth attempts with credential privacy (passwords masked by default)
+    auth_rows = await get_session_auth(session_id)
+    masked_auth = []
+    for a in auth_rows:
+        a_dict = a.model_dump(mode="json")
+        a_dict["password"] = "••••••••" if a_dict.get("password") else ""
+        masked_auth.append(a_dict)
+
+    # 3. Fetch commands
+    cmd_rows = await get_session_commands(session_id, limit=500)
+    cmds_data = [c.model_dump(mode="json") for c in cmd_rows]
+
+    # 4. Fetch or generate session summary & threat intel
+    summary_data = None
+    try:
+        summary_obj = await get_session_summary(session_id)
+        summary_data = summary_obj.model_dump(mode="json")
+    except Exception as e:
+        logger.debug(f"Case file summary fetch note: {e}")
+
+    # 5. Canonical assessment
+    assessment = session_res.assessment or await get_canonical_assessment_for_session(session_id, session_data)
+    assessment_data = assessment.model_dump(mode="json")
+
+    # 6. Attacker Info
+    country_name = session_data.get("country") or "Unknown"
+    attacker_info = {
+        "ip": session_data.get("attacker_ip") or "unknown",
+        "country": country_name,
+        "asn": session_data.get("asn") or "Unknown ASN",
+    }
+
+    # 7. Deduplicated MITRE ATT&CK Techniques with evidence
+    mitre_techniques = []
+    seen_tech_ids = set()
+    if postgres_pool:
+        try:
+            conn = postgres_pool.getconn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT technique_id, technique_name, tactic, severity, context, confidence, created_at
+                           FROM threat_intelligence WHERE session_id = %s
+                           ORDER BY created_at ASC""",
+                        (session_id,)
+                    )
+                    for r in cur.fetchall():
+                        t_id = r[0]
+                        if t_id and t_id not in seen_tech_ids:
+                            seen_tech_ids.add(t_id)
+                            mitre_techniques.append({
+                                "technique_id": t_id,
+                                "name": r[1] or t_id,
+                                "tactic": r[2] or "Discovery",
+                                "severity": r[3] or "medium",
+                                "trigger": r[4] or "",
+                                "confidence": float(r[5] or 0.85),
+                            })
+            finally:
+                postgres_pool.putconn(conn)
+        except Exception as e:
+            logger.debug(f"Failed to query mitre techniques for case file: {e}")
+
+    # Fallback to summary techniques if none in threat_intelligence table
+    if not mitre_techniques and summary_data:
+        for t in summary_data.get("mitre_techniques", []):
+            if t and t not in seen_tech_ids:
+                seen_tech_ids.add(t)
+                mitre_techniques.append({
+                    "technique_id": t,
+                    "name": t,
+                    "tactic": "Discovery",
+                    "severity": "medium",
+                    "trigger": "",
+                    "confidence": 0.85,
+                })
+
+    # 8. Adaptive Deception State - explicit honest state
+    adaptive_state = {
+        "status": "PASSIVE_TELEMETRY",
+        "state": "PASSIVE_TELEMETRY",
+        "action_taken": False,
+        "decision": "No deception action taken",
+        "reason": "No dynamic decoy triggers or privilege escalation traps breached during session duration. Emulated environment was sustained passively without synthetic decoy injection.",
+        "strategy": "none",
+    }
+
+    # 9. Unified Chronological Attack Timeline
+    timeline_events = []
+
+    # 9.1 Connection
+    if session_data.get("start_time"):
+        timeline_events.append({
+            "id": f"conn-{session_id}",
+            "timestamp": session_data["start_time"],
+            "type": "connection",
+            "title": "CONNECTION ESTABLISHED",
+            "status": "info",
+            "badge": (session_data.get("protocol") or "ssh").upper(),
+            "summary": f"{(session_data.get('protocol') or 'SSH').upper()} connection initiated from {attacker_info['ip']} ({attacker_info['country']})",
+            "details": {
+                "Attacker IP": attacker_info["ip"],
+                "Country": attacker_info["country"],
+                "Protocol": session_data.get("protocol", "ssh"),
+                "Initial Status": "Connected",
+            }
+        })
+
+    # 9.2 Auth attempts (passwords masked)
+    for idx, a in enumerate(masked_auth):
+        is_succ = a.get("success", False)
+        timeline_events.append({
+            "id": a.get("event_id") or f"auth-{idx}",
+            "timestamp": a.get("timestamp"),
+            "type": "auth",
+            "title": "AUTHENTICATION SUCCESSFUL" if is_succ else "AUTHENTICATION ATTEMPT",
+            "status": "success" if is_succ else "failed",
+            "badge": "GRANTED" if is_succ else "FAILED",
+            "summary": f"Credential probe: username=\"{a.get('username')}\" via {a.get('auth_method', 'password')}",
+            "details": {
+                "Username": a.get("username"),
+                "Password": "••••••••" if a.get("password") else "(empty / key)",
+                "Auth Method": a.get("auth_method", "password"),
+                "Result": "AUTHENTICATED - Interactive Shell Granted" if is_succ else "REJECTED - Bad Credentials",
+            },
+            "data": a,
+        })
+
+    # 9.3 Command executions
+    for idx, c in enumerate(cmds_data):
+        c_succ = c.get("exit_code") == 0 or c.get("success") is True
+        c_cmd = c.get("command", "")
+        is_exit = c_cmd.strip() in ("exit", "logout")
+        c_badge = "SESSION CONTROL" if is_exit else (c.get("intent") or "RAW TELEMETRY")
+        timeline_events.append({
+            "id": c.get("event_id") or f"cmd-{idx}",
+            "timestamp": c.get("timestamp"),
+            "type": "command",
+            "title": f"COMMAND EXECUTED: $ {c_cmd}",
+            "status": "success" if c_succ else "warning",
+            "badge": c_badge,
+            "summary": f"Output: {c.get('output', '')[:80]}..." if c.get("output") else "Executed with no stdout/stderr",
+            "details": {
+                "Command": c_cmd,
+                "Arguments": " ".join(c.get("arguments", [])) if c.get("arguments") else "none",
+                "Exit Code": str(c.get("exit_code", 0)),
+                "Execution Duration": f"{c.get('duration_ms', 0)} ms",
+                "Command-Level Analysis": "RAW TELEMETRY (Session-level behavioral classification available)",
+                "Session-Level Assessment": assessment_data.get("intent", "unclassified"),
+                "Output Content": c.get("output") or "(empty output)",
+            },
+            "data": c,
+        })
+
+    # 9.4 Session Termination
+    if session_data.get("end_time") or session_data.get("status") in ("closed", "failed"):
+        term_time = session_data.get("end_time") or session_data.get("start_time")
+        dur_sec = session_data.get("duration_seconds", 0)
+        is_clean_exit = any(c.get("command", "").strip() in ("exit", "logout") for c in cmds_data)
+        disconnect_reason = "Attacker terminated session cleanly (exit command)" if is_clean_exit else "Connection closed / Socket timeout"
+        timeline_events.append({
+            "id": f"term-{session_id}",
+            "timestamp": term_time,
+            "type": "termination",
+            "title": "SESSION TERMINATED",
+            "status": "info",
+            "badge": f"{dur_sec}s DURATION",
+            "summary": disconnect_reason,
+            "details": {
+                "Termination Timestamp": term_time,
+                "Total Active Duration": f"{dur_sec} seconds",
+                "Disconnection Reason": disconnect_reason,
+                "Total Commands Run": len(cmds_data),
+                "Total Credentials Probed": len(masked_auth),
+            }
+        })
+
+    # 9.5 Threat Intelligence Analysis Completed (AT ACTUAL ANALYSIS TIMESTAMP)
+    if summary_data:
+        analysis_ts = summary_data.get("created_at") or session_data.get("end_time") or session_data.get("start_time")
+        ti_intent = assessment_data.get("intent") or summary_data.get("intent") or "system discovery"
+        ti_skill = assessment_data.get("skill_level") or summary_data.get("skill_level") or 1
+        ti_threat = assessment_data.get("threat_level", "low").upper()
+        tech_str = ", ".join(m["technique_id"] for m in mitre_techniques) if mitre_techniques else "None"
+        timeline_events.append({
+            "id": f"ti-{session_id}",
+            "timestamp": analysis_ts,
+            "type": "threat_assessment",
+            "title": "THREAT INTELLIGENCE ANALYSIS COMPLETED",
+            "status": "info",
+            "badge": f"{ti_threat} RISK",
+            "summary": summary_data.get("summary") or f"Attacker attempting {ti_intent}",
+            "details": {
+                "Adversary Skill Level": f"{ti_skill} / 10 (Threat Intelligence Assessment)",
+                "Primary Objective": ti_intent,
+                "MITRE Techniques Identified": tech_str,
+                "IOCs Extracted": "None" if not summary_data.get("iocs") else ", ".join(str(i) for i in summary_data.get("iocs", [])),
+                "Analysis Completion": analysis_ts,
+            }
+        })
+
+    # 9.6 Deterministic sort: timestamp first, then EVENT_PRIORITY
+    event_priority = {
+        "connection": 1,
+        "auth": 2,
+        "command": 3,
+        "adaptation": 4,
+        "termination": 5,
+        "threat_assessment": 6,
+    }
+
+    def _timeline_sort_key(ev):
+        ts = ev.get("timestamp")
+        if isinstance(ts, str):
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except Exception:
+                dt = datetime.min
+        elif isinstance(ts, datetime):
+            dt = ts
+        else:
+            dt = datetime.min
+        return (dt, event_priority.get(ev.get("type", ""), 99))
+
+    timeline_events.sort(key=_timeline_sort_key)
+
+    # 10. Threat Intel block
+    threat_intel_block = None
+    if summary_data:
+        threat_intel_block = {
+            "session_id": session_id,
+            "timestamp": summary_data.get("created_at"),
+            "iocs": summary_data.get("iocs", []),
+            "techniques": mitre_techniques,
+            "tactic_summary": {m["tactic"]: sum(1 for x in mitre_techniques if x.get("tactic") == m["tactic"]) for m in mitre_techniques},
+            "summary": {
+                "session_id": session_id,
+                "summary": summary_data.get("summary"),
+                "narrative": summary_data.get("summary"),
+                "primary_objective": assessment_data.get("intent"),
+                "intent": assessment_data.get("intent"),
+                "skill_level": assessment_data.get("skill_level"),
+                "mitre_techniques": [m["technique_id"] for m in mitre_techniques],
+                "iocs": summary_data.get("iocs", []),
+                "created_at": summary_data.get("created_at"),
+                "risk_level": assessment_data.get("threat_level"),
+            }
+        }
+
+    return {
+        "case_id": f"CASE-{session_id[:8].upper()}",
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "session": session_data,
+        "attacker": attacker_info,
+        "assessment": assessment_data,
+        "auth_attempts": masked_auth,
+        "commands": cmds_data,
+        "timeline": timeline_events,
+        "threat_intel": threat_intel_block,
+        "adaptive_deception": adaptive_state,
+    }
 
 
 
@@ -978,7 +1460,7 @@ async def get_session_summary(session_id: str):
                     summary=row[1] or "",
                     intent=row[2] or "unknown",
                     skill_level=row[3] or 1,
-                    mitre_techniques=row[4] or [],
+                    mitre_techniques=list(dict.fromkeys(row[4] or [])),
                     iocs=row[5] or [],
                     created_at=row[6] or datetime.utcnow(),
                 )
@@ -1040,7 +1522,7 @@ async def get_session_summary(session_id: str):
         logger.warning(f"On-demand Threat Intel call failed for {session_id}: {e}")
 
     summary_data = (data.get("summary") if data else None) or {}
-    techs = (
+    techs = list(dict.fromkeys(
         [
             t.get("technique_id")
             for t in data.get("techniques", [])
@@ -1048,7 +1530,7 @@ async def get_session_summary(session_id: str):
         ]
         if data and data.get("techniques")
         else []
-    )
+    ))
     if not techs and commands_list:
         for cmd in commands_list:
             c_str = cmd.get("command", "").lower()

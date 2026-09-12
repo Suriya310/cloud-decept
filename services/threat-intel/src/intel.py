@@ -136,16 +136,28 @@ MITRE_CLOUD_TECHNIQUES = {
     },
 
     # Discovery
+    "T1033": {
+        "name": "System Owner/User Discovery",
+        "tactic": "Discovery",
+        "triggers": ["whoami", "users", "who", "w "],
+        "severity": "low"
+    },
+    "T1082": {
+        "name": "System Information Discovery",
+        "tactic": "Discovery",
+        "triggers": ["uname", "hostname", "uptime", "lscpu", "arch", "/proc/cpuinfo", "/etc/os-release"],
+        "severity": "low"
+    },
     "T1083": {
         "name": "File and Directory Discovery",
         "tactic": "Discovery",
-        "triggers": ["ls ", "find ", "dir ", "tree ", "ls -la", "ls -R"],
+        "triggers": ["ls ", "find ", "dir ", "tree ", "pwd", "ls -la", "ls -R"],
         "severity": "low"
     },
     "T1087.001": {
         "name": "Account Discovery: Local Account",
         "tactic": "Discovery",
-        "triggers": ["whoami", "id ", "cat /etc/passwd", "getent passwd", "net user"],
+        "triggers": ["id ", "id", "cat /etc/passwd", "getent passwd", "net user"],
         "severity": "low"
     },
     "T1087.002": {
@@ -367,29 +379,41 @@ class MITREMapper:
         self.techniques = MITRE_CLOUD_TECHNIQUES
 
     def map_commands(self, commands: List[Dict]) -> List[MappedTechnique]:
-        """Map command sequence to MITRE techniques"""
-        mapped = []
-        seen = set()
+        """Map command sequence to MITRE techniques, deduplicated by technique_id with evidence tracing"""
+        mapped_dict: Dict[str, MappedTechnique] = {}
 
         for cmd in commands:
-            cmd_str = cmd.get("cmd") or cmd.get("command") or ""
-            out_str = cmd.get("output") or ""
+            cmd_str = (cmd.get("cmd") or cmd.get("command") or "").strip()
+            out_str = (cmd.get("output") or "").strip()
             command_text = (cmd_str + " " + out_str).lower()
 
             for tech_id, tech_info in self.techniques.items():
                 for trigger in tech_info["triggers"]:
                     if trigger.lower() in command_text:
-                        key = f"{tech_id}:{trigger}"
-                        if key not in seen:
-                            seen.add(key)
-                            mapped.append(MappedTechnique(
+                        clean_trig = trigger.strip()
+                        is_heuristic = (tech_id == "T1083" and clean_trig == "pwd")
+                        trig_label = f"{clean_trig} (heuristic: directory orientation)" if is_heuristic else clean_trig
+                        conf = 0.50 if is_heuristic else 0.85
+
+                        if tech_id not in mapped_dict:
+                            mapped_dict[tech_id] = MappedTechnique(
                                 technique_id=tech_id,
-                                name=tech_info["name"],
+                                name=f"{tech_info['name']} (Heuristic)" if is_heuristic else tech_info["name"],
                                 tactic=tech_info["tactic"],
                                 severity=tech_info["severity"],
-                                trigger=trigger,
-                                confidence=0.85
-                            ))
+                                trigger=trig_label,
+                                confidence=conf
+                            )
+                        else:
+                            existing = mapped_dict[tech_id]
+                            existing_triggers = [t.strip() for t in existing.trigger.split(",")]
+                            if trig_label not in existing_triggers:
+                                existing.trigger = f"{existing.trigger}, {trig_label}"
+                            if not is_heuristic:
+                                existing.name = tech_info["name"]
+                                existing.confidence = max(existing.confidence, 0.85)
+
+        mapped = list(mapped_dict.values())
 
         # Sort by severity
         severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}

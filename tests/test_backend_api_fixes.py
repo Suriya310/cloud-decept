@@ -307,7 +307,371 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
         self.assertIn(result.intent, ["system_discovery", "account_discovery"])
         self.assertGreater(result.confidence, 0.5)
 
+    async def test_canonical_assessment_reconciles_empty_clickhouse_session(self):
+        """Verify get_session reconciles intent='' and skill_level=0 from Postgres summary."""
+        now = datetime.now(timezone.utc)
+        sess_res = MagicMock()
+        sess_res.named_results.return_value = [
+            {
+                "session_id": "f81991343ed8",
+                "start_time": now,
+                "end_time": now,
+                "duration_seconds": 58,
+                "attacker_ip": "152.58.62.90",
+                "country": "IN",
+                "protocol": "ssh",
+                "commands_executed": 6,
+                "files_transferred": 0,
+                "credentials_tried": 1,
+                "intent": "",       # Unreconciled in ClickHouse
+                "skill_level": 0,   # Unreconciled in ClickHouse
+                "disconnection_reason": "",
+            }
+        ]
+        self.mock_ch.query.return_value = sess_res
+        self.mock_ch.command.return_value = 0
+
+        # Mock Postgres session_summaries returning analyzed data
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        self.mock_pg_pool.getconn.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_cur.fetchone.return_value = (
+            "f81991343ed8",
+            "Attacker executed discovery commands to map user privileges and host details.",
+            "system discovery",
+            1,
+            ["T1087.001", "T1082", "T1087.001"],  # Raw summary with duplicates
+            [{"type": "ip", "value": "152.58.62.90"}],
+            now,
+        )
+
+        res = await api_main.get_session("f81991343ed8")
+        self.assertEqual(res.session_id, "f81991343ed8")
+        self.assertEqual(res.intent, "system discovery")
+        self.assertEqual(res.skill_level, 1)
+        self.assertIsNotNone(res.assessment)
+        self.assertEqual(res.assessment.status, "analyzed")
+        self.assertEqual(res.assessment.threat_level, "low")
+        self.assertEqual(res.assessment.threat_score, 10)
+        # Verify deduplicated MITRE techniques in assessment
+        self.assertEqual(res.assessment.mitre_techniques, ["T1087.001", "T1082"])
+
+    async def test_get_session_case_file_structure_and_masking(self):
+        """Verify get_session_case_file strictly produces unified truth for authoritative CASE-F8199134."""
+        t_start = datetime(2026, 9, 12, 16, 36, 41, tzinfo=timezone.utc)
+        t_auth = datetime(2026, 9, 12, 16, 36, 45, tzinfo=timezone.utc)
+        t_cmds = datetime(2026, 9, 12, 16, 36, 51, tzinfo=timezone.utc)
+        t_exit = datetime(2026, 9, 12, 16, 36, 53, tzinfo=timezone.utc)
+        t_end = datetime(2026, 9, 12, 16, 36, 53, tzinfo=timezone.utc)
+        t_analysis = datetime(2026, 9, 12, 16, 38, 18, tzinfo=timezone.utc)
+
+        raw_commands = [
+            {"event_id": "3271100d-1795-4bb9-b354-8b6a32c99efc", "session_id": "f81991343ed8", "timestamp": t_cmds, "command": "whoami", "arguments": [], "output": "root", "exit_code": 0, "duration_ms": 0, "intent": "", "mitre_techniques": ["T1033"]},
+            {"event_id": "6b3a1235-f123-4bbf-b5dd-e44005f04639", "session_id": "f81991343ed8", "timestamp": t_cmds, "command": "uname -a", "arguments": [], "output": "Linux cowrie 5.15.0", "exit_code": 0, "duration_ms": 0, "intent": "", "mitre_techniques": ["T1082"]},
+            {"event_id": "82a99c4b-379c-46d2-9c6a-324fdefc5eff", "session_id": "f81991343ed8", "timestamp": t_cmds, "command": "pwd", "arguments": [], "output": "/root", "exit_code": 0, "duration_ms": 0, "intent": "", "mitre_techniques": ["T1083"]},
+            {"event_id": "de98244a-7d40-4f92-9cc1-f590f5f5b988", "session_id": "f81991343ed8", "timestamp": t_cmds, "command": "id", "arguments": [], "output": "uid=0(root) gid=0(root)", "exit_code": 0, "duration_ms": 0, "intent": "", "mitre_techniques": ["T1087.001"]},
+            {"event_id": "eb2bc5dd-d80c-469a-bc62-e31bd1f1d301", "session_id": "f81991343ed8", "timestamp": t_exit, "command": "exit", "arguments": [], "output": "", "exit_code": 0, "duration_ms": 0, "intent": "", "mitre_techniques": []},
+        ]
+
+        def mock_ch_query(sql, *args, **kwargs):
+            res = MagicMock()
+            sql_str = str(sql)
+            if "clouddecept.sessions" in sql_str:
+                res.named_results.return_value = [{
+                    "session_id": "f81991343ed8",
+                    "start_time": t_start,
+                    "end_time": t_end,
+                    "duration_seconds": 11,
+                    "attacker_ip": "122.164.81.145",
+                    "country": "IN",
+                    "protocol": "ssh",
+                    "commands_executed": 5,
+                    "files_transferred": 0,
+                    "credentials_tried": 1,
+                    "intent": "",       # Unreconciled in ClickHouse
+                    "skill_level": 0,   # Unreconciled in ClickHouse
+                    "disconnection_reason": "Attacker terminated session cleanly (exit command)",
+                }]
+            elif "clouddecept.auth_attempts" in sql_str:
+                res.named_results.return_value = [{
+                    "event_id": "3fb58d30-9106-4fcc-84e8-bd53e2c8ea9f",
+                    "session_id": "f81991343ed8",
+                    "timestamp": t_auth,
+                    "username": "root",
+                    "password": "root",
+                    "auth_method": "password",
+                    "success": 1,
+                    "source_ip": "122.164.81.145",
+                    "target_port": 2222,
+                }]
+            elif "clouddecept.commands" in sql_str:
+                res.named_results.return_value = raw_commands
+            else:
+                res.named_results.return_value = []
+            return res
+
+        self.mock_ch.query.side_effect = mock_ch_query
+        self.mock_ch.command.return_value = 5
+
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        self.mock_pg_pool.getconn.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+
+        def mock_pg_execute(sql, params=None):
+            sql_str = str(sql)
+            if "session_summaries" in sql_str:
+                mock_cur.fetchone.return_value = (
+                    "f81991343ed8",
+                    "Attacker attempting system discovery",
+                    "system discovery",
+                    1,
+                    ["T1033", "T1082", "T1083", "T1087.001"],
+                    [],  # 0 IOCs extracted from commands
+                    t_analysis,
+                )
+            elif "threat_intelligence" in sql_str:
+                mock_cur.fetchall.return_value = [
+                    ("T1033", "System Owner/User Discovery", "Discovery", "low", "whoami", 0.85, t_analysis),
+                    ("T1082", "System Information Discovery", "Discovery", "low", "uname", 0.85, t_analysis),
+                    ("T1083", "File and Directory Discovery", "Discovery", "low", "pwd", 0.85, t_analysis),
+                    ("T1087.001", "Account Discovery: Local Account", "Discovery", "low", "id", 0.85, t_analysis),
+                ]
+
+        mock_cur.execute.side_effect = mock_pg_execute
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 404
+            mock_client.return_value.__aenter__.return_value.get.return_value = mock_resp
+
+            case_file = await api_main.get_session_case_file("f81991343ed8")
+
+        # 1. Case ID & Session Identity
+        self.assertEqual(case_file["case_id"], "CASE-F8199134")
+        self.assertEqual(case_file["session"]["session_id"], "f81991343ed8")
+        self.assertEqual(case_file["session"]["attacker_ip"], "122.164.81.145")
+        self.assertEqual(case_file["session"]["duration_seconds"], 11)
+        self.assertEqual(case_file["session"]["commands_executed"], 5)
+        self.assertEqual(case_file["session"]["credentials_tried"], 1)
+
+        # 2. Reconciled Analytical fields (NO contradiction with assessment)
+        self.assertEqual(case_file["session"]["intent"], "system discovery")
+        self.assertEqual(case_file["session"]["skill_level"], 1)
+        self.assertEqual(case_file["session"]["threat_score"], 10)
+        self.assertEqual(case_file["session"]["status"], "closed")
+
+        # 3. Assessment fields
+        self.assertEqual(case_file["assessment"]["status"], "classified")
+        self.assertEqual(case_file["assessment"]["intent"], "system discovery")
+        self.assertEqual(case_file["assessment"]["threat_level"], "low")
+        self.assertEqual(case_file["assessment"]["threat_score"], 10)
+        self.assertEqual(case_file["assessment"]["skill_level"], 1)
+        self.assertEqual(case_file["assessment"]["confidence"], 0.85)
+        self.assertEqual(case_file["assessment"]["mitre_techniques"], ["T1033", "T1082", "T1083", "T1087.001"])
+
+        # 4. Threat Intel block & IOC Semantics
+        ti = case_file["threat_intel"]["summary"]
+        self.assertEqual(ti["intent"], "system discovery")
+        self.assertEqual(ti["primary_objective"], "system discovery")
+        self.assertEqual(ti["skill_level"], 1)
+        self.assertEqual(ti["risk_level"], "low")
+        self.assertEqual(ti["created_at"], t_analysis)
+        self.assertEqual(ti["iocs"], [])  # Attacker IP is NOT an IOC; 0 IOCs extracted from command text
+        self.assertEqual(case_file["threat_intel"]["iocs"], [])
+        self.assertEqual(ti["mitre_techniques"], ["T1033", "T1082", "T1083", "T1087.001"])
+
+        # 5. Adaptive Deception (Honest passive status)
+        self.assertEqual(case_file["adaptive_deception"]["state"], "PASSIVE_TELEMETRY")
+        self.assertEqual(case_file["adaptive_deception"]["status"], "PASSIVE_TELEMETRY")
+        self.assertFalse(case_file["adaptive_deception"]["action_taken"])
+        self.assertIn("No dynamic decoy triggers", case_file["adaptive_deception"]["reason"])
+
+        # 6. Credential Masking
+        self.assertEqual(len(case_file["auth_attempts"]), 1)
+        self.assertEqual(case_file["auth_attempts"][0]["password"], "••••••••")
+        self.assertNotIn("Raw Password", case_file["auth_attempts"][0])
+
+        # 7. Exact Chronological Timeline Order
+        timeline = case_file["timeline"]
+        expected_events = [
+            ("connection", t_start, "CONNECTION ESTABLISHED"),
+            ("auth", t_auth, "AUTHENTICATION SUCCESSFUL"),
+            ("command", t_cmds, "COMMAND EXECUTED: $ whoami"),
+            ("command", t_cmds, "COMMAND EXECUTED: $ uname -a"),
+            ("command", t_cmds, "COMMAND EXECUTED: $ pwd"),
+            ("command", t_cmds, "COMMAND EXECUTED: $ id"),
+            ("command", t_exit, "COMMAND EXECUTED: $ exit"),
+            ("termination", t_end, "SESSION TERMINATED"),
+            ("threat_assessment", t_analysis, "THREAT INTELLIGENCE ANALYSIS COMPLETED"),
+        ]
+
+        self.assertEqual(len(timeline), len(expected_events))
+        for idx, (exp_type, exp_time, exp_title) in enumerate(expected_events):
+            actual = timeline[idx]
+            self.assertEqual(actual["type"], exp_type, f"Event {idx} type mismatch")
+            self.assertEqual(actual["timestamp"], exp_time, f"Event {idx} timestamp mismatch")
+            self.assertEqual(actual["title"], exp_title, f"Event {idx} title mismatch")
+            if "details" in actual:
+                self.assertNotIn("Raw Password", actual["details"])
+                if "Password" in actual["details"]:
+                    self.assertEqual(actual["details"]["Password"], "••••••••")
+
+    async def test_reconciliation_preserves_immutable_session_identity_and_telemetry(self):
+        """Verify reconciliation enriches analytical fields while strictly preserving immutable telemetry."""
+        t_start = datetime(2026, 9, 12, 16, 36, 41, tzinfo=timezone.utc)
+        t_auth = datetime(2026, 9, 12, 16, 36, 45, tzinfo=timezone.utc)
+        t_cmd = datetime(2026, 9, 12, 16, 36, 51, tzinfo=timezone.utc)
+        t_end = datetime(2026, 9, 12, 16, 36, 53, tzinfo=timezone.utc)
+        t_analysis = datetime(2026, 9, 12, 16, 38, 18, tzinfo=timezone.utc)
+
+        raw_session_row = {
+            "session_id": "f81991343ed8",
+            "start_time": t_start,
+            "end_time": t_end,
+            "duration_seconds": 11,
+            "attacker_ip": "122.164.81.145",
+            "country": "IN",
+            "protocol": "ssh",
+            "commands_executed": 5,
+            "files_transferred": 0,
+            "credentials_tried": 1,
+            "intent": "",       # Unreconciled in ClickHouse
+            "skill_level": 0,   # Unreconciled in ClickHouse
+            "disconnection_reason": "Attacker terminated cleanly",
+        }
+
+        def mock_ch_query(sql, *args, **kwargs):
+            res = MagicMock()
+            sql_str = str(sql)
+            if "clouddecept.sessions" in sql_str:
+                res.named_results.return_value = [dict(raw_session_row)]
+            elif "clouddecept.auth_attempts" in sql_str:
+                res.named_results.return_value = [{
+                    "event_id": "auth-ev-1",
+                    "session_id": "f81991343ed8",
+                    "timestamp": t_auth,
+                    "username": "root",
+                    "password": "root",
+                    "auth_method": "password",
+                    "success": 1,
+                }]
+            elif "clouddecept.commands" in sql_str:
+                res.named_results.return_value = [{
+                    "event_id": "cmd-ev-1",
+                    "session_id": "f81991343ed8",
+                    "timestamp": t_cmd,
+                    "command": "whoami",
+                    "arguments": [],
+                    "output": "root",
+                    "exit_code": 0,
+                    "duration_ms": 0,
+                    "intent": "",
+                    "mitre_techniques": ["T1033"],
+                }]
+            else:
+                res.named_results.return_value = []
+            return res
+
+        self.mock_ch.query.side_effect = mock_ch_query
+        self.mock_ch.command.return_value = 5
+
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        self.mock_pg_pool.getconn.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        mock_cur.fetchone.return_value = (
+            "f81991343ed8",
+            "Attacker attempting system discovery",
+            "system discovery",
+            1,
+            ["T1033"],
+            [],
+            t_analysis,
+        )
+
+        res = await api_main.get_session("f81991343ed8")
+
+        # 1. Analytical fields ARE reconciled
+        self.assertEqual(res.intent, "system discovery")
+        self.assertEqual(res.skill_level, 1)
+        self.assertEqual(res.threat_score, 10)
+        self.assertIsNotNone(res.assessment)
+        self.assertEqual(res.assessment.threat_level, "low")
+
+        # 2. Immutable session identity fields are NEVER altered
+        self.assertEqual(res.session_id, "f81991343ed8")
+        self.assertEqual(res.attacker_ip, "122.164.81.145")
+        self.assertEqual(res.start_time, t_start)
+        self.assertEqual(res.end_time, t_end)
+        self.assertEqual(res.duration_seconds, 11)
+        self.assertEqual(res.protocol, "ssh")
+        self.assertEqual(res.country, "IN")
+        self.assertEqual(res.files_transferred, 0)
+        self.assertEqual(res.commands_executed, 5)
+        self.assertEqual(res.credentials_tried, 1)
+
+    def test_mitre_mapping_deduplication_and_triggers(self):
+        """Verify MITREMapper deduplicates technique IDs while aggregating triggers."""
+        import importlib.util
+        intel_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "services", "threat-intel", "src", "intel.py")
+        )
+        spec = importlib.util.spec_from_file_location("intel_mod", intel_path)
+        intel_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(intel_mod)
+        mapper = intel_mod.MITREMapper()
+
+        # Test exact 5 commands from CASE-F8199134
+        cmds = [
+            {"command": "whoami", "output": "root"},
+            {"command": "uname -a", "output": "Linux cowrie 5.15.0"},
+            {"command": "pwd", "output": "/root"},
+            {"command": "id", "output": "uid=0(root) gid=0(root)"},
+            {"command": "exit", "output": ""},
+        ]
+        mapped = mapper.map_commands(cmds)
+
+        tech_map = {m.technique_id: m for m in mapped}
+        tech_ids = list(tech_map.keys())
+
+        # Verify no duplicate technique IDs
+        self.assertEqual(len(mapped), len(tech_ids))
+        self.assertEqual(len(mapped), 4)
+
+        # Verify exact techniques and triggers
+        self.assertIn("T1033", tech_map)
+        self.assertEqual(tech_map["T1033"].trigger, "whoami")
+        self.assertEqual(tech_map["T1033"].name, "System Owner/User Discovery")
+
+        self.assertIn("T1082", tech_map)
+        self.assertEqual(tech_map["T1082"].trigger, "uname")
+        self.assertEqual(tech_map["T1082"].name, "System Information Discovery")
+
+        self.assertIn("T1083", tech_map)
+        self.assertEqual(tech_map["T1083"].trigger, "pwd (heuristic: directory orientation)")
+        self.assertEqual(tech_map["T1083"].name, "File and Directory Discovery (Heuristic)")
+        self.assertEqual(tech_map["T1083"].confidence, 0.50)
+
+        self.assertIn("T1087.001", tech_map)
+        self.assertEqual(tech_map["T1087.001"].trigger, "id")
+        self.assertEqual(tech_map["T1087.001"].name, "Account Discovery: Local Account")
+
+        # Test duplicate trigger avoidance when multiple triggers occur in same session
+        duplicate_probe_cmds = [
+            {"command": "whoami", "output": "root"},
+            {"command": "w", "output": "root"},
+            {"command": "id", "output": "uid=0(root)"},
+            {"command": "cat /etc/passwd", "output": "root:x:0:0:..."},
+        ]
+        mapped_dups = mapper.map_commands(duplicate_probe_cmds)
+        dup_tech_ids = [m.technique_id for m in mapped_dups]
+        self.assertEqual(len(dup_tech_ids), len(set(dup_tech_ids)))
+        self.assertEqual(len(dup_tech_ids), 2)  # Only T1033 and T1087.001, no duplicates!
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

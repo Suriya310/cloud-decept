@@ -147,6 +147,30 @@ export const api = {
   getMitreTechniques: (): Promise<MitreTechniqueCount[]> =>
     fetchJson<MitreTechniqueCount[]>(`${API_BASE}/mitre/techniques`).then((res) => (Array.isArray(res) ? res : [])),
 
+  // Global Commands Forensics
+  getCommands: (params?: { limit?: number; offset?: number; session_id?: string; command?: string; intent?: string; hours?: number }): Promise<Command[]> => {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", params.limit.toString());
+    if (params?.offset) search.set("offset", params.offset.toString());
+    if (params?.session_id) search.set("session_id", params.session_id);
+    if (params?.command) search.set("command", params.command);
+    if (params?.intent && params.intent !== "all") search.set("intent", params.intent);
+    if (params?.hours) search.set("hours", params.hours.toString());
+    return fetchJson<Command[]>(`${API_BASE}/commands?${search}`).then((res) => (Array.isArray(res) ? res : []));
+  },
+
+  // Global Auth Attempts
+  getAuthAttempts: (params?: { limit?: number; offset?: number; session_id?: string; username?: string; success?: boolean; hours?: number }): Promise<AuthEvent[]> => {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", params.limit.toString());
+    if (params?.offset) search.set("offset", params.offset.toString());
+    if (params?.session_id) search.set("session_id", params.session_id);
+    if (params?.username) search.set("username", params.username);
+    if (params?.success !== undefined) search.set("success", params.success.toString());
+    if (params?.hours) search.set("hours", params.hours.toString());
+    return fetchJson<AuthEvent[]>(`${API_BASE}/auth?${search}`).then((res) => (Array.isArray(res) ? res : []));
+  },
+
   // Analytics: Top Commands & Attackers
   getTopCommands: (params?: { limit?: number; hours?: number }): Promise<TopCommand[]> => {
     const search = new URLSearchParams();

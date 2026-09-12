@@ -5,9 +5,7 @@ import { cn } from '@/lib/utils';
 import {
   Search,
   RefreshCw,
-  Radio,
   Clock,
-  Shield,
   Menu,
 } from 'lucide-react';
 import { useDashboardStore } from '@/lib/store';
@@ -21,9 +19,12 @@ export function Header() {
   const liveEventCount = useDashboardStore((s) => s.liveEventCount);
   const fetchConnectionStatus = useDashboardStore((s) => s.fetchConnectionStatus);
   const fetchStats = useDashboardStore((s) => s.fetchStats);
+  const timeWindowHours = useDashboardStore((s) => s.timeWindowHours);
+  const setTimeWindowHours = useDashboardStore((s) => s.setTimeWindowHours);
   const { collapsed, setCollapsed } = useSidebar();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [autoSync, setAutoSync] = useState(true);
 
   useEffect(() => {
     const updateTime = () => {
@@ -35,7 +36,7 @@ export function Header() {
     return () => clearInterval(timer);
   }, []);
 
-  // Guarantee connection status initialization on initial mount
+  // Initialize connection health on initial mount
   useEffect(() => {
     fetchConnectionStatus();
     const healthInterval = setInterval(() => {
@@ -44,12 +45,21 @@ export function Header() {
     return () => clearInterval(healthInterval);
   }, [fetchConnectionStatus]);
 
+  // Auto-sync polling every 20s if enabled
+  useEffect(() => {
+    if (!autoSync) return;
+    const interval = setInterval(() => {
+      fetchStats(timeWindowHours);
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [autoSync, fetchStats, timeWindowHours]);
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
       await Promise.allSettled([
         fetchConnectionStatus(),
-        fetchStats(useDashboardStore.getState().timeWindowHours),
+        fetchStats(timeWindowHours),
       ]);
     } finally {
       setTimeout(() => setIsRefreshing(false), 500);
@@ -60,7 +70,7 @@ export function Header() {
 
   return (
     <header className="fixed top-0 right-0 z-30 h-16 bg-[#040816]/90 backdrop-blur-2xl border-b border-cyan-500/15 flex items-center px-4 sm:px-6 w-full lg:w-[calc(100%-16rem)] transition-all duration-300">
-      <div className="flex-1 flex items-center justify-between gap-4 max-w-full">
+      <div className="flex-1 flex items-center justify-between gap-3 max-w-full">
         {/* Left: Mobile hamburger & Global Search */}
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <button
@@ -78,7 +88,7 @@ export function Header() {
               placeholder="Search threat events, IPs, MITRE techniques..."
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && e.currentTarget.value.trim()) {
-                  router.push(`/sessions`);
+                  router.push(`/sessions?search=${encodeURIComponent(e.currentTarget.value.trim())}`);
                 }
               }}
               className="w-full pl-9 pr-12 py-1.5 text-xs font-mono rounded-lg bg-[#070e22] border border-cyan-500/20 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400/30 transition-all"
@@ -91,40 +101,74 @@ export function Header() {
         </div>
 
         {/* Right: SOC Operational HUD */}
-        <div className="flex items-center gap-3.5 flex-shrink-0">
+        <div className="flex items-center gap-2.5 sm:gap-3.5 flex-shrink-0">
           {/* Live UTC Clock */}
-          <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-lg bg-[#070e22] border border-cyan-500/15 text-[11px] font-mono text-cyan-300/90">
+          <div className="hidden xl:flex items-center gap-2 px-3 py-1 rounded-lg bg-[#070e22] border border-cyan-500/15 text-[11px] font-mono text-cyan-300/90">
             <Clock className="w-3.5 h-3.5 text-cyan-400/70" />
             <span>{currentTime || 'SYNCHRONIZING UTC...'}</span>
           </div>
 
-          {/* System Status Pill */}
-          <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-[#070e22] border border-cyan-500/20">
+          {/* Live SSE Overlay Status */}
+          <div className="hidden md:flex items-center gap-2 px-2.5 py-1 rounded-lg bg-[#070e22] border border-cyan-500/20 font-mono text-[11px]">
             <span
               className={cn(
                 'w-2 h-2 rounded-full',
-                isApiHealthy ? 'bg-emerald-400 shadow-sm shadow-emerald-400 animate-pulse' : 'bg-rose-500'
+                isLiveConnected ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse' : 'bg-rose-500'
               )}
             />
-            <span className="text-[11px] font-mono font-bold tracking-wider text-slate-200 uppercase hidden lg:block">
+            <span className={cn('font-bold tracking-wider', isLiveConnected ? 'text-emerald-400' : 'text-slate-400')}>
+              {isLiveConnected ? 'LIVE ●' : 'LIVE OFFLINE'}
+            </span>
+            {isLiveConnected && (
+              <span className="text-slate-500 border-l border-slate-800 pl-2 text-[10px]">
+                {liveEventCount} EVTS
+              </span>
+            )}
+          </div>
+
+          {/* System API Status */}
+          <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-[#070e22] border border-cyan-500/20">
+            <span
+              className={cn(
+                'w-2 h-2 rounded-full',
+                isApiHealthy ? 'bg-emerald-400' : 'bg-rose-500'
+              )}
+            />
+            <span className="text-[11px] font-mono font-bold tracking-wider text-slate-300 uppercase hidden lg:block">
               {isApiHealthy ? 'SYSTEM OPERATIONAL' : 'SYSTEM DISCONNECTED'}
             </span>
           </div>
 
+          {/* Auto-Sync Toggle */}
+          <button
+            onClick={() => setAutoSync(!autoSync)}
+            className={cn(
+              'hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border font-mono text-[11px] transition-all',
+              autoSync
+                ? 'bg-cyan-950/40 border-cyan-500/30 text-cyan-300'
+                : 'bg-[#070e22] border-slate-800 text-slate-500'
+            )}
+            title={autoSync ? 'Auto-sync active (20s)' : 'Auto-sync paused'}
+          >
+            <span className={cn('w-1.5 h-1.5 rounded-full', autoSync ? 'bg-cyan-400' : 'bg-slate-600')} />
+            <span>SYNC</span>
+          </button>
+
           {/* Time Window Selector */}
           <select
-            className="px-2 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/20 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-400 cursor-pointer"
-            value={useDashboardStore((s) => s.timeWindowHours)}
-            onChange={(e) => useDashboardStore.getState().setTimeWindowHours(Number(e.target.value))}
+            className="px-2.5 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/25 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-400 cursor-pointer"
+            value={timeWindowHours}
+            onChange={(e) => setTimeWindowHours(Number(e.target.value))}
+            aria-label="Select global time window"
           >
-            <option value={1}>Last 1 Hour</option>
-            <option value={24}>Last 24 Hours</option>
-            <option value={168}>Last 7 Days</option>
-            <option value={720}>Last 30 Days</option>
-            <option value={87600}>All-Time (10Y)</option>
+            <option value={1}>1H (Hour)</option>
+            <option value={24}>24H (Day)</option>
+            <option value={168}>7D (Week)</option>
+            <option value={720}>30D (Month)</option>
+            <option value={87600}>All-Time</option>
           </select>
 
-          {/* Telemetry Refresh Action */}
+          {/* Manual Refresh Action */}
           <button
             onClick={handleRefresh}
             disabled={isRefreshing}

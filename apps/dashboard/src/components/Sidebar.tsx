@@ -7,7 +7,6 @@ import {
   LayoutDashboard,
   Activity,
   Shield,
-  Database,
   Settings,
   BarChart3,
   Terminal,
@@ -16,19 +15,63 @@ import {
   Radio,
   Zap,
   Target,
+  KeyRound,
+  Grid3X3,
 } from 'lucide-react';
 import { useDashboardStore } from '@/lib/store';
 import { useSidebar } from '@/lib/SidebarContext';
 
-const navigation = [
-  { name: 'Overview', href: '/', icon: LayoutDashboard, badge: 'SOC' },
-  { name: 'Live Sessions', href: '/sessions', icon: Activity },
-  { name: 'Attackers', href: '/attackers', icon: Target },
-  { name: 'Threat Intelligence', href: '/threat-intel', icon: Shield },
-  { name: 'Commands', href: '/commands', icon: Terminal },
-  { name: 'Adaptations', href: '/adaptations', icon: Zap },
-  { name: 'Analytics', href: '/analytics', icon: BarChart3 },
-  { name: 'Settings', href: '/settings', icon: Settings },
+interface NavGroup {
+  label: string;
+  items: {
+    name: string;
+    href: string;
+    icon: any;
+    badge?: string;
+  }[];
+}
+
+const navGroups: NavGroup[] = [
+  {
+    label: 'COMMAND CENTER',
+    items: [
+      { name: 'Overview', href: '/', icon: LayoutDashboard, badge: 'SOC' },
+    ],
+  },
+  {
+    label: 'INVESTIGATION',
+    items: [
+      { name: 'Sessions', href: '/sessions', icon: Activity },
+      { name: 'Attackers', href: '/attackers', icon: Target },
+      { name: 'Commands', href: '/commands', icon: Terminal },
+      { name: 'Authentication', href: '/auth', icon: KeyRound },
+    ],
+  },
+  {
+    label: 'INTELLIGENCE',
+    items: [
+      { name: 'Threat Intelligence', href: '/threat-intel', icon: Shield },
+      { name: 'MITRE ATT&CK', href: '/mitre', icon: Grid3X3 },
+    ],
+  },
+  {
+    label: 'DECEPTION',
+    items: [
+      { name: 'Adaptive Deception', href: '/adaptations', icon: Zap },
+    ],
+  },
+  {
+    label: 'ANALYTICS',
+    items: [
+      { name: 'Attack Analytics', href: '/analytics', icon: BarChart3 },
+    ],
+  },
+  {
+    label: 'SYSTEM',
+    items: [
+      { name: 'Settings & Health', href: '/settings', icon: Settings },
+    ],
+  },
 ];
 
 export function Sidebar() {
@@ -50,7 +93,7 @@ export function Sidebar() {
       )}
     >
       {/* Brand Header */}
-      <div className="flex h-16 items-center justify-between px-4 border-b border-cyan-500/15">
+      <div className="flex h-16 items-center justify-between px-4 border-b border-cyan-500/15 flex-shrink-0">
         {!collapsed ? (
           <Link href="/" className="flex items-center gap-2.5 group">
             <div className="relative flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-teal-400 p-0.5 shadow-lg shadow-cyan-500/30 group-hover:shadow-cyan-400/50 transition-all">
@@ -90,53 +133,62 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* Navigation List */}
-      <nav className="flex-1 px-2.5 py-4 space-y-1.5 overflow-y-auto scrollbar-thin">
-        {navigation.map((item) => {
-          const isActive = pathname === item.href;
-          return (
-            <Link
-              key={item.name}
-              href={item.href}
-              className={cn(
-                'group relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold tracking-wide transition-all duration-200 select-none',
-                isActive
-                  ? 'text-cyan-300 bg-gradient-to-r from-cyan-500/15 via-cyan-500/5 to-transparent border-l-2 border-cyan-400 shadow-sm shadow-cyan-950/50'
-                  : 'text-slate-400 hover:text-slate-100 hover:bg-slate-900/60'
-              )}
-              title={collapsed ? item.name : undefined}
-            >
-              <item.icon
-                className={cn(
-                  'w-4 h-4 flex-shrink-0 transition-colors',
-                  isActive ? 'text-cyan-400' : 'text-slate-400 group-hover:text-cyan-300'
-                )}
-              />
-
-              {!collapsed && (
-                <span className="flex-1 truncate tracking-wide">{item.name}</span>
-              )}
-
-              {!collapsed && item.badge && (
-                <span
+      {/* Navigation Groups */}
+      <nav className="flex-1 px-2.5 py-3 space-y-4 overflow-y-auto scrollbar-thin">
+        {navGroups.map((group) => (
+          <div key={group.label} className="space-y-1">
+            {!collapsed && (
+              <div className="px-3 text-[9px] font-mono font-bold tracking-widest text-slate-400 uppercase mb-1">
+                {group.label}
+              </div>
+            )}
+            {group.items.map((item) => {
+              const isActive = pathname === item.href || (item.href !== '/' && pathname?.startsWith(item.href));
+              return (
+                <Link
+                  key={item.name}
+                  href={item.href}
                   className={cn(
-                    'px-1.5 py-0.5 text-[9px] font-mono font-bold rounded',
+                    'group relative flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-all duration-200 select-none font-mono',
                     isActive
-                      ? 'bg-cyan-400/20 text-cyan-300 border border-cyan-400/30'
-                      : 'bg-slate-800 text-slate-400 border border-slate-700/50'
+                      ? 'text-cyan-300 bg-gradient-to-r from-cyan-500/15 via-cyan-500/5 to-transparent border-l-2 border-cyan-400 shadow-sm shadow-cyan-950/50'
+                      : 'text-slate-400 hover:text-slate-100 hover:bg-slate-900/60'
                   )}
+                  title={collapsed ? item.name : undefined}
                 >
-                  {item.badge}
-                </span>
-              )}
-            </Link>
-          );
-        })}
+                  <item.icon
+                    className={cn(
+                      'w-4 h-4 flex-shrink-0 transition-colors',
+                      isActive ? 'text-cyan-400' : 'text-slate-400 group-hover:text-cyan-300'
+                    )}
+                  />
+
+                  {!collapsed && (
+                    <span className="flex-1 truncate tracking-wide">{item.name}</span>
+                  )}
+
+                  {!collapsed && item.badge && (
+                    <span
+                      className={cn(
+                        'px-1.5 py-0.5 text-[9px] font-mono font-bold rounded',
+                        isActive
+                          ? 'bg-cyan-400/20 text-cyan-300 border border-cyan-400/30'
+                          : 'bg-slate-800 text-slate-400 border border-slate-700/50'
+                      )}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
       {/* Datastore Connectivity HUD */}
       {!collapsed && (
-        <div className="p-3 mx-2.5 mb-2.5 rounded-lg bg-[#070e22] border border-cyan-500/15 text-[11px] space-y-2">
+        <div className="p-3 mx-2.5 mb-2.5 rounded-lg bg-[#070e22] border border-cyan-500/15 text-[11px] space-y-2 flex-shrink-0">
           <div className="flex items-center justify-between font-mono text-[10px] text-slate-400 uppercase tracking-wider">
             <span className="flex items-center gap-1.5">
               <Radio className="w-3 h-3 text-cyan-400 animate-pulse" />
@@ -172,7 +224,7 @@ export function Sidebar() {
 
       {/* Footer Toggle */}
       {collapsed && (
-        <div className="p-2 border-t border-cyan-500/15 flex justify-center">
+        <div className="p-2 border-t border-cyan-500/15 flex justify-center flex-shrink-0">
           <button
             onClick={() => setCollapsed(false)}
             className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-300 hover:bg-cyan-950/40"

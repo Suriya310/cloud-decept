@@ -24,7 +24,7 @@ export interface Session {
   intent_history?: string[];
   threat_score?: number;
   tactics?: string[];
-  status?: 'active' | 'closed';
+  status?: 'active' | 'closed' | 'failed' | 'timed_out' | 'stale';
 }
 
 export interface Command {
@@ -201,6 +201,10 @@ export interface DashboardState {
   sessionsLoading: boolean;
   sessionsError: string | null;
   realTimeEvents: RealTimeEvent[];
+  globalCommands: Command[];
+  globalCommandsLoading: boolean;
+  globalAuth: AuthEvent[];
+  globalAuthLoading: boolean;
   isConnected: boolean;
   isLiveConnected: boolean;
   liveEventCount: number;

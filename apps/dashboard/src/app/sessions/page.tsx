@@ -1,491 +1,319 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { Suspense, useEffect, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import {
   Search,
   Filter,
+  Download,
+  Terminal,
+  Clock,
+  Shield,
+  ExternalLink,
   ChevronLeft,
   ChevronRight,
-  Download,
-  Eye,
-  AlertTriangle,
-  MapPin,
-  Clock,
-  Terminal,
-  Copy,
-  Check,
   RefreshCw,
-  Shield,
   Activity,
+  KeyRound,
+  Globe,
+  AlertTriangle,
 } from 'lucide-react';
-import { cn, formatTimestamp, getIntentColor } from '@/lib/utils';
+import { cn, formatTimestamp, formatDuration } from '@/lib/utils';
 import { useDashboardStore } from '@/lib/store';
 import { getCountryName } from '@/lib/countries';
 import { normalizeIntent } from '@/lib/intents';
 import { evaluateThreat } from '@/lib/threatScore';
-import { safeCopyToClipboard } from '@/lib/clipboard';
 
-export default function SessionsPage() {
-  const {
-    sessions,
-    fetchSessions,
-    selectedSession,
-    setSelectedSession,
-    fetchSession,
-    filters,
-    setFilters,
-    stats,
-    sessionsLoading,
-    sessionsError,
-  } = useDashboardStore();
+function SessionsPageContent() {
+  const searchParams = useSearchParams();
+  const urlSearch = searchParams.get('search') || '';
+  const urlCountry = searchParams.get('country') || '';
+  const urlIp = searchParams.get('ip') || '';
 
+  const { sessions, sessionsLoading, fetchSessions, timeWindowHours } = useDashboardStore();
+  const [searchQuery, setSearchQuery] = useState(urlSearch || urlIp);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'closed' | 'failed' | 'timed_out' | 'stale'>('all');
+  const [intentFilter, setIntentFilter] = useState<string>('all');
+  const [countryFilter, setCountryFilter] = useState<string>(urlCountry || 'all');
   const [currentPage, setCurrentPage] = useState(1);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const sessionsPerPage = 20;
-
-  const handleCopy = useCallback(async (text: string, key: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    const ok = await safeCopyToClipboard(text);
-    if (ok) {
-      setCopiedKey(key);
-      setTimeout(() => setCopiedKey(null), 2000);
-    }
-  }, []);
-
-  const timeWindowHours = useDashboardStore((s) => s.timeWindowHours);
-
-  const loadSessions = useCallback(() => {
-    fetchSessions({ status: filters.status, limit: 500, hours: timeWindowHours });
-  }, [fetchSessions, filters.status, timeWindowHours]);
+  const itemsPerPage = 25;
 
   useEffect(() => {
-    loadSessions();
-  }, [loadSessions]);
-
-  const sessionsArray = sessions ?? [];
+    fetchSessions({ hours: timeWindowHours, limit: 300 });
+  }, [fetchSessions, timeWindowHours]);
 
   const filteredSessions = useMemo(() => {
-    return sessionsArray.filter((session) => {
+    const list = sessions || [];
+    return list.filter((s) => {
       const q = searchQuery.toLowerCase();
-      const countryFull = getCountryName(session.src_country || session.country).toLowerCase();
-      const ip = (session.src_ip ?? session.attacker_ip ?? '').toLowerCase();
-      const sessId = (session.session_id ?? '').toLowerCase();
-      const user = (session.username ?? '').toLowerCase();
-
       const matchesSearch =
         !q ||
-        sessId.includes(q) ||
-        ip.includes(q) ||
-        countryFull.includes(q) ||
-        user.includes(q);
+        s.session_id.toLowerCase().includes(q) ||
+        (s.attacker_ip && s.attacker_ip.toLowerCase().includes(q)) ||
+        (s.src_ip && s.src_ip.toLowerCase().includes(q)) ||
+        (s.country && s.country.toLowerCase().includes(q)) ||
+        (s.intent && s.intent.toLowerCase().includes(q));
 
-      const matchesIntent =
-        filters.intent === 'all' ||
-        (session.intent_history ?? []).some((i) => i.toLowerCase() === filters.intent.toLowerCase());
+      const matchesStatus = statusFilter === 'all' || s.status === statusFilter;
+      const matchesIntent = intentFilter === 'all' || s.intent === intentFilter;
+      const matchesCountry = countryFilter === 'all' || s.country === countryFilter || s.src_country === countryFilter;
 
-      const matchesCountry =
-        filters.country === 'all' ||
-        session.src_country === filters.country ||
-        session.country === filters.country;
-
-      return matchesSearch && matchesIntent && matchesCountry;
+      return matchesSearch && matchesStatus && matchesIntent && matchesCountry;
     });
-  }, [sessionsArray, searchQuery, filters.intent, filters.country]);
+  }, [sessions, searchQuery, statusFilter, intentFilter, countryFilter]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredSessions.length / sessionsPerPage));
+  const totalPages = Math.max(1, Math.ceil(filteredSessions.length / itemsPerPage));
   const paginatedSessions = useMemo(() => {
-    return filteredSessions.slice(
-      (currentPage - 1) * sessionsPerPage,
-      currentPage * sessionsPerPage
-    );
-  }, [filteredSessions, currentPage, sessionsPerPage]);
-
-  const uniqueIntents = useMemo(() => {
-    return Array.from(
-      new Set(sessionsArray.flatMap((s) => s.intent_history ?? []).filter(Boolean))
-    );
-  }, [sessionsArray]);
-
-  const uniqueCountries = useMemo(() => {
-    return Array.from(
-      new Set(
-        sessionsArray
-          .map((s) => s.src_country || s.country)
-          .filter((c): c is string => Boolean(c))
-      )
-    );
-  }, [sessionsArray]);
-
-  const totalSessions = stats?.total_sessions ?? sessionsArray.length;
-  const activeSessions = stats?.active_sessions ?? sessionsArray.filter((s) => s.status === 'active').length;
-
-  const router = useRouter();
-
-  const handleRowClick = (session: any) => {
-    setSelectedSession(session);
-    if (session?.session_id) {
-      router.push(`/sessions/${session.session_id}`);
-    }
-  };
+    return filteredSessions.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  }, [filteredSessions, currentPage, itemsPerPage]);
 
   const exportToCSV = () => {
     if (filteredSessions.length === 0) return;
-    const headers = [
-      'Session ID',
-      'Attacker IP',
-      'Country',
-      'Auth Status',
-      'Status',
-      'Intents',
-      'Commands',
-      'Threat Level',
-      'Duration (s)',
-      'Started At',
-    ];
-    const rows = filteredSessions.map((s) => {
-      const threat = evaluateThreat(s.threat_score ?? s.skill_level);
-      return [
-        s.session_id,
-        s.src_ip ?? s.attacker_ip ?? '',
-        getCountryName(s.src_country || s.country),
-        s.auth_success === true ? 'Success' : s.auth_success === false ? 'Failed' : 'N/A',
-        s.status ?? '',
-        (s.intent_history ?? []).join('; '),
-        s.command_count ?? 0,
-        threat.label,
-        s.duration_seconds ?? 0,
-        s.start_time ?? '',
-      ];
-    });
+    const headers = ['Session ID', 'Attacker IP', 'Country', 'Protocol', 'Start Time', 'Duration (s)', 'Commands', 'Auth Probes', 'Intent', 'Threat Score', 'Status'];
+    const rows = filteredSessions.map((s) => [
+      s.session_id,
+      s.src_ip || s.attacker_ip || '',
+      s.src_country || s.country || '',
+      s.protocol || 'ssh',
+      s.start_time,
+      s.duration_seconds || 0,
+      s.command_count || s.commands_executed || 0,
+      s.credentials_tried || 0,
+      normalizeIntent(s.intent).label,
+      s.threat_score ?? s.skill_level ?? 0,
+      s.status || 'closed',
+    ]);
 
     const csvContent = [
       headers.join(','),
-      ...rows.map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')),
+      ...rows.map((r) => r.map((cell) => `"${cell}"`).join(',')),
     ].join('\n');
+
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `clouddecept-sessions-${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
+    link.href = url;
+    link.download = `clouddecept-sessions-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
-    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header with Telemetry Metadata */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-cyan-500/15">
+    <div className="space-y-6 font-mono pb-12">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-3 border-b border-cyan-500/15">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold font-mono tracking-wider text-white uppercase flex items-center gap-2.5">
+          <h1 className="text-xl sm:text-2xl font-bold tracking-wider text-white uppercase flex items-center gap-2.5">
             <Activity className="w-5 h-5 text-cyan-400" />
-            <span>SESSION INVESTIGATION MATRIX</span>
+            <span>SESSION INVESTIGATION REGISTRY</span>
           </h1>
-          <p className="text-xs text-slate-400 font-mono mt-1">
-            Authoritative: <span className="text-cyan-300 font-bold">{totalSessions.toLocaleString()} total</span> sessions recorded • <span className="text-emerald-400 font-bold">{activeSessions} live</span> active probes
+          <p className="text-xs text-slate-400 mt-1">
+            Authoritative ClickHouse honeypot sessions ({timeWindowHours >= 87600 ? 'All-Time' : `Last ${timeWindowHours}h`}) with lifecycle status classification
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-400/60" />
-            <input
-              type="search"
-              placeholder="Search IP, session, country..."
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="w-64 pl-9 pr-3 py-1.5 text-xs font-mono rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
-            />
-          </div>
-
-          <select
-            value={filters.status}
-            onChange={(e) => {
-              setFilters({ status: e.target.value });
-              setCurrentPage(1);
-            }}
-            className="px-2.5 py-1.5 text-xs font-mono rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 focus:outline-none focus:border-cyan-400"
-          >
-            <option value="all">All Status</option>
-            <option value="active">Active</option>
-            <option value="closed">Closed</option>
-          </select>
-
-          <select
-            value={filters.intent}
-            onChange={(e) => {
-              setFilters({ intent: e.target.value });
-              setCurrentPage(1);
-            }}
-            className="px-2.5 py-1.5 text-xs font-mono rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 focus:outline-none focus:border-cyan-400"
-          >
-            <option value="all">All Intents</option>
-            {uniqueIntents.map((intent) => (
-              <option key={intent} value={intent}>
-                {normalizeIntent(intent).label}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={filters.country}
-            onChange={(e) => {
-              setFilters({ country: e.target.value });
-              setCurrentPage(1);
-            }}
-            className="px-2.5 py-1.5 text-xs font-mono rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 focus:outline-none focus:border-cyan-400"
-          >
-            <option value="all">All Countries</option>
-            {uniqueCountries.map((country) => (
-              <option key={country} value={country}>
-                {getCountryName(country)}
-              </option>
-            ))}
-          </select>
-
+        <div className="flex items-center gap-2.5">
           <button
-            onClick={exportToCSV}
-            disabled={filteredSessions.length === 0}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono font-bold text-cyan-300 bg-[#070e22] border border-cyan-500/30 rounded-lg hover:border-cyan-400 hover:text-white transition-all disabled:opacity-50"
-            title="Export filtered records as CSV"
-          >
-            <Download className="w-3.5 h-3.5 text-cyan-400" />
-            CSV
-          </button>
-
-          <button
-            onClick={loadSessions}
-            disabled={sessionsLoading}
-            className="p-1.5 rounded-lg bg-[#070e22] border border-cyan-500/30 text-slate-400 hover:text-cyan-300 transition-colors disabled:opacity-50"
-            title="Refresh sessions list"
+            onClick={() => fetchSessions({ hours: timeWindowHours, limit: 300 })}
+            className="p-2 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 hover:text-cyan-300"
+            title="Refresh sessions"
           >
             <RefreshCw className={cn('w-4 h-4', sessionsLoading && 'animate-spin text-cyan-400')} />
+          </button>
+          <button
+            onClick={exportToCSV}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/25 text-xs text-cyan-300 hover:border-cyan-400"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>EXPORT CSV</span>
           </button>
         </div>
       </div>
 
-      {/* Error state */}
-      {sessionsError && (
-        <div className="p-4 bg-rose-950/40 border border-rose-500/40 rounded-xl flex items-center gap-3 text-rose-300 text-xs font-mono">
-          <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0" />
-          <div>
-            <p className="font-bold uppercase tracking-wider">FAILED TO RETRIEVE SESSIONS</p>
-            <p className="text-slate-400 mt-0.5">{sessionsError}</p>
-          </div>
+      {/* Filter Bar */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-[#070e22] p-3.5 rounded-xl border border-cyan-500/20">
+        {/* Search Input */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-400/60" />
+          <input
+            type="search"
+            placeholder="Search IP, session ID, intent..."
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg bg-[#040816] border border-cyan-500/25 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
+          />
         </div>
-      )}
 
-      {/* Main Glass Table Container */}
-      <div className="glass-panel rounded-2xl overflow-hidden border border-cyan-500/20 shadow-2xl">
-        <div className="table-container">
-          <table className="table">
-            <thead>
+        {/* Status Filter */}
+        <select
+          value={statusFilter}
+          onChange={(e) => {
+            setStatusFilter(e.target.value as any);
+            setCurrentPage(1);
+          }}
+          className="px-3 py-1.5 rounded-lg bg-[#040816] border border-cyan-500/25 text-xs text-cyan-300 focus:outline-none focus:border-cyan-400"
+        >
+          <option value="all">All Session Lifecycles</option>
+          <option value="active">Active / Connected Now</option>
+          <option value="closed">Closed Cleanly</option>
+          <option value="failed">Auth Failed (0 Cmds)</option>
+          <option value="timed_out">Timed Out (&lt; 1h)</option>
+          <option value="stale">Stale (&gt; 1h)</option>
+        </select>
+
+        {/* Intent Filter */}
+        <select
+          value={intentFilter}
+          onChange={(e) => {
+            setIntentFilter(e.target.value);
+            setCurrentPage(1);
+          }}
+          className="px-3 py-1.5 rounded-lg bg-[#040816] border border-cyan-500/25 text-xs text-cyan-300 focus:outline-none focus:border-cyan-400"
+        >
+          <option value="all">All Adversary Objectives</option>
+          <option value="credential_hunting">Credential Hunting</option>
+          <option value="system_discovery">System Discovery</option>
+          <option value="persistence">Persistence</option>
+          <option value="privilege_escalation">Privilege Escalation</option>
+          <option value="defense_evasion">Defense Evasion</option>
+          <option value="reconnaissance">Reconnaissance</option>
+          <option value="unknown">Unknown / Insufficient Evidence</option>
+        </select>
+
+        {/* Matched Counter */}
+        <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-[#040816] border border-cyan-500/15 text-xs text-slate-400">
+          <span>MATCHED SESSIONS</span>
+          <span className="text-cyan-300 font-bold">{filteredSessions.length} sessions</span>
+        </div>
+      </div>
+
+      {/* Sessions Table */}
+      <div className="rounded-xl border border-cyan-500/20 bg-[#070e22] overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-[#040816] text-[10px] text-slate-400 uppercase border-b border-cyan-500/15">
               <tr>
-                <th>Session ID</th>
-                <th>Attacker IP</th>
-                <th>Origin Country</th>
-                <th>Auth</th>
-                <th>Status</th>
-                <th>Intent Classification</th>
-                <th>Commands</th>
-                <th>Threat Assessment</th>
-                <th>Duration</th>
-                <th>Started At (UTC)</th>
-                <th>Inspect</th>
+                <th className="py-3 px-4">STATUS</th>
+                <th className="py-3 px-4">SESSION ID</th>
+                <th className="py-3 px-4">ATTACKER IP</th>
+                <th className="py-3 px-4">ORIGIN</th>
+                <th className="py-3 px-4">DURATION</th>
+                <th className="py-3 px-4">CMDS</th>
+                <th className="py-3 px-4">AUTH</th>
+                <th className="py-3 px-4">INTENT</th>
+                <th className="py-3 px-4">THREAT</th>
+                <th className="py-3 px-4 text-right">ACTION</th>
               </tr>
             </thead>
-            <tbody>
-              {sessionsLoading && sessionsArray.length === 0 ? (
+            <tbody className="divide-y divide-cyan-500/10 font-mono">
+              {sessionsLoading && filteredSessions.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-16 text-center text-slate-400 font-mono text-xs">
-                    <RefreshCw className="w-6 h-6 animate-spin mx-auto text-cyan-400 mb-2" />
-                    Querying ClickHouse session indexes...
+                  <td colSpan={10} className="py-8 text-center text-slate-400">
+                    <RefreshCw className="w-6 h-6 text-cyan-400 animate-spin mx-auto mb-2" />
+                    Querying ClickHouse sessions...
                   </td>
                 </tr>
-              ) : paginatedSessions.length === 0 ? (
+              ) : filteredSessions.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-16 text-center text-slate-500 font-mono text-xs">
-                    No honeypot sessions found matching the active filters.
+                  <td colSpan={10} className="py-8 text-center text-slate-500">
+                    No sessions match the current search filters in this time window.
                   </td>
                 </tr>
               ) : (
-                paginatedSessions.map((session) => {
-                  const ip = session.src_ip ?? session.attacker_ip ?? 'unknown';
-                  const countryFull = getCountryName(session.src_country || session.country);
-                  const threat = evaluateThreat(session.threat_score ?? session.skill_level);
-                  const isSelected = selectedSession?.session_id === session.session_id;
+                paginatedSessions.map((s) => {
+                  const ip = s.src_ip || s.attacker_ip || 'unknown';
+                  const countryName = getCountryName(s.src_country || s.country);
+                  const threat = evaluateThreat(s.threat_score ?? s.skill_level);
+                  const intent = normalizeIntent(s.intent);
+
+                  const statusPill =
+                    s.status === 'active' ? (
+                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 animate-pulse">
+                        ACTIVE NOW
+                      </span>
+                    ) : s.status === 'failed' ? (
+                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                        AUTH FAILED
+                      </span>
+                    ) : s.status === 'timed_out' ? (
+                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        TIMED OUT
+                      </span>
+                    ) : s.status === 'stale' ? (
+                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
+                        STALE
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-500/30">
+                        CLOSED
+                      </span>
+                    );
 
                   return (
-                    <tr
-                      key={session.session_id}
-                      onClick={() => handleRowClick(session)}
-                      className={cn(
-                        'cursor-pointer font-mono text-xs transition-colors',
-                        isSelected ? 'bg-cyan-950/60' : 'hover:bg-cyan-950/20'
-                      )}
-                    >
-                      {/* Session ID */}
-                      <td className="whitespace-nowrap">
-                        <div className="flex items-center gap-1.5 font-bold text-slate-300">
-                          <span title={session.session_id}>
-                            {session.session_id.slice(0, 10)}...
+                    <tr key={s.session_id} className="hover:bg-cyan-950/20 transition-all">
+                      <td className="py-2.5 px-4">{statusPill}</td>
+                      <td className="py-2.5 px-4">
+                        <Link
+                          href={`/sessions/${s.session_id}`}
+                          className="text-cyan-400 hover:underline font-bold"
+                          title="Open Case File"
+                        >
+                          {s.session_id.slice(0, 10)}...
+                        </Link>
+                      </td>
+                      <td className="py-2.5 px-4">
+                        <Link
+                          href={`/attackers?ip=${encodeURIComponent(ip)}`}
+                          className="text-slate-200 hover:text-cyan-300 hover:underline"
+                        >
+                          {ip}
+                        </Link>
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-400 truncate max-w-[120px]">
+                        {countryName}
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-300">
+                        {formatDuration(s.duration_seconds || 0)}
+                      </td>
+                      <td className="py-2.5 px-4">
+                        {(s.command_count || s.commands_executed || 0) > 0 ? (
+                          <span className="text-emerald-400 font-bold">
+                            {s.command_count || s.commands_executed}
                           </span>
-                          <button
-                            onClick={(e) => handleCopy(session.session_id, `sess-${session.session_id}`, e)}
-                            className="text-slate-500 hover:text-cyan-300 p-0.5"
-                            title="Copy session ID"
-                          >
-                            {copiedKey === `sess-${session.session_id}` ? (
-                              <Check className="w-3 h-3 text-emerald-400" />
-                            ) : (
-                              <Copy className="w-3 h-3" />
-                            )}
-                          </button>
-                        </div>
-                      </td>
-
-                      {/* Attacker IP */}
-                      <td className="whitespace-nowrap">
-                        <div className="flex items-center gap-1.5 font-bold text-white">
-                          <span>{ip}</span>
-                          <button
-                            onClick={(e) => handleCopy(ip, `ip-${session.session_id}`, e)}
-                            className="text-slate-500 hover:text-cyan-300 p-0.5"
-                            title="Copy attacker IP"
-                          >
-                            {copiedKey === `ip-${session.session_id}` ? (
-                              <Check className="w-3 h-3 text-emerald-400" />
-                            ) : (
-                              <Copy className="w-3 h-3" />
-                            )}
-                          </button>
-                        </div>
-                      </td>
-
-                      {/* Country */}
-                      <td className="whitespace-nowrap">
-                        <div className="flex items-center gap-1 text-slate-300">
-                          <MapPin className="w-3 h-3 text-cyan-400 flex-shrink-0" />
-                          <span className="truncate max-w-[130px]" title={countryFull}>
-                            {countryFull}
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Auth */}
-                      <td>
-                        <span
-                          className={cn(
-                            'badge text-[10px] uppercase font-mono font-bold',
-                            session.auth_success === true
-                              ? 'text-emerald-400 bg-emerald-950/80 border-emerald-500/40'
-                              : session.auth_success === false
-                              ? 'text-rose-400 bg-rose-950/80 border-rose-500/40'
-                              : 'text-slate-400 bg-slate-900 border-slate-700/50'
-                          )}
-                        >
-                          {session.auth_success === true
-                            ? 'GRANTED'
-                            : session.auth_success === false
-                            ? 'FAILED'
-                            : 'N/A'}
-                        </span>
-                      </td>
-
-                      {/* Status */}
-                      <td>
-                        <span
-                          className={cn(
-                            'badge text-[10px] uppercase font-mono font-bold',
-                            session.status === 'active'
-                              ? 'text-emerald-400 bg-emerald-950/80 border-emerald-500/40 shadow-sm shadow-emerald-950 animate-pulse'
-                              : 'text-slate-400 bg-slate-900 border-slate-700/50'
-                          )}
-                        >
-                          {session.status ?? 'CLOSED'}
-                        </span>
-                      </td>
-
-                      {/* Intents */}
-                      <td>
-                        <div className="flex flex-wrap gap-1 max-w-[170px]">
-                          {(session.intent_history ?? []).slice(0, 2).map((intent) => {
-                            const norm = normalizeIntent(intent);
-                            return (
-                              <span
-                                key={intent}
-                                className={cn('badge text-[10px] font-mono px-2', norm.badgeClass)}
-                                title={norm.description}
-                              >
-                                {norm.label}
-                              </span>
-                            );
-                          })}
-                          {(session.intent_history ?? []).length > 2 && (
-                            <span className="badge bg-slate-800 text-slate-400 text-[9px] font-mono">
-                              +{(session.intent_history ?? []).length - 2}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Commands */}
-                      <td>
-                        <div className="flex items-center gap-1 font-mono text-xs text-white">
-                          <Terminal className="w-3 h-3 text-cyan-400" />
-                          <span>{(session.command_count ?? 0).toLocaleString()}</span>
-                        </div>
-                      </td>
-
-                      {/* Threat Assessment */}
-                      <td>
-                        <span
-                          className={cn(
-                            'badge text-[10px] font-mono font-bold',
-                            threat.badgeClass
-                          )}
-                          title={threat.description}
-                        >
-                          {threat.label}
-                        </span>
-                      </td>
-
-                      {/* Duration */}
-                      <td className="whitespace-nowrap text-slate-400">
-                        {session.duration_seconds && session.duration_seconds > 0 ? (
-                          <div className="flex items-center gap-1">
-                            <Clock className="w-3 h-3 text-slate-500" />
-                            <span>
-                              {Math.floor(session.duration_seconds / 60)}m {session.duration_seconds % 60}s
-                            </span>
-                          </div>
-                        ) : session.status === 'active' ? (
-                          <span className="text-emerald-400 font-bold">IN PROGRESS</span>
                         ) : (
-                          <span className="text-slate-600">—</span>
+                          <span className="text-slate-600">0</span>
                         )}
                       </td>
-
-                      {/* Started */}
-                      <td className="whitespace-nowrap text-slate-400">
-                        {formatTimestamp(session.start_time)}
+                      <td className="py-2.5 px-4">
+                        {(s.credentials_tried || 0) > 0 ? (
+                          <span className="text-amber-400 font-bold">
+                            {s.credentials_tried}
+                          </span>
+                        ) : (
+                          <span className="text-slate-600">0</span>
+                        )}
                       </td>
-
-                      {/* Inspect */}
-                      <td>
+                      <td className="py-2.5 px-4">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-900 border border-slate-700 text-slate-300">
+                          {intent.label}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-4">
+                        <span className={cn('px-2 py-0.5 rounded text-[10px] font-bold border', threat.badgeClass)}>
+                          {threat.label.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-4 text-right">
                         <Link
-                          href={`/sessions/${session.session_id}`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-300 hover:bg-cyan-950/50 border border-transparent hover:border-cyan-500/30 transition-all inline-block"
-                          title="Open investigation console"
+                          href={`/sessions/${s.session_id}`}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-cyan-500/15 border border-cyan-500/30 text-[10px] font-bold text-cyan-300 hover:bg-cyan-500/25 hover:border-cyan-400 transition-all"
                         >
-                          <Eye className="w-4 h-4" />
+                          <span>INVESTIGATE</span>
+                          <ExternalLink className="w-2.5 h-2.5" />
                         </Link>
                       </td>
                     </tr>
@@ -495,39 +323,37 @@ export default function SessionsPage() {
             </tbody>
           </table>
         </div>
-
-        {/* Pagination Bar */}
-        {totalPages > 1 && (
-          <div className="p-4 border-t border-cyan-500/15 flex items-center justify-between font-mono text-xs">
-            <div className="text-slate-400">
-              Displaying {(currentPage - 1) * sessionsPerPage + 1} to{' '}
-              {Math.min(currentPage * sessionsPerPage, filteredSessions.length)} of{' '}
-              {filteredSessions.length} sessions
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="p-1.5 rounded-lg border border-cyan-500/20 text-slate-300 hover:text-cyan-300 bg-[#070e22] disabled:opacity-30 disabled:cursor-not-allowed"
-                aria-label="Previous page"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="text-cyan-400 font-bold px-2">
-                {currentPage} / {totalPages}
-              </span>
-              <button
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                className="p-1.5 rounded-lg border border-cyan-500/20 text-slate-300 hover:text-cyan-300 bg-[#070e22] disabled:opacity-30 disabled:cursor-not-allowed"
-                aria-label="Next page"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between pt-4 border-t border-cyan-500/15 text-xs text-slate-400">
+          <span>Page {currentPage} of {totalPages}</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="px-3 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="px-3 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+export default function SessionsPage() {
+  return (
+    <Suspense fallback={<div className="p-12 text-center font-mono text-xs text-slate-400">Loading telemetry interface...</div>}>
+      <SessionsPageContent />
+    </Suspense>
   );
 }

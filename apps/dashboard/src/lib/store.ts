@@ -26,6 +26,10 @@ interface ConnectionStatus {
 }
 
 interface DashboardActions {
+  // Global Commands & Auth
+  fetchGlobalCommands: (params?: { limit?: number; offset?: number; session_id?: string; command?: string; intent?: string; hours?: number }) => Promise<void>;
+  fetchGlobalAuth: (params?: { limit?: number; offset?: number; session_id?: string; username?: string; success?: boolean; hours?: number }) => Promise<void>;
+
   // Sessions
   fetchSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string; min_skill_level?: number }) => Promise<void>;
   fetchSession: (sessionId: string) => Promise<void>;
@@ -74,7 +78,7 @@ const defaultFilters = {
   dateRange: [undefined, undefined] as [Date | undefined, Date | undefined],
 };
 
-// Transform backend session data to include UI-compatible fields
+// Transform backend session data to include UI-compatible fields with accurate lifecycle status
 export function transformSession(s: any): Session {
   if (!s || typeof s !== 'object') {
     return {
@@ -82,15 +86,40 @@ export function transformSession(s: any): Session {
       attacker_ip: '',
       start_time: new Date().toISOString(),
       commands_executed: 0,
+      status: 'closed',
     } as Session;
   }
-  // A session is closed only if it has an explicit end_time different from start_time with duration or disconnect reason
-  const isClosed = Boolean(
+
+  const startTimeMs = s.start_time ? new Date(s.start_time).getTime() : Date.now();
+  const nowMs = Date.now();
+  const ageSeconds = Math.max(0, Math.floor((nowMs - startTimeMs) / 1000));
+
+  const hasExplicitEnd = Boolean(
     s.end_time &&
     !String(s.end_time).startsWith('1970') &&
     s.end_time !== s.start_time &&
     (s.duration_seconds > 0 || (s.duration && s.duration > 0) || s.disconnection_reason)
   );
+
+  let status: 'active' | 'closed' | 'failed' | 'timed_out' | 'stale' = 'closed';
+
+  if (hasExplicitEnd) {
+    if ((s.credentials_tried ?? 0) > 0 && (s.commands_executed ?? 0) === 0 && (s.duration_seconds ?? 0) < 15) {
+      status = 'failed';
+    } else {
+      status = 'closed';
+    }
+  } else {
+    // No explicit end time recorded
+    if (ageSeconds < 300) {
+      status = 'active';
+    } else if (ageSeconds < 3600) {
+      status = 'timed_out';
+    } else {
+      status = 'stale';
+    }
+  }
+
   return {
     ...s,
     src_ip: s.attacker_ip || s.src_ip || '',
@@ -100,7 +129,7 @@ export function transformSession(s: any): Session {
     skill_level: typeof s.skill_level === 'number' ? s.skill_level : 0,
     threat_score: typeof s.skill_level === 'number' ? s.skill_level : 0,
     tactics: s.tactics || [],
-    status: isClosed ? 'closed' : 'active',
+    status,
     auth_success: s.credentials_tried && s.credentials_tried > 0 ? ((s.commands_executed ?? 0) > 0) : undefined,
   };
 }
@@ -116,6 +145,10 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   selectedSession: null,
   commands: [],
   sessionAuth: [],
+  globalCommands: [],
+  globalCommandsLoading: false,
+  globalAuth: [],
+  globalAuthLoading: false,
   threatIntel: null,
   threatIntelItems: [],
   mitreTechniques: [],
@@ -135,6 +168,27 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   timeWindowHours: 24,
 
   // Actions
+  fetchGlobalCommands: async (params) => {
+    set({ globalCommandsLoading: true });
+    try {
+      const data = await api.getCommands(params);
+      set({ globalCommands: data || [], globalCommandsLoading: false });
+    } catch (e) {
+      console.error('Failed to fetch global commands:', e);
+      set({ globalCommands: [], globalCommandsLoading: false });
+    }
+  },
+
+  fetchGlobalAuth: async (params) => {
+    set({ globalAuthLoading: true });
+    try {
+      const data = await api.getAuthAttempts(params);
+      set({ globalAuth: data || [], globalAuthLoading: false });
+    } catch (e) {
+      console.error('Failed to fetch global auth:', e);
+      set({ globalAuth: [], globalAuthLoading: false });
+    }
+  },
   setTimeWindowHours: (hours) => {
     set({ timeWindowHours: hours });
     get().fetchStats(hours);

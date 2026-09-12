@@ -4,77 +4,39 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import {
   Search,
-  ChevronLeft,
-  ChevronRight,
-  Download,
   Terminal,
   Copy,
   Check,
   ChevronDown,
   ChevronUp,
+  Download,
+  ExternalLink,
+  Shield,
+  Clock,
+  Filter,
   RefreshCw,
-  Zap,
 } from 'lucide-react';
-import { cn, formatTimestamp, getIntentColor } from '@/lib/utils';
+import { cn, formatTimestamp } from '@/lib/utils';
 import { useDashboardStore } from '@/lib/store';
 import { normalizeIntent } from '@/lib/intents';
 import { safeCopyToClipboard } from '@/lib/clipboard';
 
-export default function CommandsPage() {
-  const { sessions, fetchSessions, commands, fetchSessionCommands } = useDashboardStore();
+export default function GlobalCommandsPage() {
+  const { globalCommands, globalCommandsLoading, fetchGlobalCommands, timeWindowHours } = useDashboardStore();
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedIntent, setSelectedIntent] = useState<string>('all');
+  const [selectedStatus, setSelectedStatus] = useState<'all' | 'success' | 'failed'>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [expandedCommands, setExpandedCommands] = useState<Set<string>>(new Set());
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const commandsPerPage = 50;
-
-  const timeWindowHours = useDashboardStore((s) => s.timeWindowHours);
+  const itemsPerPage = 50;
 
   useEffect(() => {
-    fetchSessions({ limit: 200, hours: timeWindowHours });
-  }, [fetchSessions, timeWindowHours]);
+    fetchGlobalCommands({ hours: timeWindowHours, limit: 300 });
+  }, [fetchGlobalCommands, timeWindowHours]);
 
-  const sessionsArray = sessions ?? [];
-  const sessionOptions = useMemo(() => {
-    return sessionsArray.filter((s) => (s.command_count ?? 0) > 0);
-  }, [sessionsArray]);
-
-  useEffect(() => {
-    if (!selectedSessionId && sessionOptions.length > 0) {
-      setSelectedSessionId(sessionOptions[0].session_id);
-    }
-  }, [sessionOptions, selectedSessionId]);
-
-  useEffect(() => {
-    if (selectedSessionId) {
-      fetchSessionCommands(selectedSessionId);
-    }
-  }, [selectedSessionId, fetchSessionCommands]);
-
-  const commandsArray = commands ?? [];
-
-  const filteredCommands = useMemo(() => {
-    return commandsArray.filter((cmd) => {
-      const q = searchQuery.toLowerCase();
-      const matchesSearch =
-        !q ||
-        cmd.command.toLowerCase().includes(q) ||
-        (cmd.output?.toLowerCase() ?? '').includes(q) ||
-        (cmd.intent?.toLowerCase() ?? '').includes(q);
-      return matchesSearch;
-    });
-  }, [commandsArray, searchQuery]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredCommands.length / commandsPerPage));
-  const paginatedCommands = useMemo(() => {
-    return filteredCommands.slice(
-      (currentPage - 1) * commandsPerPage,
-      currentPage * commandsPerPage
-    );
-  }, [filteredCommands, currentPage, commandsPerPage]);
-
-  const copyToClipboard = useCallback(async (text: string, key: string) => {
+  const copyToClipboard = useCallback(async (text: string, key: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     const ok = await safeCopyToClipboard(text);
     if (ok) {
       setCopiedKey(key);
@@ -85,240 +47,303 @@ export default function CommandsPage() {
   const toggleCommand = (cmdId: string) => {
     setExpandedCommands((prev) => {
       const next = new Set(prev);
-      if (next.has(cmdId)) {
-        next.delete(cmdId);
-      } else {
-        next.add(cmdId);
-      }
+      if (next.has(cmdId)) next.delete(cmdId);
+      else next.add(cmdId);
       return next;
     });
   };
 
+  const filteredCommands = useMemo(() => {
+    const list = globalCommands || [];
+    return list.filter((cmd) => {
+      const q = searchQuery.toLowerCase();
+      const matchesSearch =
+        !q ||
+        cmd.command.toLowerCase().includes(q) ||
+        (cmd.output?.toLowerCase() ?? '').includes(q) ||
+        cmd.session_id.toLowerCase().includes(q) ||
+        (cmd.intent?.toLowerCase() ?? '').includes(q);
+
+      const matchesIntent = selectedIntent === 'all' || cmd.intent === selectedIntent;
+      const isSuccess = cmd.exit_code === 0 || cmd.success;
+      const matchesStatus =
+        selectedStatus === 'all' ||
+        (selectedStatus === 'success' && isSuccess) ||
+        (selectedStatus === 'failed' && !isSuccess);
+
+      return matchesSearch && matchesIntent && matchesStatus;
+    });
+  }, [globalCommands, searchQuery, selectedIntent, selectedStatus]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredCommands.length / itemsPerPage));
+  const paginatedCommands = useMemo(() => {
+    return filteredCommands.slice(
+      (currentPage - 1) * itemsPerPage,
+      currentPage * itemsPerPage
+    );
+  }, [filteredCommands, currentPage, itemsPerPage]);
+
   const exportToCSV = () => {
     if (filteredCommands.length === 0) return;
-    const headers = ['Time', 'Session ID', 'Command', 'Status', 'Intent', 'Output'];
+    const headers = ['Timestamp', 'Session ID', 'Command', 'Exit Code', 'Duration MS', 'Intent', 'MITRE Techniques', 'Output'];
     const rows = filteredCommands.map((c) => [
       c.timestamp ?? '',
       c.session_id ?? '',
       c.command ?? '',
-      c.success || c.exit_code === 0 ? 'Success' : 'Failed',
+      c.exit_code ?? 0,
+      c.duration_ms ?? 0,
       normalizeIntent(c.intent).label,
-      (c.output ?? '').replace(/\n/g, ' '),
+      (c.mitre_techniques || []).join('; '),
+      (c.output ?? '').replace(/\n/g, ' ').replace(/"/g, '""'),
     ]);
 
     const csvContent = [
       headers.join(','),
-      ...rows.map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')),
+      ...rows.map((r) => r.map((cell) => `"${cell}"`).join(',')),
     ].join('\n');
+
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `clouddecept-commands-${selectedSessionId?.slice(0, 8) || 'all'}.csv`);
-    document.body.appendChild(link);
+    link.href = url;
+    link.download = `clouddecept-commands-forensics-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
-    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="space-y-6 font-mono">
+    <div className="space-y-6 font-mono pb-12">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-3 border-b border-cyan-500/15">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-wider text-white uppercase flex items-center gap-2.5">
             <Terminal className="w-5 h-5 text-cyan-400" />
-            <span>CAPTURED COMMAND INTELLIGENCE</span>
+            <span>GLOBAL COMMAND FORENSICS EXPLORER</span>
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Analyzing <span className="text-cyan-300 font-bold">{commandsArray.length} executions</span> in session • <span className="text-emerald-400 font-bold">{sessionOptions.length} sessions</span> with captured activity
+            Analyzing executed shell commands across all honeypot sessions in the selected time window ({timeWindowHours >= 87600 ? 'All-Time' : `Last ${timeWindowHours}h`})
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-400/60" />
-            <input
-              type="search"
-              placeholder="Search command or output..."
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="w-64 pl-9 pr-3 py-1.5 text-xs rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
-            />
-          </div>
-
-          <select
-            value={selectedSessionId || ''}
-            onChange={(e) => {
-              setSelectedSessionId(e.target.value);
-              setCurrentPage(1);
-            }}
-            className="px-2.5 py-1.5 text-xs rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 focus:outline-none focus:border-cyan-400 max-w-[280px]"
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => fetchGlobalCommands({ hours: timeWindowHours, limit: 300 })}
+            className="p-2 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 hover:text-cyan-300"
+            title="Refresh commands"
           >
-            {sessionOptions.length === 0 && <option value="">No sessions with commands</option>}
-            {sessionOptions.map((session) => (
-              <option key={session.session_id} value={session.session_id}>
-                {session.session_id.slice(0, 10)}... ({session.command_count} cmds) - {session.src_ip || session.attacker_ip}
-              </option>
-            ))}
-          </select>
-
+            <RefreshCw className={cn('w-4 h-4', globalCommandsLoading && 'animate-spin text-cyan-400')} />
+          </button>
           <button
             onClick={exportToCSV}
-            disabled={filteredCommands.length === 0}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-cyan-300 bg-[#070e22] border border-cyan-500/30 rounded-lg hover:border-cyan-400 hover:text-white transition-all disabled:opacity-50"
-            title="Export commands as CSV"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/25 text-xs text-cyan-300 hover:border-cyan-400"
           >
-            <Download className="w-3.5 h-3.5 text-cyan-400" />
-            CSV
+            <Download className="w-3.5 h-3.5" />
+            <span>EXPORT CSV</span>
           </button>
         </div>
       </div>
 
-      {/* Main Glass Table */}
-      <div className="glass-panel rounded-2xl overflow-hidden border border-cyan-500/20 shadow-2xl">
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Time (UTC)</th>
-                <th>Session</th>
-                <th>Adversary Command String</th>
-                <th>Status</th>
-                <th>Intent</th>
-                <th>Output Preview</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paginatedCommands.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-4 py-16 text-center text-slate-500 text-xs">
-                    No commands captured for this session. Select another session above.
-                  </td>
-                </tr>
-              ) : (
-                paginatedCommands.map((cmd, index) => {
-                  const cmdKey = cmd.event_id || cmd.id || `cmd-${index}`;
-                  const isExpanded = expandedCommands.has(cmdKey);
-                  const normIntent = normalizeIntent(cmd.intent);
-
-                  return (
-                    <tr key={cmdKey} className={cn('text-xs', isExpanded && 'bg-cyan-950/40')}>
-                      <td className="text-slate-400 whitespace-nowrap">
-                        {formatTimestamp(cmd.timestamp)}
-                      </td>
-                      <td>
-                        <Link
-                          href={`/sessions/${cmd.session_id}`}
-                          className="font-bold text-cyan-400 hover:underline"
-                        >
-                          {cmd.session_id.slice(0, 10)}...
-                        </Link>
-                      </td>
-                      <td className="max-w-xs">
-                        <code className="text-xs font-bold text-emerald-400 truncate block">
-                          {cmd.command}
-                        </code>
-                      </td>
-                      <td>
-                        <span
-                          className={cn(
-                            'badge text-[10px] uppercase font-bold',
-                            cmd.success || cmd.exit_code === 0
-                              ? 'text-emerald-400 bg-emerald-950/80 border-emerald-500/40'
-                              : 'text-rose-400 bg-rose-950/80 border-rose-500/40'
-                          )}
-                        >
-                          {cmd.success || cmd.exit_code === 0 ? 'SUCCESS' : 'FAILED'}
-                        </span>
-                      </td>
-                      <td>
-                        <span
-                          className={cn('badge text-[10px] px-2', normIntent.badgeClass)}
-                          title={normIntent.description}
-                        >
-                          {normIntent.label}
-                        </span>
-                      </td>
-                      <td className="max-w-md">
-                        {cmd.output ? (
-                          <code className="text-slate-400 truncate block text-[11px]">
-                            {cmd.output.slice(0, 75)}
-                            {cmd.output.length > 75 ? '...' : ''}
-                          </code>
-                        ) : (
-                          <span className="text-slate-600">No output</span>
-                        )}
-                      </td>
-                      <td>
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => toggleCommand(cmdKey)}
-                            className="p-1 rounded text-slate-400 hover:text-cyan-300 hover:bg-slate-800 transition-colors"
-                            aria-label={isExpanded ? 'Collapse' : 'Expand'}
-                          >
-                            {isExpanded ? (
-                              <ChevronUp className="w-4 h-4" />
-                            ) : (
-                              <ChevronDown className="w-4 h-4" />
-                            )}
-                          </button>
-                          <button
-                            onClick={() => copyToClipboard(cmd.command, cmdKey)}
-                            className="p-1 rounded text-slate-400 hover:text-cyan-300 hover:bg-slate-800 transition-colors"
-                            aria-label="Copy command"
-                            title="Copy command string"
-                          >
-                            {copiedKey === cmdKey ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-400" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5" />
-                            )}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+      {/* Filter Toolbar */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-[#070e22] p-3.5 rounded-xl border border-cyan-500/20">
+        {/* Search */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-400/60" />
+          <input
+            type="search"
+            placeholder="Search command, output, session..."
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg bg-[#040816] border border-cyan-500/25 text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
+          />
         </div>
 
-        {totalPages > 1 && (
-          <div className="p-4 border-t border-cyan-500/15 flex items-center justify-between text-xs text-slate-400">
-            <div>
-              Showing {(currentPage - 1) * commandsPerPage + 1} to{' '}
-              {Math.min(currentPage * commandsPerPage, filteredCommands.length)} of{' '}
-              {filteredCommands.length} commands
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="p-1.5 rounded-lg border border-cyan-500/20 text-slate-300 hover:text-cyan-300 bg-[#070e22] disabled:opacity-30 disabled:cursor-not-allowed"
-                aria-label="Previous page"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="text-cyan-400 font-bold px-2">
-                {currentPage} / {totalPages}
-              </span>
-              <button
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                className="p-1.5 rounded-lg border border-cyan-500/20 text-slate-300 hover:text-cyan-300 bg-[#070e22] disabled:opacity-30 disabled:cursor-not-allowed"
-                aria-label="Next page"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        )}
+        {/* Intent filter */}
+        <select
+          value={selectedIntent}
+          onChange={(e) => {
+            setSelectedIntent(e.target.value);
+            setCurrentPage(1);
+          }}
+          className="px-3 py-1.5 rounded-lg bg-[#040816] border border-cyan-500/25 text-xs text-cyan-300 focus:outline-none focus:border-cyan-400"
+        >
+          <option value="all">All Adversary Intents</option>
+          <option value="credential_hunting">Credential Hunting</option>
+          <option value="system_discovery">System Discovery</option>
+          <option value="persistence">Persistence</option>
+          <option value="privilege_escalation">Privilege Escalation</option>
+          <option value="lateral_movement">Lateral Movement</option>
+          <option value="defense_evasion">Defense Evasion</option>
+          <option value="data_exfiltration">Data Exfiltration</option>
+          <option value="reconnaissance">Reconnaissance</option>
+          <option value="unknown">Unknown / No Pattern</option>
+        </select>
+
+        {/* Status filter */}
+        <select
+          value={selectedStatus}
+          onChange={(e) => {
+            setSelectedStatus(e.target.value as any);
+            setCurrentPage(1);
+          }}
+          className="px-3 py-1.5 rounded-lg bg-[#040816] border border-cyan-500/25 text-xs text-cyan-300 focus:outline-none focus:border-cyan-400"
+        >
+          <option value="all">All Execution Results</option>
+          <option value="success">Exit Code 0 (Success)</option>
+          <option value="failed">Non-Zero Exit Code (Failed)</option>
+        </select>
+
+        {/* Metrics Badge */}
+        <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-[#040816] border border-cyan-500/15 text-xs text-slate-400">
+          <span>MATCHED</span>
+          <span className="text-cyan-300 font-bold">{filteredCommands.length} executions</span>
+        </div>
       </div>
+
+      {/* Commands List */}
+      {globalCommandsLoading && filteredCommands.length === 0 ? (
+        <div className="p-12 text-center rounded-xl bg-[#070e22] border border-cyan-500/15">
+          <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin mx-auto mb-2" />
+          <div className="text-xs text-slate-300 uppercase font-bold">Querying Global ClickHouse Commands...</div>
+        </div>
+      ) : filteredCommands.length === 0 ? (
+        <div className="p-12 text-center rounded-xl bg-[#070e22] border border-cyan-500/15">
+          <Terminal className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+          <h3 className="text-sm font-bold text-white uppercase">NO COMMANDS FOUND FOR THIS CRITERIA</h3>
+          <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+            Try expanding the global time window selector (e.g. 7D or All-Time) or clearing search filters.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {paginatedCommands.map((cmd, idx) => {
+            const cmdKey = cmd.event_id || `${cmd.session_id}-${idx}`;
+            const isExpanded = expandedCommands.has(cmdKey);
+            const intentInfo = normalizeIntent(cmd.intent);
+            const isSuccess = cmd.exit_code === 0 || cmd.success;
+
+            return (
+              <div
+                key={cmdKey}
+                className="rounded-xl border border-cyan-500/20 bg-[#070e22] overflow-hidden transition-all"
+              >
+                {/* Header row */}
+                <div
+                  onClick={() => toggleCommand(cmdKey)}
+                  className="p-3.5 bg-[#040816] border-b border-cyan-500/15 flex flex-wrap items-center justify-between gap-2.5 cursor-pointer hover:bg-[#07112c]"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-emerald-400 font-bold text-xs">$</span>
+                    <span className="text-xs font-bold text-white font-mono">{cmd.command}</span>
+                    {cmd.arguments && cmd.arguments.length > 0 && (
+                      <span className="text-xs text-slate-400 truncate max-w-xs">{cmd.arguments.join(' ')}</span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2.5 flex-shrink-0">
+                    <span className="text-[10px] text-slate-400">{formatTimestamp(cmd.timestamp)}</span>
+
+                    <Link
+                      href={`/sessions/${cmd.session_id}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-500/30 hover:border-cyan-400 flex items-center gap-1"
+                      title="Investigate Session"
+                    >
+                      <span>{cmd.session_id.slice(0, 8)}</span>
+                      <ExternalLink className="w-2.5 h-2.5 text-cyan-400" />
+                    </Link>
+
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-900 border border-slate-700 text-slate-300">
+                      {intentInfo.label}
+                    </span>
+
+                    {isSuccess ? (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-500/30">
+                        0 OK
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-950 text-rose-300 border border-rose-500/30">
+                        {cmd.exit_code ?? 'ERR'}
+                      </span>
+                    )}
+
+                    {isExpanded ? (
+                      <ChevronUp className="w-4 h-4 text-cyan-400" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-slate-500" />
+                    )}
+                  </div>
+                </div>
+
+                {/* Expanded Output */}
+                {isExpanded && (
+                  <div className="p-4 bg-[#02050f] space-y-2 border-t border-cyan-500/15">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 uppercase">
+                      <span>COMMAND EXECUTION RECORD</span>
+                      <div className="flex items-center gap-3">
+                        <span>Duration: {cmd.duration_ms ?? 0} ms</span>
+                        <button
+                          onClick={(e) => copyToClipboard(cmd.output || '', `out-${cmdKey}`, e)}
+                          className="text-cyan-400 hover:underline flex items-center gap-1"
+                        >
+                          <Copy className="w-3 h-3" />
+                          <span>{copiedKey === `out-${cmdKey}` ? 'Copied' : 'Copy Output'}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <pre className="p-3 rounded-lg bg-[#040816] border border-cyan-500/20 text-xs font-mono text-emerald-300/90 overflow-x-auto whitespace-pre-wrap max-h-60 scrollbar-thin">
+                      {cmd.output ? cmd.output : <span className="text-slate-600 italic">(Execution yielded no stdout / stderr)</span>}
+                    </pre>
+
+                    {cmd.mitre_techniques && cmd.mitre_techniques.length > 0 && (
+                      <div className="pt-2 flex items-center gap-2 text-xs">
+                        <span className="text-[10px] text-slate-400 uppercase">MITRE TECHNIQUES:</span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {cmd.mitre_techniques.map((t) => (
+                            <Link
+                              key={t}
+                              href={`/mitre?technique=${encodeURIComponent(t)}`}
+                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-900/40 text-cyan-300 border border-cyan-500/30 hover:border-cyan-400"
+                            >
+                              {t}
+                            </Link>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between pt-4 border-t border-cyan-500/15 text-xs text-slate-400">
+          <span>Page {currentPage} of {totalPages}</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="px-3 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="px-3 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

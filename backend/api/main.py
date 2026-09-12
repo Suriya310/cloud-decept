@@ -809,6 +809,113 @@ async def get_session(session_id: str):
     return SessionSummary(**sess_dict)
 
 
+
+@app.get("/commands", response_model=list[CommandResponse])
+async def list_commands(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    session_id: Optional[str] = None,
+    command: Optional[str] = None,
+    intent: Optional[str] = None,
+    hours: int = Query(24, ge=1, le=87600),
+):
+    """List recent commands across all sessions with filters (deduplicated by event_id)"""
+    try:
+        limit_val = int(limit)
+    except Exception:
+        limit_val = 50
+    try:
+        offset_val = int(offset)
+    except Exception:
+        offset_val = 0
+    try:
+        hours_val = int(hours)
+    except Exception:
+        hours_val = 24
+
+    since = datetime.utcnow() - timedelta(hours=hours_val)
+    since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+
+    where_clauses = [f"timestamp >= '{since_str}'"]
+    if session_id:
+        safe_sid = session_id.replace("'", "''")
+        where_clauses.append(f"session_id = '{safe_sid}'")
+    if command:
+        safe_cmd = command.replace("'", "''")
+        where_clauses.append(f"(command ILIKE '%{safe_cmd}%' OR output ILIKE '%{safe_cmd}%')")
+    if intent and intent != "all":
+        safe_intent = intent.replace("'", "''")
+        where_clauses.append(f"intent = '{safe_intent}'")
+
+    where_sql = " AND ".join(where_clauses)
+
+    results = (await run_ch_query(
+        f"""
+        SELECT event_id, session_id, timestamp, command, arguments,
+               output, exit_code, duration_ms, intent, mitre_techniques
+        FROM clouddecept.commands
+        WHERE {where_sql}
+        ORDER BY timestamp DESC
+        LIMIT 1 BY event_id
+        LIMIT {limit_val} OFFSET {offset_val}
+        """
+    )).named_results()
+
+    return [CommandResponse(**r) for r in results]
+
+
+@app.get("/auth", response_model=list[AuthAttemptResponse])
+async def list_auth_attempts(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    session_id: Optional[str] = None,
+    username: Optional[str] = None,
+    success: Optional[bool] = None,
+    hours: int = Query(24, ge=1, le=87600),
+):
+    """List recent auth attempts across all sessions (deduplicated by event_id)"""
+    try:
+        limit_val = int(limit)
+    except Exception:
+        limit_val = 50
+    try:
+        offset_val = int(offset)
+    except Exception:
+        offset_val = 0
+    try:
+        hours_val = int(hours)
+    except Exception:
+        hours_val = 24
+
+    since = datetime.utcnow() - timedelta(hours=hours_val)
+    since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+
+    where_clauses = [f"timestamp >= '{since_str}'"]
+    if session_id:
+        safe_sid = session_id.replace("'", "''")
+        where_clauses.append(f"session_id = '{safe_sid}'")
+    if username:
+        safe_user = username.replace("'", "''")
+        where_clauses.append(f"username ILIKE '%{safe_user}%'")
+    if success is not None:
+        where_clauses.append(f"success = {1 if success else 0}")
+
+    where_sql = " AND ".join(where_clauses)
+
+    results = (await run_ch_query(
+        f"""
+        SELECT event_id, session_id, timestamp, username, password,
+               success, auth_method
+        FROM clouddecept.auth_attempts
+        WHERE {where_sql}
+        ORDER BY timestamp DESC
+        LIMIT 1 BY event_id
+        LIMIT {limit_val} OFFSET {offset_val}
+        """
+    )).named_results()
+
+    return [AuthAttemptResponse(**r) for r in results]
+
 @app.get("/sessions/{session_id}/commands", response_model=list[CommandResponse])
 async def get_session_commands(
     session_id: str,

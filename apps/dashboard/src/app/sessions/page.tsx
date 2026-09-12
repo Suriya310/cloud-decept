@@ -55,9 +55,11 @@ export default function SessionsPage() {
     }
   }, []);
 
+  const timeWindowHours = useDashboardStore((s) => s.timeWindowHours);
+
   const loadSessions = useCallback(() => {
-    fetchSessions({ status: filters.status, limit: 500, hours: 8760 });
-  }, [fetchSessions, filters.status]);
+    fetchSessions({ status: filters.status, limit: 500, hours: timeWindowHours });
+  }, [fetchSessions, filters.status, timeWindowHours]);
 
   useEffect(() => {
     loadSessions();

@@ -47,7 +47,7 @@ export function Header() {
     try {
       await Promise.allSettled([
         fetchConnectionStatus(),
-        fetchStats(24),
+        fetchStats(useDashboardStore.getState().timeWindowHours),
       ]);
     } finally {
       setTimeout(() => setIsRefreshing(false), 500);
@@ -104,10 +104,23 @@ export function Header() {
                 isApiHealthy ? 'bg-emerald-400 shadow-sm shadow-emerald-400 animate-pulse' : 'bg-rose-500'
               )}
             />
-            <span className="text-[11px] font-mono font-bold tracking-wider text-slate-200 uppercase">
+            <span className="text-[11px] font-mono font-bold tracking-wider text-slate-200 uppercase hidden lg:block">
               {isApiHealthy ? 'SYSTEM OPERATIONAL' : 'SYSTEM DISCONNECTED'}
             </span>
           </div>
+
+          {/* Time Window Selector */}
+          <select
+            className="px-2 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/20 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-400 cursor-pointer"
+            value={useDashboardStore((s) => s.timeWindowHours)}
+            onChange={(e) => useDashboardStore.getState().setTimeWindowHours(Number(e.target.value))}
+          >
+            <option value={1}>Last 1 Hour</option>
+            <option value={24}>Last 24 Hours</option>
+            <option value={168}>Last 7 Days</option>
+            <option value={720}>Last 30 Days</option>
+            <option value={87600}>All-Time (10Y)</option>
+          </select>
 
           {/* Telemetry Refresh Action */}
           <button

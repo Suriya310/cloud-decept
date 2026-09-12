@@ -15,6 +15,7 @@ import {
   ChevronRight,
   Radio,
   Zap,
+  Target,
 } from 'lucide-react';
 import { useDashboardStore } from '@/lib/store';
 import { useSidebar } from '@/lib/SidebarContext';
@@ -22,6 +23,7 @@ import { useSidebar } from '@/lib/SidebarContext';
 const navigation = [
   { name: 'Overview', href: '/', icon: LayoutDashboard, badge: 'SOC' },
   { name: 'Live Sessions', href: '/sessions', icon: Activity },
+  { name: 'Attackers', href: '/attackers', icon: Target },
   { name: 'Threat Intelligence', href: '/threat-intel', icon: Shield },
   { name: 'Commands', href: '/commands', icon: Terminal },
   { name: 'Adaptations', href: '/adaptations', icon: Zap },

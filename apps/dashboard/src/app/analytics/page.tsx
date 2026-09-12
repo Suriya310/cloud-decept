@@ -257,7 +257,7 @@ export default function AnalyticsPage() {
         <div className="glass-panel p-4 rounded-xl border border-cyan-500/20 flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase">
-              TOTAL SESSIONS
+              TOTAL SESSIONS (ALL-TIME) (ALL-TIME)
             </span>
             <Activity className="w-4 h-4 text-cyan-400" />
           </div>
@@ -289,7 +289,7 @@ export default function AnalyticsPage() {
         <div className="glass-panel p-4 rounded-xl border border-purple-500/20 flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-mono font-bold tracking-widest text-slate-400 uppercase">
-              TOTAL COMMANDS
+              TOTAL COMMANDS (ALL-TIME)
             </span>
             <Terminal className="w-4 h-4 text-purple-400" />
           </div>
@@ -497,7 +497,7 @@ export default function AnalyticsPage() {
             <div>
               <h2 className="text-sm font-mono font-bold text-white tracking-wider flex items-center gap-2 uppercase">
                 <ShieldAlert className="w-4 h-4 text-rose-400" />
-                THREAT LEVEL SPECTRUM
+                THREAT LEVEL SPECTRUM (ALL-TIME)
               </h2>
               <p className="text-xs text-slate-400 font-mono mt-0.5">Risk tier classifications</p>
             </div>

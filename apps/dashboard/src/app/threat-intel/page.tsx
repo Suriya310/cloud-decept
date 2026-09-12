@@ -61,14 +61,16 @@ export default function ThreatIntelPage() {
     }
   }, []);
 
+  const timeWindowHours = useDashboardStore((s) => s.timeWindowHours);
+
   const loadAll = useCallback(async () => {
     setIsRefreshing(true);
     try {
       const [,,, highRiskData] = await Promise.all([
         refreshStats(),
-        fetchSessions({ limit: 100, hours: 8760 }),
+        fetchSessions({ limit: 100, hours: timeWindowHours }),
         fetchThreatIntelItems({ limit: 100 }),
-        api.getSessions({ min_skill_level: 5, limit: 20 }).catch(() => ({ sessions: [], total: 0 })),
+        api.getSessions({ min_skill_level: 5, limit: 20, hours: timeWindowHours }).catch(() => ({ sessions: [], total: 0 })),
         fetchMitreTechniques(),
         fetchConnectionStatus(),
       ]);
@@ -79,7 +81,7 @@ export default function ThreatIntelPage() {
     } finally {
       setIsRefreshing(false);
     }
-  }, [refreshStats, fetchSessions, fetchThreatIntelItems, fetchMitreTechniques, fetchConnectionStatus]);
+  }, [refreshStats, fetchSessions, fetchThreatIntelItems, fetchMitreTechniques, fetchConnectionStatus, timeWindowHours]);
 
   useEffect(() => {
     loadAll();

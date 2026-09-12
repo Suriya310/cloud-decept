@@ -16,13 +16,14 @@ export function useDashboardStats(options: { autoRefreshIntervalMs?: number } = 
   const connectionStatus = useDashboardStore((s) => s.connectionStatus);
   const fetchConnectionStatus = useDashboardStore((s) => s.fetchConnectionStatus);
 
+  const timeWindowHours = useDashboardStore((s) => s.timeWindowHours);
+
   const refresh = useCallback(async () => {
-    // Canonical time window: default 24h (which returns all-time totals + 24h recent metrics + authoritative charts)
     await Promise.allSettled([
-      fetchStats(24),
+      fetchStats(timeWindowHours),
       fetchConnectionStatus(),
     ]);
-  }, [fetchStats, fetchConnectionStatus]);
+  }, [fetchStats, fetchConnectionStatus, timeWindowHours]);
 
   // Optional periodic background refresh
   useEffect(() => {

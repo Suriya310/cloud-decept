@@ -60,6 +60,10 @@ interface DashboardActions {
 
   // Subscriptions
   subscribeToEvents: () => () => void;
+
+  // Time Window Control
+  timeWindowHours: number;
+  setTimeWindowHours: (hours: number) => void;
 }
 
 const defaultFilters = {
@@ -122,8 +126,13 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   isConnected: false,
   connectionStatus: null,
   filters: defaultFilters,
+  timeWindowHours: 24,
 
   // Actions
+  setTimeWindowHours: (hours) => {
+    set({ timeWindowHours: hours });
+    get().fetchStats(hours);
+  },
   fetchSessions: async (params) => {
     set({ sessionsLoading: true, sessionsError: null });
     try {
@@ -242,8 +251,8 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
 
   fetchStats: async (hours: number = 24) => {
     if (typeof window !== 'undefined') {
-      console.log("[CD-DEBUG-1] fetchStats CALLED", { hours });
-      console.log("[CD-DEBUG-3] STORE BEFORE", get().stats);
+
+
     }
     // If a fetch is already in flight, return the shared promise
     if (statsFetchPromise) {
@@ -254,15 +263,15 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
       try {
         const rawData = await api.getStats(hours);
         if (typeof window !== 'undefined') {
-          console.log("[CD-DEBUG-2] fetchStats RESPONSE", rawData);
+
         }
         const data = (rawData as any)?.stats || (rawData as any)?.data || rawData;
         if (typeof window !== 'undefined') {
-          console.log("[CD-DEBUG-4] STORE AFTER", data);
+
         }
         set({ stats: data, statsLoading: false, statsError: null });
         if (typeof window !== 'undefined') {
-          console.log("[CD-DEBUG-6] ZUSTAND DIRECT READ", useDashboardStore.getState().stats);
+
         }
         return data;
       } catch (error: any) {

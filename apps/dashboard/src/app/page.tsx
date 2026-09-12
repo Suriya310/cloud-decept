@@ -31,9 +31,12 @@ import { useDashboardStore } from '@/lib/store';
 import { getCountryName } from '@/lib/countries';
 import { normalizeIntent } from '@/lib/intents';
 import { evaluateThreat } from '@/lib/threatScore';
+import { useRouter } from 'next/navigation';
 import { safeCopyToClipboard } from '@/lib/clipboard';
 
 export default function OverviewPage() {
+  const router = useRouter();
+  const { setFilters } = useDashboardStore();
   const {
     stats,
     totalSessions,
@@ -49,20 +52,7 @@ export default function OverviewPage() {
     refresh: refreshStats,
   } = useDashboardStats();
 
-  const renderCount = useRef(0);
-  renderCount.current++;
-  if (typeof window !== 'undefined') {
-    console.log("[CD-RENDER]", renderCount.current, Date.now());
-    console.log("[CD-DEBUG-5] OVERVIEW RENDER", {
-      stats,
-      total_sessions: (stats as any)?.total_sessions,
-      total_commands: (stats as any)?.total_commands,
-      unique_attackers: (stats as any)?.unique_attackers,
-      recent_commands: (stats as any)?.recent_commands,
-      active_sessions: (stats as any)?.active_sessions,
-    });
-  }
-
+  
   // Granular Zustand selectors to prevent re-rendering on high-frequency store updates
   const sessions = useDashboardStore((s) => s.sessions);
   const fetchSessions = useDashboardStore((s) => s.fetchSessions);
@@ -88,26 +78,28 @@ export default function OverviewPage() {
     }
   }, []);
 
+  const timeWindowHours = useDashboardStore((s) => s.timeWindowHours);
+
   const loadData = useCallback(async () => {
     setIsRefreshing(true);
     try {
       await Promise.allSettled([
-        fetchStats(24),
-        fetchSessions({ limit: 50, hours: 8760 }),
-        fetchTopCommands(24, 20),
-        fetchTopAttackers(168, 10),
+        fetchStats(timeWindowHours),
+        fetchSessions({ limit: 50, hours: timeWindowHours }),
+        fetchTopCommands(timeWindowHours, 20),
+        fetchTopAttackers(timeWindowHours, 10),
         fetchConnectionStatus(),
       ]);
     } finally {
       setIsRefreshing(false);
     }
-  }, [fetchStats, fetchSessions, fetchTopCommands, fetchTopAttackers, fetchConnectionStatus]);
+  }, [fetchStats, fetchSessions, fetchTopCommands, fetchTopAttackers, fetchConnectionStatus, timeWindowHours]);
 
   // Initial load on mount - runs strictly ONCE on mount
   useEffect(() => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [timeWindowHours]);
 
   // TEMP DEBUG: SSE subscription disabled to test REST stats responsiveness without SSE event storm
   // useEffect(() => {
@@ -121,13 +113,13 @@ export default function OverviewPage() {
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => {
-      fetchStats(24);
-      fetchTopCommands(24, 20);
-      fetchTopAttackers(168, 10);
+      fetchStats(timeWindowHours);
+      fetchTopCommands(timeWindowHours, 20);
+      fetchTopAttackers(timeWindowHours, 10);
       fetchConnectionStatus();
     }, 30000);
     return () => clearInterval(interval);
-  }, [autoRefresh, fetchStats, fetchTopCommands, fetchTopAttackers, fetchConnectionStatus]);
+  }, [autoRefresh, fetchStats, fetchTopCommands, fetchTopAttackers, fetchConnectionStatus, timeWindowHours]);
 
   const sessionsArray = sessions ?? [];
   const realTimeEventsArray = realTimeEvents ?? [];
@@ -262,10 +254,10 @@ export default function OverviewPage() {
         {/* Metric 2: Total Sessions */}
         <div className="glass-panel p-4 rounded-xl relative overflow-hidden border border-cyan-500/25">
           <div className="flex items-center justify-between text-slate-400 text-[10px] font-mono uppercase tracking-wider mb-1">
-            <span>TOTAL SESSIONS</span>
+            <span>TOTAL SESSIONS (ALL-TIME)</span>
             <Users className="w-3.5 h-3.5 text-cyan-400/80" />
           </div>
-          <div className="text-2xl font-black font-mono text-white tracking-tight glow-cyan">
+          <div className="text-2xl font-black font-mono text-white tracking-tight ">
             {totalSessions.toLocaleString()}
           </div>
           <p className="text-[10px] font-mono text-slate-400 mt-1">
@@ -276,7 +268,7 @@ export default function OverviewPage() {
         {/* Metric 3: Total Commands */}
         <div className="glass-panel p-4 rounded-xl relative overflow-hidden border border-cyan-500/25">
           <div className="flex items-center justify-between text-slate-400 text-[10px] font-mono uppercase tracking-wider mb-1">
-            <span>TOTAL COMMANDS</span>
+            <span>TOTAL COMMANDS (ALL-TIME)</span>
             <Terminal className="w-3.5 h-3.5 text-cyan-400/80" />
           </div>
           <div className="text-2xl font-black font-mono text-white tracking-tight">
@@ -290,7 +282,7 @@ export default function OverviewPage() {
         {/* Metric 4: Unique Attackers */}
         <div className="glass-panel p-4 rounded-xl relative overflow-hidden border border-purple-500/30">
           <div className="flex items-center justify-between text-slate-400 text-[10px] font-mono uppercase tracking-wider mb-1">
-            <span>UNIQUE ATTACKERS</span>
+            <span>UNIQUE ATTACKERS (ALL-TIME)</span>
             <Globe className="w-3.5 h-3.5 text-purple-400/80" />
           </div>
           <div className="text-2xl font-black font-mono text-purple-300 tracking-tight">
@@ -304,7 +296,7 @@ export default function OverviewPage() {
         {/* Metric 5: Commands 24h */}
         <div className="glass-panel p-4 rounded-xl relative overflow-hidden border border-teal-500/30">
           <div className="flex items-center justify-between text-slate-400 text-[10px] font-mono uppercase tracking-wider mb-1">
-            <span>COMMANDS (24H)</span>
+            <span>COMMANDS ({timeWindowHours}H)</span>
             <Clock className="w-3.5 h-3.5 text-teal-400/80" />
           </div>
           <div className="text-2xl font-black font-mono text-teal-300 tracking-tight">
@@ -319,10 +311,10 @@ export default function OverviewPage() {
         <div className="glass-panel p-4 rounded-xl relative overflow-hidden border border-rose-500/30">
           <div className="absolute top-0 right-0 w-16 h-16 bg-rose-500/10 rounded-full blur-xl pointer-events-none" />
           <div className="flex items-center justify-between text-slate-400 text-[10px] font-mono uppercase tracking-wider mb-1">
-            <span>HIGH-RISK THREATS</span>
+            <span>HIGH-RISK THREATS (ALL-TIME)</span>
             <Flame className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
           </div>
-          <div className="text-2xl font-black font-mono text-rose-400 tracking-tight glow-rose">
+          <div className="text-2xl font-black font-mono text-rose-400 tracking-tight ">
             {highRiskCount.toLocaleString()}
           </div>
           <p className="text-[10px] font-mono text-slate-400 mt-1">
@@ -337,6 +329,10 @@ export default function OverviewPage() {
           data={topCountries}
           totalSessions={totalSessions}
           isLoading={statsLoading}
+          onCountrySelect={(code) => {
+            setFilters({ country: code });
+            router.push('/sessions');
+          }}
         />
       </div>
 

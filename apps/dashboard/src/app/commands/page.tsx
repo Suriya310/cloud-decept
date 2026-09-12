@@ -29,9 +29,11 @@ export default function CommandsPage() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const commandsPerPage = 50;
 
+  const timeWindowHours = useDashboardStore((s) => s.timeWindowHours);
+
   useEffect(() => {
-    fetchSessions({ limit: 200, hours: 8760 });
-  }, [fetchSessions]);
+    fetchSessions({ limit: 200, hours: timeWindowHours });
+  }, [fetchSessions, timeWindowHours]);
 
   const sessionsArray = sessions ?? [];
   const sessionOptions = useMemo(() => {

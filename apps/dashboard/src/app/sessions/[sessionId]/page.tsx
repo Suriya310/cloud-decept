@@ -35,6 +35,7 @@ import { normalizeIntent } from '@/lib/intents';
 import { evaluateThreat } from '@/lib/threatScore';
 import { safeCopyToClipboard } from '@/lib/clipboard';
 import { api } from '@/lib/api';
+import { FinalAssessment } from '@/lib/types';
 
 // Timeline event union type
 interface TimelineEvent {
@@ -125,19 +126,27 @@ export default function SessionInvestigationPage() {
 
   // Canonical assessment reconciliation:
   // Prefer reconciled session.assessment or threatIntel.summary to ensure one unified truth
-  const canonicalAssessment = useMemo(() => {
+  const canonicalAssessment = useMemo((): FinalAssessment | null => {
     if (session?.assessment) return session.assessment;
     if (threatIntel?.summary) {
       const s = threatIntel.summary;
+      const skill = s.skill_level ?? session?.skill_level ?? 1;
+      const score = session?.threat_score ?? (skill <= 10 ? skill * 10 : skill);
+      const rawRisk = s.risk_level?.toLowerCase();
+      const threatLevel: FinalAssessment['threat_level'] =
+        rawRisk === 'critical' || rawRisk === 'high' || rawRisk === 'medium' || rawRisk === 'low'
+          ? rawRisk
+          : (score <= 25 ? 'low' : score <= 55 ? 'medium' : score <= 75 ? 'high' : 'critical');
+      const intentStr = s.intent || s.primary_objective || session?.intent || 'system discovery';
       return {
-        status: 'analyzed',
-        threat_level: s.threat_level || s.risk_level || 'low',
-        threat_score: s.threat_score ?? session?.threat_score ?? (s.skill_level ? s.skill_level * 10 : 10),
-        intent: s.intent || s.primary_objective || 'system discovery',
-        skill_level: s.skill_level ?? session?.skill_level ?? 1,
+        status: 'classified',
+        threat_level: threatLevel,
+        threat_score: score,
+        intent: intentStr,
+        skill_level: skill,
         mitre_techniques: s.mitre_techniques || [],
-        tactics: s.tactics || [],
-        confidence: s.confidence || 'high',
+        tactics: session?.tactics || ['Discovery'],
+        confidence: 0.85,
         evidence_count: commandsList.length + authEvents.length,
         analysis_status: 'completed',
         analyzed_at: s.created_at || threatIntel.timestamp || new Date().toISOString(),
@@ -268,8 +277,8 @@ export default function SessionInvestigationPage() {
 
     // 6. Threat Assessment Event (Placed chronologically at time of analysis, AFTER evidence commands and termination)
     if (threatIntel?.summary || canonicalAssessment) {
-      const ti = threatIntel?.summary || {};
-      const analysisTime = threatIntel?.timestamp || ti.created_at || canonicalAssessment?.analyzed_at || (session.end_time ? new Date(new Date(session.end_time).getTime() + 2000).toISOString() : new Date().toISOString());
+      const ti = threatIntel?.summary;
+      const analysisTime = threatIntel?.timestamp || ti?.created_at || canonicalAssessment?.analyzed_at || (session.end_time ? new Date(new Date(session.end_time).getTime() + 2000).toISOString() : new Date().toISOString());
 
       events.push({
         id: `ti-${session.session_id}`,
@@ -278,13 +287,13 @@ export default function SessionInvestigationPage() {
         title: 'THREAT INTELLIGENCE ANALYSIS COMPLETED',
         status: 'info',
         badge: `${threat.label.toUpperCase()} (${effectiveSkillLevel}/10)`,
-        summary: ti.narrative || ti.summary || `Asynchronous behavioral analysis completed: Evaluated as ${primaryIntent.label} with skill rating ${effectiveSkillLevel}/10.`,
+        summary: ti?.narrative || ti?.summary || `Asynchronous behavioral analysis completed: Evaluated as ${primaryIntent.label} with skill rating ${effectiveSkillLevel}/10.`,
         details: {
-          'Assessment Status': canonicalAssessment?.status || 'analyzed',
+          'Assessment Status': canonicalAssessment?.status || 'classified',
           'Skill Level': `${effectiveSkillLevel} / 10`,
           'Threat Score': `${effectiveThreatScore} / 100`,
           'Primary Objective': primaryIntent.label,
-          'MITRE Techniques Identified': (ti.mitre_techniques || canonicalAssessment?.mitre_techniques || []).join(', ') || 'None',
+          'MITRE Techniques Identified': (ti?.mitre_techniques || canonicalAssessment?.mitre_techniques || []).join(', ') || 'None',
           'Analysis Source': canonicalAssessment?.source || 'threat-intel-service',
           'Analysis Timestamp': analysisTime,
         },
@@ -369,7 +378,7 @@ export default function SessionInvestigationPage() {
         skill_level: effectiveSkillLevel,
         mitre_techniques: Array.from(new Set(commandsList.flatMap(c => c.mitre_techniques || []))),
         tactics: [],
-        confidence: 'medium',
+        confidence: 0.5,
         evidence_count: commandsList.length + authEvents.length,
         analysis_status: 'heuristic',
         analyzed_at: new Date().toISOString(),

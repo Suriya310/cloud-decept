@@ -714,6 +714,64 @@ async def get_stats(
     )
 
 
+def consolidate_session_rows(rows: list[dict]) -> list[dict]:
+    """Deterministically consolidate duplicate historical rows per session_id.
+
+    Production environments may contain historical MergeTree tables with multiple rows per session.
+    This aggregates them deterministically into a single authoritative record without relying
+    on ClickHouse ReplacingMergeTree or FINAL semantics.
+    """
+    sessions_by_id: dict[str, list[dict]] = {}
+    for r in rows:
+        sid = r.get("session_id")
+        if not sid:
+            continue
+        if sid not in sessions_by_id:
+            sessions_by_id[sid] = []
+        sessions_by_id[sid].append(r)
+
+    consolidated = []
+    for sid, s_rows in sessions_by_id.items():
+        if len(s_rows) == 1:
+            consolidated.append(dict(s_rows[0]))
+            continue
+
+        base = dict(s_rows[0])
+        # Earliest start_time
+        start_times = [r["start_time"] for r in s_rows if r.get("start_time")]
+        if start_times:
+            base["start_time"] = min(start_times)
+
+        # Latest non-placeholder end_time
+        end_times = [r["end_time"] for r in s_rows if r.get("end_time") and r.get("end_time") != base.get("start_time")]
+        if end_times:
+            base["end_time"] = max(end_times)
+        elif any(r.get("end_time") for r in s_rows):
+            base["end_time"] = max(r["end_time"] for r in s_rows if r.get("end_time"))
+
+        base["duration_seconds"] = max(int(r.get("duration_seconds") or 0) for r in s_rows)
+        base["commands_executed"] = max(int(r.get("commands_executed") or 0) for r in s_rows)
+        base["credentials_tried"] = max(int(r.get("credentials_tried") or 0) for r in s_rows)
+        base["files_transferred"] = max(int(r.get("files_transferred") or 0) for r in s_rows)
+        base["skill_level"] = max(int(r.get("skill_level") or 0) for r in s_rows)
+
+        for field in ["attacker_ip", "country", "protocol", "disconnection_reason"]:
+            for r in s_rows:
+                if r.get(field):
+                    base[field] = r[field]
+                    break
+
+        for r in s_rows:
+            intent_val = r.get("intent")
+            if intent_val and str(intent_val).strip().lower() not in ("", "unknown", "none"):
+                base["intent"] = intent_val
+                break
+
+        consolidated.append(base)
+
+    return consolidated
+
+
 @app.get("/sessions", response_model=list[SessionSummary])
 async def list_sessions(
     limit: int = Query(50, ge=1, le=1000),
@@ -760,9 +818,61 @@ async def list_sessions(
         """
     )).named_results()
 
+    raw_results = list(results)
+    if not raw_results:
+        return []
+
+    # Deterministically consolidate multiple historical rows per session_id
+    consolidated_results = consolidate_session_rows(raw_results)
+
+    # Batch reconcile commands_executed and credentials_tried against authoritative raw telemetry
+    sids = [r.get("session_id") for r in consolidated_results if r.get("session_id")]
+    cmd_counts = None
+    auth_counts = None
+    if sids:
+        placeholders = ",".join(f"'{sid}'" for sid in sids)
+        try:
+            cmd_res = (await run_ch_query(
+                f"""
+                SELECT session_id, uniqExact(event_id) as cmd_count
+                FROM clouddecept.commands
+                WHERE session_id IN ({placeholders})
+                GROUP BY session_id
+                """
+            )).named_results()
+            cmd_counts = {r["session_id"]: int(r["cmd_count"]) for r in cmd_res}
+        except Exception as e:
+            logger.debug(f"Could not batch reconcile command counts: {e}")
+
+        try:
+            auth_res = (await run_ch_query(
+                f"""
+                SELECT session_id, uniqExact(event_id) as auth_count
+                FROM clouddecept.auth_attempts
+                WHERE session_id IN ({placeholders})
+                GROUP BY session_id
+                """
+            )).named_results()
+            auth_counts = {r["session_id"]: int(r["auth_count"]) for r in auth_res}
+        except Exception as e:
+            logger.debug(f"Could not batch reconcile auth counts: {e}")
+
     formatted_sessions = []
-    for r in results:
-        sess_dict = dict(r)
+    for sess_dict in consolidated_results:
+        sid = sess_dict.get("session_id")
+        if sid:
+            # Overwrite with authoritative telemetry counts whenever the query succeeds;
+            # fall back to persisted value ONLY if authoritative reconciliation fails.
+            if cmd_counts is not None:
+                sess_dict["commands_executed"] = cmd_counts.get(sid, 0)
+            else:
+                sess_dict["commands_executed"] = int(sess_dict.get("commands_executed") or 0)
+
+            if auth_counts is not None:
+                sess_dict["credentials_tried"] = auth_counts.get(sid, 0)
+            else:
+                sess_dict["credentials_tried"] = int(sess_dict.get("credentials_tried") or 0)
+
         # An active session in ClickHouse has end_time placeholder equal to start_time, duration 0, and no disconnect reason
         is_active = (
             sess_dict.get("end_time") == sess_dict.get("start_time") and
@@ -940,7 +1050,6 @@ async def get_session(session_id: str):
                disconnection_reason
         FROM clouddecept.sessions
         WHERE session_id = '{session_id}'
-        LIMIT 1
         """
     )
 
@@ -948,7 +1057,7 @@ async def get_session(session_id: str):
     if not result_rows:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    sess_dict = dict(result_rows[0])
+    sess_dict = consolidate_session_rows(result_rows)[0]
 
     # Ensure commands_executed and credentials_tried reflect unique events
     try:
@@ -1740,14 +1849,14 @@ async def top_attackers(
 
     results = (await run_ch_query(
         f"""
-        SELECT attacker_ip,
-               any(country) as country,
-               uniqExact(session_id) as sessions,
-               uniqExact(session_id) as unique_sessions,
-               sum(max_cmds) as total_commands,
-               max(skill) as max_skill_level,
-               any(intent) as primary_intent,
-               max(start_t) as last_seen
+        SELECT s.attacker_ip as attacker_ip,
+               any(s.country) as country,
+               uniqExact(s.session_id) as sessions,
+               uniqExact(s.session_id) as unique_sessions,
+               greatest(sum(s.max_cmds), uniqExact(c.event_id)) as total_commands,
+               max(s.skill) as max_skill_level,
+               any(s.intent) as primary_intent,
+               max(s.start_t) as last_seen
         FROM (
             SELECT attacker_ip, session_id,
                    any(country) as country,
@@ -1759,8 +1868,9 @@ async def top_attackers(
             WHERE start_time >= '{since_str}' AND start_time <= now()
               AND attacker_ip != '' AND attacker_ip IS NOT NULL
             GROUP BY attacker_ip, session_id
-        )
-        GROUP BY attacker_ip
+        ) AS s
+        LEFT JOIN clouddecept.commands AS c ON s.session_id = c.session_id
+        GROUP BY s.attacker_ip
         ORDER BY sessions DESC
         LIMIT {limit_val}
         """
@@ -1841,7 +1951,39 @@ async def search_sessions(
         """
     )).named_results()
 
-    return list(sessions)
+    raw_sessions = list(sessions)
+    if not raw_sessions:
+        return []
+
+    consolidated_search = consolidate_session_rows(raw_sessions)
+
+    # Batch reconcile command counts against authoritative commands table
+    sids = [s["session_id"] for s in consolidated_search if s.get("session_id")]
+    cmd_counts = None
+    if sids:
+        cmd_placeholders = ",".join(f"'{sid}'" for sid in sids)
+        try:
+            cmd_res = (await run_ch_query(
+                f"""
+                SELECT session_id, uniqExact(event_id) as cmd_count
+                FROM clouddecept.commands
+                WHERE session_id IN ({cmd_placeholders})
+                GROUP BY session_id
+                """
+            )).named_results()
+            cmd_counts = {r["session_id"]: int(r["cmd_count"]) for r in cmd_res}
+        except Exception as e:
+            logger.debug(f"Could not batch reconcile command counts for search: {e}")
+
+    for s_dict in consolidated_search:
+        sid = s_dict.get("session_id")
+        if sid:
+            if cmd_counts is not None:
+                s_dict["commands_executed"] = cmd_counts.get(sid, 0)
+            else:
+                s_dict["commands_executed"] = int(s_dict.get("commands_executed") or 0)
+
+    return consolidated_search[:limit_val]
 
 
 if __name__ == "__main__":

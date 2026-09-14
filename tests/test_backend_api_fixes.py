@@ -670,8 +670,358 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(dup_tech_ids), len(set(dup_tech_ids)))
         self.assertEqual(len(dup_tech_ids), 2)  # Only T1033 and T1087.001, no duplicates!
 
+    async def test_list_sessions_reconciles_zero_command_count_against_commands_table(self):
+        """Regression test for production bug:
+        Session row has commands_executed = 0, but clouddecept.commands contains events.
+        Canonical list_sessions API response must reconcile and return the true event count.
+        """
+        now = datetime.now(timezone.utc)
+        sid = "f81991343ed8"
+
+        # Mock sessions query returning commands_executed = 0
+        sessions_query_res = MagicMock()
+        sessions_query_res.named_results.return_value = [
+            {
+                "session_id": sid,
+                "start_time": now,
+                "end_time": now,
+                "duration_seconds": 12,
+                "attacker_ip": "122.164.81.145",
+                "country": "India",
+                "protocol": "ssh",
+                "commands_executed": 0,  # Stale production row with 0!
+                "files_transferred": 0,
+                "credentials_tried": 0,
+                "intent": "system discovery",
+                "skill_level": 3,
+                "disconnection_reason": "Connection closed",
+            }
+        ]
+
+        # Mock commands count query returning actual count of 4
+        commands_cnt_res = MagicMock()
+        commands_cnt_res.named_results.return_value = [
+            {"session_id": sid, "cmd_count": 4}
+        ]
+
+        # Mock auth count query returning actual count of 1
+        auth_cnt_res = MagicMock()
+        auth_cnt_res.named_results.return_value = [
+            {"session_id": sid, "auth_count": 1}
+        ]
+
+        def mock_query(sql):
+            sql_str = str(sql)
+            if "FROM clouddecept.sessions" in sql_str:
+                return sessions_query_res
+            if "FROM clouddecept.commands" in sql_str:
+                return commands_cnt_res
+            if "FROM clouddecept.auth_attempts" in sql_str:
+                return auth_cnt_res
+            return MagicMock(named_results=MagicMock(return_value=[]))
+
+        self.mock_ch.query.side_effect = mock_query
+
+        results = await api_main.list_sessions(limit=50, hours=24)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].session_id, sid)
+        # Truthful reconciliation: must report 4 unique commands, NOT 0!
+        self.assertEqual(results[0].commands_executed, 4)
+        self.assertEqual(results[0].credentials_tried, 1)
+
+    async def test_search_sessions_reconciles_zero_command_count(self):
+        """Verify /sessions/search reconciles commands_executed from commands table."""
+        now = datetime.now(timezone.utc)
+        sid = "f81991343ed8"
+
+        cmd_match_res = MagicMock()
+        cmd_match_res.named_results.return_value = [{"session_id": sid}]
+
+        sessions_query_res = MagicMock()
+        sessions_query_res.named_results.return_value = [
+            {
+                "session_id": sid,
+                "start_time": now,
+                "end_time": now,
+                "duration_seconds": 12,
+                "attacker_ip": "122.164.81.145",
+                "country": "India",
+                "protocol": "ssh",
+                "commands_executed": 0,  # Stale row with 0
+                "intent": "system discovery",
+                "skill_level": 3,
+            }
+        ]
+
+        commands_cnt_res = MagicMock()
+        commands_cnt_res.named_results.return_value = [
+            {"session_id": sid, "cmd_count": 6}
+        ]
+
+        def mock_query(sql):
+            sql_str = str(sql)
+            if "WHERE command ILIKE" in sql_str:
+                return cmd_match_res
+            if "FROM clouddecept.sessions" in sql_str:
+                return sessions_query_res
+            if "FROM clouddecept.commands" in sql_str:
+                return commands_cnt_res
+            return MagicMock(named_results=MagicMock(return_value=[]))
+
+        self.mock_ch.query.side_effect = mock_query
+
+        results = await api_main.search_sessions(query="whoami")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["commands_executed"], 6)
+
+    async def test_list_sessions_deduplicates_multiple_historical_session_rows(self):
+        """Verify list_sessions deduplicates multiple historical ReplacingMergeTree rows."""
+        now = datetime.now(timezone.utc)
+        sid = "f81991343ed8"
+
+        # ClickHouse returns 2 unmerged rows for same session_id
+        sessions_query_res = MagicMock()
+        sessions_query_res.named_results.return_value = [
+            {
+                "session_id": sid,
+                "start_time": now,
+                "end_time": now,
+                "duration_seconds": 12,
+                "attacker_ip": "122.164.81.145",
+                "country": "India",
+                "protocol": "ssh",
+                "commands_executed": 0,
+                "files_transferred": 0,
+                "credentials_tried": 0,
+                "intent": "system discovery",
+                "skill_level": 3,
+                "disconnection_reason": "Connection closed",
+            },
+            {
+                "session_id": sid,
+                "start_time": now,
+                "end_time": now,
+                "duration_seconds": 12,
+                "attacker_ip": "122.164.81.145",
+                "country": "India",
+                "protocol": "ssh",
+                "commands_executed": 0,
+                "files_transferred": 0,
+                "credentials_tried": 0,
+                "intent": "system discovery",
+                "skill_level": 3,
+                "disconnection_reason": "Connection closed",
+            },
+        ]
+
+        commands_cnt_res = MagicMock()
+        commands_cnt_res.named_results.return_value = [{"session_id": sid, "cmd_count": 3}]
+
+        def mock_query(sql):
+            sql_str = str(sql)
+            if "FROM clouddecept.sessions" in sql_str:
+                return sessions_query_res
+            if "FROM clouddecept.commands" in sql_str:
+                return commands_cnt_res
+            return MagicMock(named_results=MagicMock(return_value=[]))
+
+        self.mock_ch.query.side_effect = mock_query
+
+        results = await api_main.list_sessions(limit=50, hours=24)
+        # Must be deduplicated down to 1 session
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].commands_executed, 3)
+
+    async def test_persisted_10_authoritative_4_returns_4(self):
+        """Verify persisted count 10 + authoritative count 4 → API returns 4 without max() override."""
+        now = datetime.now(timezone.utc)
+        sid = "sess-audit-1"
+
+        sessions_res = MagicMock()
+        sessions_res.named_results.return_value = [{
+            "session_id": sid,
+            "start_time": now,
+            "end_time": now,
+            "duration_seconds": 30,
+            "attacker_ip": "10.0.0.1",
+            "country": "US",
+            "protocol": "ssh",
+            "commands_executed": 10,
+            "files_transferred": 0,
+            "credentials_tried": 2,
+            "intent": "reconnaissance",
+            "skill_level": 2,
+            "disconnection_reason": "closed",
+        }]
+
+        cmds_res = MagicMock()
+        cmds_res.named_results.return_value = [{"session_id": sid, "cmd_count": 4}]
+
+        auth_res = MagicMock()
+        auth_res.named_results.return_value = [{"session_id": sid, "auth_count": 1}]
+
+        def mock_query(sql):
+            s = str(sql)
+            if "FROM clouddecept.sessions" in s:
+                return sessions_res
+            if "FROM clouddecept.commands" in s:
+                return cmds_res
+            if "FROM clouddecept.auth_attempts" in s:
+                return auth_res
+            return MagicMock(named_results=MagicMock(return_value=[]))
+
+        self.mock_ch.query.side_effect = mock_query
+
+        results = await api_main.list_sessions(limit=50, hours=24)
+        self.assertEqual(len(results), 1)
+        # Authoritative telemetry 4 must override stale persisted 10
+        self.assertEqual(results[0].commands_executed, 4)
+        self.assertEqual(results[0].credentials_tried, 1)
+
+    async def test_persisted_0_authoritative_4_returns_4(self):
+        """Verify persisted count 0 + authoritative count 4 → API returns 4."""
+        now = datetime.now(timezone.utc)
+        sid = "sess-audit-2"
+
+        sessions_res = MagicMock()
+        sessions_res.named_results.return_value = [{
+            "session_id": sid,
+            "start_time": now,
+            "end_time": now,
+            "duration_seconds": 30,
+            "attacker_ip": "10.0.0.2",
+            "country": "US",
+            "protocol": "ssh",
+            "commands_executed": 0,
+            "files_transferred": 0,
+            "credentials_tried": 0,
+            "intent": "reconnaissance",
+            "skill_level": 2,
+            "disconnection_reason": "closed",
+        }]
+
+        cmds_res = MagicMock()
+        cmds_res.named_results.return_value = [{"session_id": sid, "cmd_count": 4}]
+
+        def mock_query(sql):
+            s = str(sql)
+            if "FROM clouddecept.sessions" in s:
+                return sessions_res
+            if "FROM clouddecept.commands" in s:
+                return cmds_res
+            return MagicMock(named_results=MagicMock(return_value=[]))
+
+        self.mock_ch.query.side_effect = mock_query
+
+        results = await api_main.list_sessions(limit=50, hours=24)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].commands_executed, 4)
+
+    async def test_authoritative_query_failure_retains_persisted_value(self):
+        """Verify authoritative query failure → safely retain persisted value."""
+        now = datetime.now(timezone.utc)
+        sid = "sess-audit-3"
+
+        sessions_res = MagicMock()
+        sessions_res.named_results.return_value = [{
+            "session_id": sid,
+            "start_time": now,
+            "end_time": now,
+            "duration_seconds": 30,
+            "attacker_ip": "10.0.0.3",
+            "country": "US",
+            "protocol": "ssh",
+            "commands_executed": 8,
+            "files_transferred": 0,
+            "credentials_tried": 3,
+            "intent": "reconnaissance",
+            "skill_level": 2,
+            "disconnection_reason": "closed",
+        }]
+
+        def mock_query(sql):
+            s = str(sql)
+            if "FROM clouddecept.sessions" in s:
+                return sessions_res
+            if "FROM clouddecept.commands" in s or "FROM clouddecept.auth_attempts" in s:
+                raise RuntimeError("Telemetry table temporarily unavailable")
+            return MagicMock(named_results=MagicMock(return_value=[]))
+
+        self.mock_ch.query.side_effect = mock_query
+
+        results = await api_main.list_sessions(limit=50, hours=24)
+        self.assertEqual(len(results), 1)
+        # Should gracefully retain persisted count when query fails
+        self.assertEqual(results[0].commands_executed, 8)
+        self.assertEqual(results[0].credentials_tried, 3)
+
+    async def test_duplicate_session_rows_consolidated(self):
+        """Verify duplicate session rows from ClickHouse MergeTree are consolidated deterministically."""
+        now = datetime.now(timezone.utc)
+        later = datetime.now(timezone.utc)
+        sid = "sess-multi-part"
+
+        # Simulate 2 parts: older part with duration 0 and empty intent, newer part with complete data
+        sessions_res = MagicMock()
+        sessions_res.named_results.return_value = [
+            {
+                "session_id": sid,
+                "start_time": now,
+                "end_time": now,
+                "duration_seconds": 0,
+                "attacker_ip": "10.0.0.4",
+                "country": "DE",
+                "protocol": "ssh",
+                "commands_executed": 0,
+                "files_transferred": 0,
+                "credentials_tried": 1,
+                "intent": "",
+                "skill_level": 1,
+                "disconnection_reason": "",
+            },
+            {
+                "session_id": sid,
+                "start_time": now,
+                "end_time": later,
+                "duration_seconds": 45,
+                "attacker_ip": "10.0.0.4",
+                "country": "DE",
+                "protocol": "ssh",
+                "commands_executed": 5,
+                "files_transferred": 2,
+                "credentials_tried": 1,
+                "intent": "privilege escalation",
+                "skill_level": 3,
+                "disconnection_reason": "Connection closed",
+            },
+        ]
+
+        cmds_res = MagicMock()
+        cmds_res.named_results.return_value = [{"session_id": sid, "cmd_count": 5}]
+
+        def mock_query(sql):
+            s = str(sql)
+            if "FROM clouddecept.sessions" in s:
+                return sessions_res
+            if "FROM clouddecept.commands" in s:
+                return cmds_res
+            return MagicMock(named_results=MagicMock(return_value=[]))
+
+        self.mock_ch.query.side_effect = mock_query
+
+        results = await api_main.list_sessions(limit=50, hours=24)
+        self.assertEqual(len(results), 1)
+        sess = results[0]
+        self.assertEqual(sess.session_id, sid)
+        self.assertEqual(sess.duration_seconds, 45)
+        self.assertEqual(sess.commands_executed, 5)
+        self.assertEqual(sess.files_transferred, 2)
+        self.assertEqual(sess.intent, "privilege escalation")
+        self.assertEqual(sess.skill_level, 3)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

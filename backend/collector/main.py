@@ -393,7 +393,7 @@ class EventCollector:
                 f"SELECT end_time, duration_seconds, disconnection_reason "
                 f"FROM {self.clickhouse_db}.sessions "
                 f"WHERE session_id = '{session_id}' "
-                f"AND (disconnection_reason != '' OR end_time > start_time) "
+                f"AND (disconnection_reason != '' OR end_time > start_time OR duration_seconds > 0) "
                 f"LIMIT 1"
             )
             if hasattr(query_res, "result_rows") and isinstance(query_res.result_rows, list) and query_res.result_rows:
@@ -649,48 +649,73 @@ class EventCollector:
             except Exception as e:
                 logger.error(f"Failed to update session_end for {sid}: {e}", exc_info=True)
 
-        # Step 3: Reconcile any other touched sessions that are already ended
+        # Step 3: Reconcile any other touched sessions (active or ended) with authoritative counts
         reconcile_candidate_ids = touched_session_ids - finalized_in_batch
         for sid in reconcile_candidate_ids:
             try:
-                ended_info = self._get_ended_session_info(sid)
-                if not ended_info:
+                # Check if session exists in ClickHouse and get current values
+                query_res = self.clickhouse_client.query(
+                    f"SELECT commands_executed, credentials_tried, duration_seconds, end_time, disconnection_reason "
+                    f"FROM {self.clickhouse_db}.sessions WHERE session_id = '{sid}' LIMIT 1"
+                )
+                if not (hasattr(query_res, "result_rows") and isinstance(query_res.result_rows, list) and query_res.result_rows):
                     continue
+                cur_row = query_res.result_rows[0]
+                cur_cmds = safe_int(cur_row[0])
+                cur_auth = safe_int(cur_row[1])
+                cur_dur = safe_int(cur_row[2])
+                cur_end = cur_row[3]
+                cur_reason = safe_str(cur_row[4])
 
-                end_time = ended_info.get("end_time")
-                duration = safe_int(ended_info.get("duration_seconds", 0))
-                disconnection_reason = safe_str(ended_info.get("disconnection_reason", ""))
+                cmd_cnt = safe_int(self.clickhouse_client.command(
+                    f"SELECT uniqExact(event_id) FROM {self.clickhouse_db}.commands WHERE session_id = '{sid}'"
+                ))
+                auth_cnt = safe_int(self.clickhouse_client.command(
+                    f"SELECT uniqExact(event_id) FROM {self.clickhouse_db}.auth_attempts WHERE session_id = '{sid}'"
+                ))
 
-                if duration <= 0 and end_time:
-                    try:
-                        start_res = self.clickhouse_client.command(
-                            f"SELECT start_time FROM {self.clickhouse_db}.sessions WHERE session_id = '{sid}' LIMIT 1"
-                        )
-                        if start_res:
-                            start_dt = start_res if isinstance(start_res, datetime) else parse_dt(str(start_res).strip())
-                            dur_sec = (to_naive_utc(end_time) - to_naive_utc(start_dt)).total_seconds()
-                            duration = max(0, int(round(dur_sec)))
-                            ended_info["duration_seconds"] = duration
-                    except Exception as e:
-                        logger.debug(f"Could not recompute duration for {sid}: {e}")
+                updates = []
+                if cmd_cnt != cur_cmds:
+                    updates.append(f"commands_executed = {cmd_cnt}")
+                if auth_cnt != cur_auth:
+                    updates.append(f"credentials_tried = {auth_cnt}")
 
-                cmd_cnt = safe_int(self.clickhouse_client.command(f"SELECT uniqExact(event_id) FROM {self.clickhouse_db}.commands WHERE session_id = '{sid}'"))
-                auth_cnt = safe_int(self.clickhouse_client.command(f"SELECT uniqExact(event_id) FROM {self.clickhouse_db}.auth_attempts WHERE session_id = '{sid}'"))
+                ended_info = self._get_ended_session_info(sid)
+                if ended_info:
+                    end_time = ended_info.get("end_time")
+                    duration = safe_int(ended_info.get("duration_seconds", 0))
+                    disconnection_reason = safe_str(ended_info.get("disconnection_reason", ""))
 
-                updates = [
-                    f"commands_executed = {cmd_cnt}",
-                    f"credentials_tried = {auth_cnt}",
-                    f"duration_seconds = {duration}",
-                ]
-                if end_time:
-                    updates.append(f"end_time = '{end_time.strftime('%Y-%m-%d %H:%M:%S')}'")
-                if disconnection_reason:
-                    escaped_reason = disconnection_reason.replace("'", "''")
-                    updates.append(f"disconnection_reason = '{escaped_reason}'")
+                    if duration <= 0 and end_time:
+                        try:
+                            start_res = self.clickhouse_client.command(
+                                f"SELECT start_time FROM {self.clickhouse_db}.sessions WHERE session_id = '{sid}' LIMIT 1"
+                            )
+                            if start_res:
+                                start_dt = start_res if isinstance(start_res, datetime) else parse_dt(str(start_res).strip())
+                                dur_sec = (to_naive_utc(end_time) - to_naive_utc(start_dt)).total_seconds()
+                                duration = max(0, int(round(dur_sec)))
+                                ended_info["duration_seconds"] = duration
+                        except Exception as e:
+                            logger.debug(f"Could not recompute duration for {sid}: {e}")
+
+                    if duration != cur_dur:
+                        updates.append(f"duration_seconds = {duration}")
+                    if end_time:
+                        end_time_str = end_time.strftime('%Y-%m-%d %H:%M:%S') if hasattr(end_time, 'strftime') else str(end_time)
+                        cur_end_str = cur_end.strftime('%Y-%m-%d %H:%M:%S') if hasattr(cur_end, 'strftime') else str(cur_end)
+                        if end_time_str != cur_end_str:
+                            updates.append(f"end_time = '{end_time_str}'")
+                    if disconnection_reason and disconnection_reason != cur_reason:
+                        escaped_reason = disconnection_reason.replace("'", "''")
+                        updates.append(f"disconnection_reason = '{escaped_reason}'")
+
+                if not updates:
+                    continue
 
                 update_sql = f"ALTER TABLE {self.clickhouse_db}.sessions UPDATE {', '.join(updates)} WHERE session_id = '{sid}'"
                 self.clickhouse_client.command(update_sql)
-                logger.info(f"Reconciled ended session {sid}: cmds={cmd_cnt}, auth={auth_cnt}, duration={duration}s")
+                logger.info(f"Reconciled session {sid}: {', '.join(updates)}")
             except Exception as e:
                 logger.error(f"Failed to reconcile session {sid}: {e}", exc_info=True)
 
@@ -1090,11 +1115,29 @@ async def update_session(request: SessionUpdateRequest):
     try:
         # ClickHouse ALTER TABLE UPDATE - serialized via clickhouse_lock
         async with collector.clickhouse_lock:
+            # Query current values to avoid redundant ALTER TABLE mutations
+            cur_res = await asyncio.to_thread(
+                collector.clickhouse_client.query,
+                f"SELECT intent, skill_level, commands_executed, credentials_tried, duration_seconds, disconnection_reason "
+                f"FROM {collector.clickhouse_db}.sessions WHERE session_id = '{request.session_id}' LIMIT 1"
+            )
+            session_exists = False
+            cur_intent, cur_skill, cur_cmds, cur_auth, cur_dur, cur_reason = "", 0, 0, 0, 0, ""
+            if hasattr(cur_res, "result_rows") and isinstance(cur_res.result_rows, list) and cur_res.result_rows:
+                session_exists = True
+                c_row = cur_res.result_rows[0]
+                cur_intent = EventCollector._safe_str(c_row[0])
+                cur_skill = EventCollector._safe_int(c_row[1])
+                cur_cmds = EventCollector._safe_int(c_row[2])
+                cur_auth = EventCollector._safe_int(c_row[3])
+                cur_dur = EventCollector._safe_int(c_row[4])
+                cur_reason = EventCollector._safe_str(c_row[5])
+
             updates = []
-            if request.intent is not None:
+            if request.intent is not None and request.intent != cur_intent:
                 escaped_intent = request.intent.replace("'", "''")
                 updates.append(f"intent = '{escaped_intent}'")
-            if request.skill_level is not None:
+            if request.skill_level is not None and request.skill_level != cur_skill:
                 updates.append(f"skill_level = {request.skill_level}")
             if request.commands_executed is not None:
                 try:
@@ -1102,15 +1145,15 @@ async def update_session(request: SessionUpdateRequest):
                         collector.clickhouse_client.command,
                         f"SELECT uniqExact(event_id) FROM {collector.clickhouse_db}.commands WHERE session_id = '{request.session_id}'"
                     )
-                    actual_cmds = EventCollector._safe_int(cmd_res)
-                    effective_cmds = max(request.commands_executed, actual_cmds)
+                    effective_cmds = EventCollector._safe_int(cmd_res)
                 except Exception:
                     effective_cmds = request.commands_executed
-                updates.append(f"commands_executed = {effective_cmds}")
-            if request.disconnection_reason is not None:
+                if effective_cmds != cur_cmds:
+                    updates.append(f"commands_executed = {effective_cmds}")
+            if request.disconnection_reason is not None and request.disconnection_reason != cur_reason:
                 escaped_reason = request.disconnection_reason.replace("'", "''")
                 updates.append(f"disconnection_reason = '{escaped_reason}'")
-            if request.duration_seconds is not None and request.duration_seconds > 0:
+            if request.duration_seconds is not None and request.duration_seconds > 0 and request.duration_seconds != cur_dur:
                 updates.append(f"duration_seconds = {request.duration_seconds}")
             if request.credentials_tried is not None:
                 try:
@@ -1118,17 +1161,17 @@ async def update_session(request: SessionUpdateRequest):
                         collector.clickhouse_client.command,
                         f"SELECT uniqExact(event_id) FROM {collector.clickhouse_db}.auth_attempts WHERE session_id = '{request.session_id}'"
                     )
-                    actual_auth = EventCollector._safe_int(auth_res)
-                    effective_auth = max(request.credentials_tried, actual_auth)
+                    effective_auth = EventCollector._safe_int(auth_res)
                 except Exception:
                     effective_auth = request.credentials_tried
-                updates.append(f"credentials_tried = {effective_auth}")
+                if effective_auth != cur_auth:
+                    updates.append(f"credentials_tried = {effective_auth}")
 
             if not updates:
                 return SessionUpdateResponse(
                     session_id=request.session_id,
-                    success=False,
-                    error="No fields to update"
+                    success=session_exists,
+                    error=None if session_exists else "Session not found"
                 )
 
             update_sql = f"ALTER TABLE {collector.clickhouse_db}.sessions UPDATE {', '.join(updates)} WHERE session_id = '{request.session_id}'"

@@ -268,11 +268,15 @@ class EventProcessor:
                 "previous_intents": session.get("intent_history", []),
             }
 
-            intent_result = await self.ai_clients.classify_intent(
-                session_id=session.get("session_id"),
-                commands=commands_list,
-                context=context,
-            )
+            intent_result = None
+            try:
+                intent_result = await self.ai_clients.classify_intent(
+                    session_id=session.get("session_id"),
+                    commands=commands_list,
+                    context=context,
+                )
+            except Exception as ai_err:
+                logger.warning(f"AI intent classification failed for {session_id}: {ai_err}")
 
             if intent_result:
                 # Store intent prediction

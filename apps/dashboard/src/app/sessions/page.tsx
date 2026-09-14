@@ -39,9 +39,25 @@ function SessionsPageContent() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 25;
 
+  const isIp = useCallback((val: string) => /^(?:\d{1,3}\.){3}\d{1,3}$/.test(val.trim()), []);
+  const isSessionId = useCallback((val: string) => /^[a-fA-F0-9]{8,32}$/.test(val.trim()), []);
+
+  const loadSessions = useCallback(() => {
+    const trimmed = searchQuery.trim();
+    if (urlIp) {
+      fetchSessions({ attacker_ip: urlIp, hours: 87600, limit: 300 });
+    } else if (isIp(trimmed)) {
+      fetchSessions({ attacker_ip: trimmed, hours: 87600, limit: 300 });
+    } else if (isSessionId(trimmed)) {
+      fetchSessions({ session_id: trimmed, hours: 87600, limit: 300 });
+    } else {
+      fetchSessions({ hours: timeWindowHours, limit: 300 });
+    }
+  }, [searchQuery, urlIp, isIp, isSessionId, fetchSessions, timeWindowHours]);
+
   useEffect(() => {
-    fetchSessions({ hours: timeWindowHours, limit: 300 });
-  }, [fetchSessions, timeWindowHours]);
+    loadSessions();
+  }, [loadSessions]);
 
   const filteredSessions = useMemo(() => {
     const list = sessions || [];
@@ -115,7 +131,7 @@ function SessionsPageContent() {
 
         <div className="flex items-center gap-2.5">
           <button
-            onClick={() => fetchSessions({ hours: timeWindowHours, limit: 300 })}
+            onClick={() => loadSessions()}
             className="p-2 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 hover:text-cyan-300"
             title="Refresh sessions"
           >

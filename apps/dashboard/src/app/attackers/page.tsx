@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import { cn, formatTimestamp } from '@/lib/utils';
 import { useDashboardStore } from '@/lib/store';
+import { api } from '@/lib/api';
+import { AttackerDetail } from '@/lib/types';
 import { getCountryName } from '@/lib/countries';
 import { normalizeIntent } from '@/lib/intents';
 import { evaluateThreat } from '@/lib/threatScore';
@@ -36,6 +38,38 @@ function AttackersPageContent() {
   const [selectedIp, setSelectedIp] = useState<string | null>(urlIp || null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [attackerDetail, setAttackerDetail] = useState<AttackerDetail | null>(null);
+  const [attackerDetailLoading, setAttackerDetailLoading] = useState(false);
+
+  const loadAttackerDetail = useCallback((ip: string) => {
+    let cancelled = false;
+    setAttackerDetailLoading(true);
+    api.getAttackerDetail(ip)
+      .then((detail) => {
+        if (!cancelled) {
+          setAttackerDetail(detail);
+          setAttackerDetailLoading(false);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to load attacker detail for', ip, err);
+        if (!cancelled) {
+          setAttackerDetail(null);
+          setAttackerDetailLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (selectedIp) {
+      return loadAttackerDetail(selectedIp);
+    } else {
+      setAttackerDetail(null);
+    }
+  }, [selectedIp, loadAttackerDetail]);
 
   useEffect(() => {
     fetchTopAttackers(timeWindowHours, 50);
@@ -92,9 +126,12 @@ function AttackersPageContent() {
     return sessions.filter((s) => (s.src_ip || s.attacker_ip) === selectedIp);
   }, [sessions, selectedIp]);
 
-  const countryName = getCountryName(selectedAttacker?.country);
-  const threat = evaluateThreat(selectedAttacker?.max_skill_level ?? 3);
-  const primaryIntent = normalizeIntent(selectedAttacker?.primary_intent);
+  const countryName = getCountryName(attackerDetail?.country || selectedAttacker?.country);
+  const effectiveSkillLevel = attackerDetail?.max_skill_level ?? selectedAttacker?.max_skill_level ?? 2;
+  const threat = evaluateThreat(effectiveSkillLevel);
+  const primaryIntent = normalizeIntent(attackerDetail?.primary_intent || selectedAttacker?.primary_intent);
+  const effectiveTotalSessions = attackerDetail?.unique_sessions ?? selectedAttacker?.total_sessions ?? selectedAttacker?.unique_sessions ?? 0;
+  const effectiveTotalCommands = attackerDetail?.total_commands ?? selectedAttacker?.total_commands ?? 0;
 
   return (
     <div className="space-y-6 font-mono pb-12">
@@ -115,11 +152,14 @@ function AttackersPageContent() {
             onClick={() => {
               fetchTopAttackers(timeWindowHours, 50);
               fetchSessions({ hours: timeWindowHours, limit: 300 });
+              if (selectedIp) {
+                loadAttackerDetail(selectedIp);
+              }
             }}
             className="p-2 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 hover:text-cyan-300"
             title="Refresh attackers"
           >
-            <RefreshCw className="w-4 h-4 text-cyan-400" />
+            <RefreshCw className={cn("w-4 h-4 text-cyan-400", attackerDetailLoading && "animate-spin")} />
           </button>
         </div>
       </div>
@@ -224,7 +264,7 @@ function AttackersPageContent() {
 
                   <div className="flex items-center gap-2">
                     <Link
-                      href={`/sessions?search=${encodeURIComponent(selectedAttacker.attacker_ip)}`}
+                      href={`/sessions?ip=${encodeURIComponent(selectedAttacker.attacker_ip)}`}
                       className="px-3 py-1.5 rounded-lg bg-cyan-500/15 border border-cyan-500/30 text-xs text-cyan-300 hover:border-cyan-400 flex items-center gap-1.5"
                     >
                       <span>VIEW ALL SESSIONS</span>
@@ -238,19 +278,19 @@ function AttackersPageContent() {
                   <div className="p-2.5 rounded-lg bg-[#040816] border border-cyan-500/15">
                     <span className="text-[10px] text-slate-400 uppercase block">TOTAL SESSIONS</span>
                     <span className="text-base font-bold text-white mt-0.5 block">
-                      {selectedAttacker.total_sessions || selectedAttacker.sessions || selectedAttacker.unique_sessions || attackerSessions.length || 0}
+                      {effectiveTotalSessions}
                     </span>
                   </div>
                   <div className="p-2.5 rounded-lg bg-[#040816] border border-cyan-500/15">
                     <span className="text-[10px] text-slate-400 uppercase block">TOTAL COMMANDS</span>
                     <span className="text-base font-bold text-emerald-400 mt-0.5 block">
-                      {selectedAttacker.total_commands ?? 0}
+                      {effectiveTotalCommands}
                     </span>
                   </div>
                   <div className="p-2.5 rounded-lg bg-[#040816] border border-cyan-500/15">
                     <span className="text-[10px] text-slate-400 uppercase block">THREAT TIER</span>
                     <span className={cn('text-xs font-bold mt-1 inline-block px-1.5 py-0.5 rounded border', threat.badgeClass)}>
-                      {threat.label.toUpperCase()} ({selectedAttacker.max_skill_level ?? 2}/10)
+                      {threat.label.toUpperCase()} ({effectiveSkillLevel}/10)
                     </span>
                   </div>
                   <div className="p-2.5 rounded-lg bg-[#040816] border border-cyan-500/15">
@@ -269,7 +309,13 @@ function AttackersPageContent() {
                   <span>THREAT ACTOR BEHAVIORAL PROFILE</span>
                 </h3>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Adversary originating from {countryName} targeting CloudDecept honeypots. Observed behavior reflects {primaryIntent.description.toLowerCase()}. The actor has initiated multiple automated SSH/telnet connection attempts, with an evaluated adversary skill score of {selectedAttacker.max_skill_level ?? 2}/10.
+                  Adversary originating from {countryName} targeting CloudDecept honeypots. Observed behavior reflects {primaryIntent.description.toLowerCase()}.
+                  {attackerDetail && (
+                    attackerDetail.total_commands > 0
+                      ? ` The actor has executed ${attackerDetail.total_commands} unique command${attackerDetail.total_commands === 1 ? '' : 's'} across ${attackerDetail.sessions_with_commands} session${attackerDetail.sessions_with_commands === 1 ? '' : 's'}.`
+                      : ` Sessions disconnected before actionable command patterns were observed.`
+                  )}
+                  {' '}The actor has initiated {effectiveTotalSessions} connection attempt{effectiveTotalSessions === 1 ? '' : 's'} with an evaluated adversary skill score of {effectiveSkillLevel}/10.
                 </p>
               </div>
 
@@ -281,17 +327,21 @@ function AttackersPageContent() {
                     <span>RECORDED SESSIONS BY THIS ACTOR</span>
                   </h3>
                   <span className="text-[10px] text-slate-400">
-                    {attackerSessions.length} Captured in Window
+                    {attackerDetail ? `${attackerDetail.recent_sessions?.length || 0} Authoritative Recorded` : `${attackerSessions.length} Captured in Window`}
                   </span>
                 </div>
 
                 <div className="divide-y divide-cyan-500/10">
-                  {attackerSessions.length === 0 ? (
+                  {attackerDetailLoading ? (
+                    <div className="p-6 text-center text-xs text-cyan-400 animate-pulse">
+                      Loading authoritative case files from ClickHouse...
+                    </div>
+                  ) : (attackerDetail?.recent_sessions || attackerSessions).length === 0 ? (
                     <div className="p-6 text-center text-xs text-slate-500">
-                      No individual session rows currently loaded in local buffer for this IP. Click &quot;View All Sessions&quot; above to search full historical ClickHouse logs.
+                      No individual session rows recorded for this IP. Click &quot;View All Sessions&quot; above to search full historical ClickHouse logs.
                     </div>
                   ) : (
-                    attackerSessions.map((s) => (
+                    (attackerDetail?.recent_sessions || attackerSessions).map((s) => (
                       <div
                         key={s.session_id}
                         className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-cyan-950/20 transition-all text-xs"

@@ -7,6 +7,8 @@ import {
   MitreTechniqueCount,
   TopCommand,
   TopAttacker,
+  AttackerDetail,
+  CommandSummary,
   AdaptiveStrategy,
   Stats,
 } from './types';
@@ -37,13 +39,15 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   // Sessions
-  getSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string; min_skill_level?: number }) => {
+  getSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string; min_skill_level?: number; attacker_ip?: string; session_id?: string }) => {
     const search = new URLSearchParams();
     if (params?.limit) search.set('limit', params.limit.toString());
     if (params?.offset) search.set('offset', params.offset.toString());
     if (params?.hours) search.set('hours', params.hours.toString());
     if (params?.intent && params.intent !== 'all') search.set('intent', params.intent);
     if (params?.min_skill_level !== undefined) search.set('min_skill_level', params.min_skill_level.toString());
+    if (params?.attacker_ip) search.set('attacker_ip', params.attacker_ip);
+    if (params?.session_id) search.set('session_id', params.session_id);
     // Backend returns array directly: SessionSummary[]
     return fetchJson<any[]>(`${API_BASE}/sessions?${search}`).then(sessions => ({
       sessions: Array.isArray(sessions) ? sessions : [],
@@ -156,16 +160,21 @@ export const api = {
     fetchJson<MitreTechniqueCount[]>(`${API_BASE}/mitre/techniques`).then((res) => (Array.isArray(res) ? res : [])),
 
   // Global Commands Forensics
-  getCommands: (params?: { limit?: number; offset?: number; session_id?: string; command?: string; intent?: string; hours?: number }): Promise<Command[]> => {
+  getCommands: (params?: { limit?: number; offset?: number; session_id?: string; command?: string; attacker_ip?: string; intent?: string; hours?: number; include_synthetic?: boolean }): Promise<Command[]> => {
     const search = new URLSearchParams();
     if (params?.limit) search.set("limit", params.limit.toString());
     if (params?.offset) search.set("offset", params.offset.toString());
     if (params?.session_id) search.set("session_id", params.session_id);
     if (params?.command) search.set("command", params.command);
+    if (params?.attacker_ip) search.set("attacker_ip", params.attacker_ip);
     if (params?.intent && params.intent !== "all") search.set("intent", params.intent);
     if (params?.hours) search.set("hours", params.hours.toString());
+    if (params?.include_synthetic) search.set("include_synthetic", "true");
     return fetchJson<Command[]>(`${API_BASE}/commands?${search}`).then((res) => (Array.isArray(res) ? res : []));
   },
+
+  getCommandSummary: (command: string): Promise<CommandSummary> =>
+    fetchJson<CommandSummary>(`${API_BASE}/commands/summary?command=${encodeURIComponent(command)}`),
 
   // Global Auth Attempts
   getAuthAttempts: (params?: { limit?: number; offset?: number; session_id?: string; username?: string; success?: boolean; hours?: number }): Promise<AuthEvent[]> => {
@@ -193,6 +202,9 @@ export const api = {
     if (params?.hours) search.set('hours', params.hours.toString());
     return fetchJson<TopAttacker[]>(`${API_BASE}/attackers/top?${search}`).then((res) => (Array.isArray(res) ? res : []));
   },
+
+  getAttackerDetail: (attackerIp: string): Promise<AttackerDetail> =>
+    fetchJson<AttackerDetail>(`${API_BASE}/attackers/${encodeURIComponent(attackerIp)}`),
 
   // Search Sessions
   searchSessions: (query: string, limit: number = 50): Promise<Session[]> => {

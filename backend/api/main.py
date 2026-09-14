@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
+import ipaddress
 import urllib.request
 import urllib.error
 
@@ -333,6 +334,62 @@ class SessionSummary(BaseModel):
     assessment: Optional[FinalAssessment] = None
 
 
+SYNTHETIC_SESSION_PREFIXES = ("e2e", "debug", "final-e2e")
+CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+KNOWN_HOST_IPS = {
+    os.getenv("SERVER_HOST_IP", "129.146.167.2").strip(),
+    "129.146.167.2",
+}
+
+
+def escape_sql_literal(val: str) -> str:
+    """Safely escape a string for ClickHouse SQL string literal."""
+    if val is None:
+        return ""
+    return (
+        str(val)
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\0", "")
+    )
+
+
+def get_source_class(ip: Optional[str]) -> str:
+    """
+    Deterministically classify telemetry source IP:
+    - UNKNOWN: missing, empty, or unparseable non-IP tokens.
+    - INTERNAL_INFRASTRUCTURE: loopback, RFC1918 private subnets, link-local, docker bridge.
+    - INTERNAL_OR_AMBIGUOUS: known host VM public IP (loopback/hairpinning probes), CGNAT, documentation/reserved ranges.
+    - EXTERNAL_HONEYPOT: globally routable public internet IP addresses.
+    """
+    if not ip:
+        return "UNKNOWN"
+    ip_clean = str(ip).strip()
+    if ip_clean in ("", "unknown", "[EMPTY_SESSION_ID]", "[UNKNOWN]", "None", "null"):
+        return "UNKNOWN"
+    if ip_clean.lower() == "localhost":
+        return "INTERNAL_INFRASTRUCTURE"
+
+    if ip_clean in KNOWN_HOST_IPS:
+        return "INTERNAL_OR_AMBIGUOUS"
+
+    try:
+        addr = ipaddress.ip_address(ip_clean)
+    except ValueError:
+        return "UNKNOWN"
+
+    if addr.is_loopback or addr.is_private or addr.is_link_local:
+        return "INTERNAL_INFRASTRUCTURE"
+    if addr.is_multicast or addr.is_reserved or addr.is_unspecified:
+        return "INTERNAL_OR_AMBIGUOUS"
+    if isinstance(addr, ipaddress.IPv4Address) and addr in CGNAT_NETWORK:
+        return "INTERNAL_OR_AMBIGUOUS"
+
+    return "EXTERNAL_HONEYPOT"
+
+
 class CommandResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -346,6 +403,71 @@ class CommandResponse(BaseModel):
     duration_ms: Optional[int] = 0
     intent: Optional[str] = None
     mitre_techniques: list[str] = []
+    attacker_ip: Optional[str] = ""
+    country: Optional[str] = "Unknown"
+    protocol: Optional[str] = "ssh"
+    source_class: Optional[str] = "EXTERNAL_HONEYPOT"
+
+
+class TopCommandResponse(BaseModel):
+    command: str
+    executions: int
+    unique_sessions: int
+    unique_sources: int
+    external_attackers: int
+    internal_sources: int
+    external_executions: int
+    internal_executions: int
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+
+
+class CommandSourceBreakdown(BaseModel):
+    attacker_ip: str
+    country: str
+    source_class: str
+    executions: int
+    unique_sessions: int
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+
+
+class CommandEventItem(BaseModel):
+    event_id: str
+    session_id: str
+    timestamp: datetime
+    command: str
+    arguments: list[str] = []
+    output: Optional[str] = None
+    exit_code: Optional[int] = 0
+    duration_ms: Optional[int] = 0
+    attacker_ip: Optional[str] = ""
+    country: Optional[str] = "Unknown"
+    protocol: Optional[str] = "ssh"
+    source_class: Optional[str] = "EXTERNAL_HONEYPOT"
+
+
+class CommandDataQuality(BaseModel):
+    raw_physical_rows: int
+    attributable_events: int
+    excluded_synthetic_events: int
+    orphan_events: int
+
+
+class CommandSummaryResponse(BaseModel):
+    command: str
+    total_executions: int
+    unique_sessions: int
+    unique_sources: int
+    external_attackers: int
+    internal_sources: int
+    external_executions: int
+    internal_executions: int
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    sources: list[CommandSourceBreakdown]
+    recent_events: list[CommandEventItem]
+    data_quality: CommandDataQuality
 
 
 class AuthAttemptResponse(BaseModel):
@@ -406,6 +528,28 @@ class StatsResponse(BaseModel):
     sessions_per_hour: list[dict]
     commands_per_day: list[dict]
     sessions_per_day: list[dict] = []
+
+
+class AttackerDetailResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    attacker_ip: str
+    country: str
+    total_sessions: int
+    unique_sessions: int
+    first_seen: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    total_commands: int
+    sessions_with_commands: int
+    total_auth_attempts: int
+    successful_auth_attempts: int
+    sessions_with_successful_auth: int
+    classified_sessions: int
+    unknown_sessions: int
+    unclassified_sessions: int
+    max_skill_level: int
+    primary_intent: str
+    recent_sessions: list[SessionSummary] = []
 
 
 class HealthResponse(BaseModel):
@@ -778,9 +922,11 @@ async def list_sessions(
     offset: int = Query(0, ge=0),
     intent: Optional[str] = None,
     min_skill_level: Optional[int] = None,
-    hours: int = Query(24, ge=1, le=87600),  # Allow up to ~10 years for all-time
+    hours: Optional[int] = Query(None, ge=1, le=87600),
+    attacker_ip: Optional[str] = None,
+    session_id: Optional[str] = None,
 ):
-    """List recent sessions with filters"""
+    """List recent sessions with filters (supports server-side attacker_ip and session_id filtering)"""
     try:
         limit_val = int(limit)
     except Exception:
@@ -789,15 +935,25 @@ async def list_sessions(
         offset_val = int(offset)
     except Exception:
         offset_val = 0
-    try:
-        hours_val = int(hours)
-    except Exception:
-        hours_val = 24
+
+    if hours is None:
+        hours_val = 87600 if (attacker_ip or session_id) else 24
+    else:
+        try:
+            hours_val = int(hours)
+        except Exception:
+            hours_val = 24
 
     since = datetime.utcnow() - timedelta(hours=hours_val)
     since_str = since.strftime('%Y-%m-%d %H:%M:%S')
 
     where_clauses = [f"start_time >= '{since_str}'"]
+    if attacker_ip:
+        safe_ip = attacker_ip.replace("'", "''").strip()
+        where_clauses.append(f"attacker_ip = '{safe_ip}'")
+    if session_id:
+        safe_sid = session_id.replace("'", "''").strip()
+        where_clauses.append(f"session_id = '{safe_sid}'")
     if intent:
         where_clauses.append(f"intent = '{intent}'")
     if min_skill_level is not None:
@@ -1407,10 +1563,14 @@ async def list_commands(
     offset: int = Query(0, ge=0),
     session_id: Optional[str] = None,
     command: Optional[str] = None,
+    exact: bool = Query(False),
+    search: Optional[str] = None,
+    attacker_ip: Optional[str] = None,
     intent: Optional[str] = None,
-    hours: int = Query(24, ge=1, le=87600),
+    hours: Optional[int] = None,
+    include_synthetic: bool = False,
 ):
-    """List recent commands across all sessions with filters (deduplicated by event_id)"""
+    """List recent commands across sessions with filters, joined with deduplicated session metadata (deduplicated by event_id)"""
     try:
         limit_val = int(limit)
     except Exception:
@@ -1419,40 +1579,91 @@ async def list_commands(
         offset_val = int(offset)
     except Exception:
         offset_val = 0
-    try:
-        hours_val = int(hours)
-    except Exception:
-        hours_val = 24
+
+    if hours is None:
+        if session_id or command or search or attacker_ip:
+            hours_val = 87600
+        else:
+            hours_val = 24
+    else:
+        try:
+            hours_val = int(hours)
+        except Exception:
+            hours_val = 24
 
     since = datetime.utcnow() - timedelta(hours=hours_val)
     since_str = since.strftime("%Y-%m-%d %H:%M:%S")
 
-    where_clauses = [f"timestamp >= '{since_str}'"]
+    where_clauses = [f"c.timestamp >= '{since_str}'"]
+    if not include_synthetic:
+        where_clauses.append("c.session_id != ''")
+        for p in SYNTHETIC_SESSION_PREFIXES:
+            where_clauses.append(f"c.session_id NOT LIKE '{p}%'")
+
     if session_id:
-        safe_sid = session_id.replace("'", "''")
-        where_clauses.append(f"session_id = '{safe_sid}'")
-    if command:
-        safe_cmd = command.replace("'", "''")
-        where_clauses.append(f"(command ILIKE '%{safe_cmd}%' OR output ILIKE '%{safe_cmd}%')")
+        safe_sid = escape_sql_literal(session_id)
+        where_clauses.append(f"c.session_id = '{safe_sid}'")
+
+    if attacker_ip:
+        safe_ip = escape_sql_literal(attacker_ip)
+        where_clauses.append(f"c.session_id IN (SELECT session_id FROM clouddecept.sessions WHERE attacker_ip = '{safe_ip}')")
+
+    # Command filtering: exact match vs free-text search
+    if command and exact:
+        safe_cmd = escape_sql_literal(command)
+        where_clauses.append(f"c.command = '{safe_cmd}'")
+    elif search or command:
+        term = search or command
+        safe_term = escape_sql_literal(term)
+        where_clauses.append(f"(c.command ILIKE '%{safe_term}%' OR c.output ILIKE '%{safe_term}%')")
+
     if intent and intent != "all":
-        safe_intent = intent.replace("'", "''")
-        where_clauses.append(f"intent = '{safe_intent}'")
+        safe_intent = escape_sql_literal(intent)
+        where_clauses.append(f"c.intent = '{safe_intent}'")
 
     where_sql = " AND ".join(where_clauses)
 
+    sessions_subquery = f"""
+        SELECT session_id, any(attacker_ip) as attacker_ip, any(country) as country, any(protocol) as protocol
+        FROM clouddecept.sessions
+        {"WHERE session_id IN (SELECT session_id FROM clouddecept.sessions WHERE attacker_ip = '" + escape_sql_literal(attacker_ip) + "')" if attacker_ip else ""}
+        GROUP BY session_id
+    """
+
     results = (await run_ch_query(
         f"""
-        SELECT event_id, session_id, timestamp, command, arguments,
-               output, exit_code, duration_ms, intent, mitre_techniques
-        FROM clouddecept.commands
-        WHERE {where_sql}
-        ORDER BY timestamp DESC
-        LIMIT 1 BY event_id
+        SELECT c.event_id as event_id,
+               c.session_id as session_id,
+               c.timestamp as timestamp,
+               c.command as command,
+               c.arguments as arguments,
+               c.output as output,
+               c.exit_code as exit_code,
+               c.duration_ms as duration_ms,
+               c.intent as intent,
+               c.mitre_techniques as mitre_techniques,
+               coalesce(nullIf(s.attacker_ip, ''), '') as attacker_ip,
+               coalesce(nullIf(s.country, ''), 'Unknown') as country,
+               coalesce(nullIf(s.protocol, ''), 'ssh') as protocol
+        FROM (
+            SELECT event_id, session_id, timestamp, command, arguments,
+                   output, exit_code, duration_ms, intent, mitre_techniques
+            FROM clouddecept.commands AS c
+            WHERE {where_sql}
+            LIMIT 1 BY event_id
+        ) AS c
+        LEFT JOIN ({sessions_subquery}) AS s ON c.session_id = s.session_id
+        ORDER BY c.timestamp DESC
         LIMIT {limit_val} OFFSET {offset_val}
         """
     )).named_results()
 
-    return [CommandResponse(**r) for r in results]
+    response = []
+    for r in results:
+        ip = r.get("attacker_ip") or ""
+        r["source_class"] = get_source_class(ip)
+        response.append(CommandResponse(**r))
+    return response
 
 
 @app.get("/auth", response_model=list[AuthAttemptResponse])
@@ -1834,7 +2045,7 @@ async def top_attackers(
     limit: int = Query(20, ge=1, le=100),
     hours: int = Query(168, ge=1, le=87600),
 ):
-    """Get top attackers by session count"""
+    """Get top attackers by session count (pre-aggregates commands to avoid join explosion)"""
     try:
         limit_val = int(limit)
     except Exception:
@@ -1853,9 +2064,13 @@ async def top_attackers(
                any(s.country) as country,
                uniqExact(s.session_id) as sessions,
                uniqExact(s.session_id) as unique_sessions,
-               greatest(sum(s.max_cmds), uniqExact(c.event_id)) as total_commands,
+               sum(coalesce(c.uniq_cmds, s.max_cmds, 0)) as total_commands,
                max(s.skill) as max_skill_level,
-               any(s.intent) as primary_intent,
+               if(
+                   length(arrayElement(topK(1)(if(s.intent != '' AND s.intent != 'unknown', s.intent, NULL)), 1)) > 0,
+                   arrayElement(topK(1)(if(s.intent != '' AND s.intent != 'unknown', s.intent, NULL)), 1),
+                   if(countIf(s.intent = 'unknown') > 0, 'unknown', '')
+               ) as primary_intent,
                max(s.start_t) as last_seen
         FROM (
             SELECT attacker_ip, session_id,
@@ -1869,7 +2084,11 @@ async def top_attackers(
               AND attacker_ip != '' AND attacker_ip IS NOT NULL
             GROUP BY attacker_ip, session_id
         ) AS s
-        LEFT JOIN clouddecept.commands AS c ON s.session_id = c.session_id
+        LEFT JOIN (
+            SELECT session_id, uniqExact(event_id) as uniq_cmds
+            FROM clouddecept.commands
+            GROUP BY session_id
+        ) AS c ON s.session_id = c.session_id
         GROUP BY s.attacker_ip
         ORDER BY sessions DESC
         LIMIT {limit_val}
@@ -1879,12 +2098,172 @@ async def top_attackers(
     return list(results)
 
 
-@app.get("/commands/top")
+@app.get("/attackers/{attacker_ip}", response_model=AttackerDetailResponse)
+async def get_attacker_detail(attacker_ip: str):
+    """Get comprehensive authoritative metrics and recent sessions for a specific attacker IP"""
+    safe_ip = attacker_ip.replace("'", "''").strip()
+
+    # 1. Authoritative session metrics from clouddecept.sessions
+    sess_agg_res = await run_ch_query(
+        f"""
+        SELECT
+            s.attacker_ip as attacker_ip,
+            any(s.country) as country,
+            uniqExact(s.session_id) as unique_sessions,
+            min(s.min_t) as first_seen,
+            max(s.max_t) as last_seen,
+            max(s.max_skill) as max_skill_level,
+            countIf(s.intent != '' AND s.intent != 'unknown') as classified_sessions,
+            countIf(s.intent = 'unknown') as unknown_sessions,
+            countIf(s.intent = '' OR s.intent IS NULL) as unclassified_sessions,
+            if(
+                length(arrayElement(topK(1)(if(s.intent != '' AND s.intent != 'unknown', s.intent, NULL)), 1)) > 0,
+                arrayElement(topK(1)(if(s.intent != '' AND s.intent != 'unknown', s.intent, NULL)), 1),
+                if(countIf(s.intent = 'unknown') > 0, 'unknown', '')
+            ) as primary_intent
+        FROM (
+            SELECT
+                attacker_ip,
+                session_id,
+                any(country) as country,
+                min(start_time) as min_t,
+                max(start_time) as max_t,
+                max(skill_level) as max_skill,
+                any(intent) as intent
+            FROM clouddecept.sessions
+            WHERE attacker_ip = '{safe_ip}'
+            GROUP BY attacker_ip, session_id
+        ) AS s
+        GROUP BY s.attacker_ip
+        """
+    )
+    sess_rows = list(sess_agg_res.named_results())
+    if not sess_rows:
+        raise HTTPException(status_code=404, detail="Attacker not found")
+
+    row = sess_rows[0]
+
+    # 2. Authoritative commands metrics
+    total_commands = 0
+    sessions_with_commands = 0
+    try:
+        cmd_res = await run_ch_query(
+            f"""
+            SELECT uniqExact(event_id) as total_commands,
+                   uniqExact(session_id) as sessions_with_commands
+            FROM clouddecept.commands
+            WHERE session_id IN (
+                SELECT session_id FROM clouddecept.sessions WHERE attacker_ip = '{safe_ip}'
+            )
+            """
+        )
+        cmd_rows = list(cmd_res.named_results())
+        if cmd_rows:
+            total_commands = int(cmd_rows[0].get("total_commands") or 0)
+            sessions_with_commands = int(cmd_rows[0].get("sessions_with_commands") or 0)
+    except Exception as e:
+        logger.debug(f"Could not fetch commands for attacker {safe_ip}: {e}")
+
+    # 3. Authoritative auth metrics
+    total_auth_attempts = 0
+    successful_auth_attempts = 0
+    sessions_with_successful_auth = 0
+    try:
+        auth_res = await run_ch_query(
+            f"""
+            SELECT uniqExact(event_id) as total_auth,
+                   uniqExactIf(event_id, success = 1) as succ_auth,
+                   uniqExactIf(session_id, success = 1) as succ_sessions
+            FROM clouddecept.auth_attempts
+            WHERE session_id IN (
+                SELECT session_id FROM clouddecept.sessions WHERE attacker_ip = '{safe_ip}'
+            )
+            """
+        )
+        auth_rows = list(auth_res.named_results())
+        if auth_rows:
+            total_auth_attempts = int(auth_rows[0].get("total_auth") or 0)
+            successful_auth_attempts = int(auth_rows[0].get("succ_auth") or 0)
+            sessions_with_successful_auth = int(auth_rows[0].get("succ_sessions") or 0)
+    except Exception as e:
+        logger.debug(f"Could not fetch auth for attacker {safe_ip}: {e}")
+
+    # 4. Fetch recent sessions for this attacker (up to 20)
+    recent_sessions_res = await run_ch_query(
+        f"""
+        SELECT session_id, start_time, end_time, duration_seconds,
+               attacker_ip, country, protocol, commands_executed,
+               files_transferred, credentials_tried, intent, skill_level,
+               disconnection_reason
+        FROM clouddecept.sessions
+        WHERE attacker_ip = '{safe_ip}'
+        ORDER BY start_time DESC
+        LIMIT 50
+        """
+    )
+    raw_recent = list(recent_sessions_res.named_results())
+    consolidated_recent = consolidate_session_rows(raw_recent)[:20]
+
+    # Reconcile counts for recent sessions
+    sids = [s["session_id"] for s in consolidated_recent if s.get("session_id")]
+    cmd_counts = {}
+    if sids:
+        placeholders = ",".join(f"'{sid}'" for sid in sids)
+        try:
+            c_res = (await run_ch_query(
+                f"""
+                SELECT session_id, uniqExact(event_id) as cmd_count
+                FROM clouddecept.commands
+                WHERE session_id IN ({placeholders})
+                GROUP BY session_id
+                """
+            )).named_results()
+            cmd_counts = {r["session_id"]: int(r["cmd_count"]) for r in c_res}
+        except Exception:
+            pass
+
+    formatted_recent = []
+    for s_dict in consolidated_recent:
+        sid = s_dict.get("session_id")
+        if sid and sid in cmd_counts:
+            s_dict["commands_executed"] = cmd_counts[sid]
+        is_active = (
+            s_dict.get("end_time") == s_dict.get("start_time") and
+            int(s_dict.get("duration_seconds") or 0) == 0 and
+            not s_dict.get("disconnection_reason")
+        )
+        if is_active:
+            s_dict["end_time"] = None
+        s_dict.pop("disconnection_reason", None)
+        formatted_recent.append(SessionSummary(**s_dict))
+
+    return AttackerDetailResponse(
+        attacker_ip=row["attacker_ip"],
+        country=row.get("country") or "Unknown",
+        total_sessions=int(row["unique_sessions"]),
+        unique_sessions=int(row["unique_sessions"]),
+        first_seen=row.get("first_seen"),
+        last_seen=row.get("last_seen"),
+        total_commands=total_commands,
+        sessions_with_commands=sessions_with_commands,
+        total_auth_attempts=total_auth_attempts,
+        successful_auth_attempts=successful_auth_attempts,
+        sessions_with_successful_auth=sessions_with_successful_auth,
+        classified_sessions=int(row.get("classified_sessions") or 0),
+        unknown_sessions=int(row.get("unknown_sessions") or 0),
+        unclassified_sessions=int(row.get("unclassified_sessions") or 0),
+        max_skill_level=int(row.get("max_skill_level") or 0),
+        primary_intent=row.get("primary_intent") or "",
+        recent_sessions=formatted_recent,
+    )
+
+
+@app.get("/commands/top", response_model=list[TopCommandResponse])
 async def top_commands(
     limit: int = Query(20, ge=1, le=100),
-    hours: int = Query(24, ge=1, le=87600),
+    hours: int = Query(87600, ge=1, le=87600),
 ):
-    """Get most executed commands (deduplicated by event_id)"""
+    """Get most executed commands across attributable honeypot traffic (excludes synthetic tests and legacy orphan sessions)"""
     try:
         limit_val = int(limit)
     except Exception:
@@ -1892,24 +2271,213 @@ async def top_commands(
     try:
         hours_val = int(hours)
     except Exception:
-        hours_val = 24
+        hours_val = 87600
 
     since = datetime.utcnow() - timedelta(hours=hours_val)
     since_str = since.strftime('%Y-%m-%d %H:%M:%S')
 
+    synth_filter = " AND ".join(f"session_id NOT LIKE '{p}%'" for p in SYNTHETIC_SESSION_PREFIXES)
+
     results = (await run_ch_query(
         f"""
-        SELECT command, uniqExact(event_id) as executions,
-               uniq(session_id) as unique_sessions
-        FROM clouddecept.commands
-        WHERE timestamp >= '{since_str}'
-        GROUP BY command
+        SELECT 
+            c.command as command,
+            uniqExact(c.event_id) as executions,
+            uniqExact(c.session_id) as unique_sessions,
+            uniqExact(if(s.attacker_ip != '', s.attacker_ip, 'UNKNOWN')) as unique_sources,
+            uniqExactIf(s.attacker_ip, s.attacker_ip != '' AND s.attacker_ip NOT IN ('172.18.0.1', '129.146.167.2', '127.0.0.1', '10.10.10.10') AND NOT startsWith(s.attacker_ip, '172.18.') AND NOT startsWith(s.attacker_ip, '127.')) as external_attackers,
+            uniqExactIf(s.attacker_ip, s.attacker_ip IN ('172.18.0.1', '129.146.167.2', '127.0.0.1', '10.10.10.10') OR startsWith(s.attacker_ip, '172.18.') OR startsWith(s.attacker_ip, '127.')) as internal_sources,
+            countIf(s.attacker_ip != '' AND s.attacker_ip NOT IN ('172.18.0.1', '129.146.167.2', '127.0.0.1', '10.10.10.10') AND NOT startsWith(s.attacker_ip, '172.18.') AND NOT startsWith(s.attacker_ip, '127.')) as external_executions,
+            countIf(s.attacker_ip IN ('172.18.0.1', '129.146.167.2', '127.0.0.1', '10.10.10.10') OR startsWith(s.attacker_ip, '172.18.') OR startsWith(s.attacker_ip, '127.')) as internal_executions,
+            min(c.timestamp) as first_seen,
+            max(c.timestamp) as last_seen
+        FROM (
+            SELECT event_id, session_id, command, timestamp
+            FROM clouddecept.commands
+            WHERE timestamp >= '{since_str}'
+              AND trim(command) != ''
+              AND session_id != ''
+              AND {synth_filter}
+            LIMIT 1 BY event_id
+        ) AS c
+        LEFT JOIN (
+            SELECT session_id, any(attacker_ip) as attacker_ip, any(country) as country
+            FROM clouddecept.sessions
+            GROUP BY session_id
+        ) AS s ON c.session_id = s.session_id
+        GROUP BY c.command
         ORDER BY executions DESC
         LIMIT {limit_val}
         """
     )).named_results()
 
-    return list(results)
+    return [TopCommandResponse(**r) for r in results]
+
+
+@app.get("/commands/summary", response_model=CommandSummaryResponse)
+async def get_command_summary(command: str = Query(...)):
+    """Get authoritative forensic summary, source breakdown, and quality metrics for a command"""
+    safe_cmd = escape_sql_literal(command).strip()
+    synth_sql = " OR ".join(f"session_id LIKE '{p}%'" for p in SYNTHETIC_SESSION_PREFIXES)
+    not_synth_sql = " AND ".join(f"session_id NOT LIKE '{p}%'" for p in SYNTHETIC_SESSION_PREFIXES)
+
+    # 1. Data quality transparency query
+    dq_res = (await run_ch_query(
+        f"""
+        SELECT 
+            count(*) as raw_physical_rows,
+            uniqExactIf(event_id, session_id != '' AND {not_synth_sql}) as attributable_events,
+            uniqExactIf(event_id, {synth_sql}) as excluded_synthetic_events,
+            uniqExactIf(event_id, session_id = '' OR session_id IS NULL) as orphan_events
+        FROM clouddecept.commands
+        WHERE command = '{safe_cmd}'
+        """
+    )).named_results()
+    dq_rows = list(dq_res)
+    raw_physical_rows = int(dq_rows[0].get("raw_physical_rows") or 0) if dq_rows else 0
+    attributable_events = int(dq_rows[0].get("attributable_events") or 0) if dq_rows else 0
+    excluded_synthetic_events = int(dq_rows[0].get("excluded_synthetic_events") or 0) if dq_rows else 0
+    orphan_events = int(dq_rows[0].get("orphan_events") or 0) if dq_rows else 0
+
+    dq_data = CommandDataQuality(
+        raw_physical_rows=raw_physical_rows,
+        attributable_events=attributable_events,
+        excluded_synthetic_events=excluded_synthetic_events,
+        orphan_events=orphan_events,
+    )
+
+    # 2. Source attribution breakdown
+    src_res = (await run_ch_query(
+        f"""
+        SELECT 
+            coalesce(nullIf(s.attacker_ip, ''), 'unknown') as attacker_ip,
+            any(s.country) as country,
+            uniqExact(c.event_id) as executions,
+            uniqExact(c.session_id) as unique_sessions,
+            min(c.timestamp) as first_seen,
+            max(c.timestamp) as last_seen
+        FROM (
+            SELECT event_id, session_id, command, timestamp
+            FROM clouddecept.commands
+            WHERE command = '{safe_cmd}'
+              AND session_id != ''
+              AND {not_synth_sql}
+            LIMIT 1 BY event_id
+        ) AS c
+        LEFT JOIN (
+            SELECT session_id, any(attacker_ip) as attacker_ip, any(country) as country
+            FROM clouddecept.sessions
+            GROUP BY session_id
+        ) AS s ON c.session_id = s.session_id
+        GROUP BY attacker_ip
+        ORDER BY executions DESC
+        """
+    )).named_results()
+
+    sources: list[CommandSourceBreakdown] = []
+    for r in src_res:
+        ip = r.get("attacker_ip") or "unknown"
+        s_class = get_source_class(ip)
+        sources.append(CommandSourceBreakdown(
+            attacker_ip=ip,
+            country=r.get("country") or "Unknown",
+            source_class=s_class,
+            executions=int(r.get("executions") or 0),
+            unique_sessions=int(r.get("unique_sessions") or 0),
+            first_seen=r.get("first_seen"),
+            last_seen=r.get("last_seen"),
+        ))
+
+    # Calculate overall aggregates
+    total_execs = sum(s.executions for s in sources)
+    unique_srcs = len(sources)
+    ext_attackers = sum(1 for s in sources if s.source_class == "EXTERNAL_HONEYPOT")
+    int_sources = sum(1 for s in sources if s.source_class in ("INTERNAL_INFRASTRUCTURE", "INTERNAL_OR_AMBIGUOUS"))
+    ext_execs = sum(s.executions for s in sources if s.source_class == "EXTERNAL_HONEYPOT")
+    int_execs = sum(s.executions for s in sources if s.source_class in ("INTERNAL_INFRASTRUCTURE", "INTERNAL_OR_AMBIGUOUS"))
+
+    first_seen_val = min((s.first_seen for s in sources if s.first_seen), default=None)
+    last_seen_val = max((s.last_seen for s in sources if s.last_seen), default=None)
+
+    # 3. Overall unique sessions
+    agg_sess_res = (await run_ch_query(
+        f"""
+        SELECT uniqExact(session_id) as total_sessions
+        FROM clouddecept.commands
+        WHERE command = '{safe_cmd}'
+          AND session_id != ''
+          AND {not_synth_sql}
+        """
+    )).named_results()
+    agg_sess_rows = list(agg_sess_res)
+    total_sessions_val = int(agg_sess_rows[0].get("total_sessions") or 0) if agg_sess_rows else 0
+
+    # 4. Recent executions (up to 50)
+    recent_res = (await run_ch_query(
+        f"""
+        SELECT c.event_id as event_id,
+               c.session_id as session_id,
+               c.timestamp as timestamp,
+               c.command as command,
+               c.arguments as arguments,
+               c.output as output,
+               c.exit_code as exit_code,
+               c.duration_ms as duration_ms,
+               coalesce(nullIf(s.attacker_ip, ''), '') as attacker_ip,
+               coalesce(nullIf(s.country, ''), 'Unknown') as country,
+               coalesce(nullIf(s.protocol, ''), 'ssh') as protocol
+        FROM (
+            SELECT event_id, session_id, timestamp, command, arguments,
+                   output, exit_code, duration_ms
+            FROM clouddecept.commands
+            WHERE command = '{safe_cmd}'
+              AND session_id != ''
+              AND {not_synth_sql}
+            LIMIT 1 BY event_id
+        ) AS c
+        LEFT JOIN (
+            SELECT session_id, any(attacker_ip) as attacker_ip, any(country) as country, any(protocol) as protocol
+            FROM clouddecept.sessions
+            GROUP BY session_id
+        ) AS s ON c.session_id = s.session_id
+        ORDER BY c.timestamp DESC
+        LIMIT 50
+        """
+    )).named_results()
+
+    recent_events: list[CommandEventItem] = []
+    for r in recent_res:
+        ip = r.get("attacker_ip") or ""
+        recent_events.append(CommandEventItem(
+            event_id=r["event_id"],
+            session_id=r["session_id"],
+            timestamp=r["timestamp"],
+            command=r["command"],
+            arguments=r.get("arguments") or [],
+            output=r.get("output"),
+            exit_code=int(r.get("exit_code") or 0),
+            duration_ms=int(r.get("duration_ms") or 0),
+            attacker_ip=ip,
+            country=r.get("country") or "Unknown",
+            protocol=r.get("protocol") or "ssh",
+            source_class=get_source_class(ip),
+        ))
+
+    return CommandSummaryResponse(
+        command=command,
+        total_executions=total_execs,
+        unique_sessions=total_sessions_val,
+        unique_sources=unique_srcs,
+        external_attackers=ext_attackers,
+        internal_sources=int_sources,
+        external_executions=ext_execs,
+        internal_executions=int_execs,
+        first_seen=first_seen_val,
+        last_seen=last_seen_val,
+        sources=sources,
+        recent_events=recent_events,
+        data_quality=dq_data,
+    )
 
 
 @app.post("/search/sessions")

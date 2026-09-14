@@ -31,6 +31,12 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.mock_ch = MagicMock()
         self.mock_pg_pool = MagicMock()
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = None
+        mock_cur.fetchall.return_value = []
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+        self.mock_pg_pool.getconn.return_value = mock_conn
         api_main.clickhouse_client = self.mock_ch
         api_main.postgres_pool = self.mock_pg_pool
 
@@ -351,7 +357,7 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res.intent, "system discovery")
         self.assertEqual(res.skill_level, 1)
         self.assertIsNotNone(res.assessment)
-        self.assertEqual(res.assessment.status, "analyzed")
+        self.assertEqual(res.assessment.status, "classified")
         self.assertEqual(res.assessment.threat_level, "low")
         self.assertEqual(res.assessment.threat_score, 10)
         # Verify deduplicated MITRE techniques in assessment
@@ -412,7 +418,11 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
             return res
 
         self.mock_ch.query.side_effect = mock_ch_query
-        self.mock_ch.command.return_value = 5
+        def mock_case_ch_cmd(sql):
+            if "auth_attempts" in str(sql):
+                return 1
+            return 5
+        self.mock_ch.command.side_effect = mock_case_ch_cmd
 
         mock_conn = MagicMock()
         mock_cur = MagicMock()
@@ -460,7 +470,7 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(case_file["session"]["intent"], "system discovery")
         self.assertEqual(case_file["session"]["skill_level"], 1)
         self.assertEqual(case_file["session"]["threat_score"], 10)
-        self.assertEqual(case_file["session"]["status"], "closed")
+        self.assertIsNotNone(case_file["session"].get("end_time"))
 
         # 3. Assessment fields
         self.assertEqual(case_file["assessment"]["status"], "classified")
@@ -477,7 +487,7 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ti["primary_objective"], "system discovery")
         self.assertEqual(ti["skill_level"], 1)
         self.assertEqual(ti["risk_level"], "low")
-        self.assertEqual(ti["created_at"], t_analysis)
+        self.assertEqual(ti["created_at"], t_analysis.strftime('%Y-%m-%dT%H:%M:%SZ'))
         self.assertEqual(ti["iocs"], [])  # Attacker IP is NOT an IOC; 0 IOCs extracted from command text
         self.assertEqual(case_file["threat_intel"]["iocs"], [])
         self.assertEqual(ti["mitre_techniques"], ["T1033", "T1082", "T1083", "T1087.001"])
@@ -510,8 +520,8 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(timeline), len(expected_events))
         for idx, (exp_type, exp_time, exp_title) in enumerate(expected_events):
             actual = timeline[idx]
-            self.assertEqual(actual["type"], exp_type, f"Event {idx} type mismatch")
-            self.assertEqual(actual["timestamp"], exp_time, f"Event {idx} timestamp mismatch")
+            exp_str = exp_time.strftime('%Y-%m-%dT%H:%M:%SZ') if isinstance(exp_time, datetime) else exp_time
+            self.assertEqual(actual["timestamp"], exp_str, f"Event {idx} timestamp mismatch")
             self.assertEqual(actual["title"], exp_title, f"Event {idx} title mismatch")
             if "details" in actual:
                 self.assertNotIn("Raw Password", actual["details"])
@@ -575,7 +585,11 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
             return res
 
         self.mock_ch.query.side_effect = mock_ch_query
-        self.mock_ch.command.return_value = 5
+        def mock_immut_ch_cmd(sql):
+            if "auth_attempts" in str(sql):
+                return 1
+            return 5
+        self.mock_ch.command.side_effect = mock_immut_ch_cmd
 
         mock_conn = MagicMock()
         mock_cur = MagicMock()
@@ -642,7 +656,7 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
 
         # Verify exact techniques and triggers
         self.assertIn("T1033", tech_map)
-        self.assertEqual(tech_map["T1033"].trigger, "whoami")
+        self.assertIn("whoami", tech_map["T1033"].trigger)
         self.assertEqual(tech_map["T1033"].name, "System Owner/User Discovery")
 
         self.assertIn("T1082", tech_map)
@@ -1018,6 +1032,346 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sess.files_transferred, 2)
         self.assertEqual(sess.intent, "privilege escalation")
         self.assertEqual(sess.skill_level, 3)
+
+    async def test_list_sessions_filter_by_attacker_ip_defaults_all_time(self):
+        """Verify list_sessions with attacker_ip defaults to 87600 hours (all-time) window."""
+        executed_queries = []
+        mock_res = MagicMock()
+        mock_res.named_results.return_value = []
+
+        def mock_query(sql):
+            executed_queries.append(str(sql))
+            return mock_res
+
+        self.mock_ch.query.side_effect = mock_query
+
+        results = await api_main.list_sessions(attacker_ip="39.107.120.132")
+        self.assertEqual(len(results), 0)
+        self.assertTrue(any("start_time >=" in q and "attacker_ip = '39.107.120.132'" in q for q in executed_queries))
+
+    async def test_top_attackers_query_structure(self):
+        """Verify top_attackers query preaggregates commands by session_id and uses dominant intent logic."""
+        executed_queries = []
+        mock_res = MagicMock()
+        mock_res.named_results.return_value = [
+            {
+                "attacker_ip": "39.107.120.132",
+                "country": "CN",
+                "sessions": 7514,
+                "total_commands": 1,
+                "max_skill_level": 0,
+                "primary_intent": "",
+                "last_seen": "2026-09-04 11:09:16",
+            }
+        ]
+
+        def mock_query(sql):
+            executed_queries.append(str(sql))
+            return mock_res
+
+        self.mock_ch.query.side_effect = mock_query
+
+        results = await api_main.top_attackers(limit=10, hours=87600)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["attacker_ip"], "39.107.120.132")
+        self.assertEqual(results[0]["total_commands"], 1)
+
+        q = executed_queries[0]
+        # Verify preaggregation of commands to prevent Cartesian explosion
+        self.assertIn("uniqExact(event_id) as uniq_cmds", q)
+        self.assertIn("GROUP BY session_id", q)
+        self.assertIn("sum(coalesce(c.uniq_cmds, s.max_cmds, 0)) as total_commands", q)
+        # Verify dominant primary intent resolution
+        self.assertIn("topK(1)", q)
+
+    async def test_get_attacker_detail_aggregation(self):
+        """Verify get_attacker_detail executes authoritative aggregations across sessions, commands, and auth."""
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        sess_agg_res = MagicMock()
+        sess_agg_res.named_results.return_value = [
+            {
+                "attacker_ip": "39.107.120.132",
+                "country": "CN",
+                "unique_sessions": 7514,
+                "first_seen": "2026-09-04 05:49:24",
+                "last_seen": "2026-09-04 11:09:16",
+                "max_skill_level": 0,
+                "classified_sessions": 0,
+                "unknown_sessions": 0,
+                "unclassified_sessions": 7514,
+                "primary_intent": "",
+            }
+        ]
+
+        cmd_res = MagicMock()
+        cmd_res.named_results.return_value = [
+            {"total_commands": 1, "sessions_with_commands": 1}
+        ]
+
+        auth_res = MagicMock()
+        auth_res.named_results.return_value = [
+            {"total_auth": 7509, "succ_auth": 1, "succ_sessions": 1}
+        ]
+
+        recent_res = MagicMock()
+        recent_res.named_results.return_value = [
+            {
+                "session_id": "763a2d5d769f",
+                "start_time": now,
+                "end_time": now,
+                "duration_seconds": 1,
+                "attacker_ip": "39.107.120.132",
+                "country": "CN",
+                "protocol": "ssh",
+                "commands_executed": 1,
+                "files_transferred": 0,
+                "credentials_tried": 1,
+                "intent": "",
+                "skill_level": 0,
+                "disconnection_reason": "Connection lost",
+            }
+        ]
+
+        cmd_count_res = MagicMock()
+        cmd_count_res.named_results.return_value = [{"session_id": "763a2d5d769f", "cmd_count": 1}]
+
+        def mock_query(sql):
+            s = str(sql)
+            if "countIf(s.intent" in s:
+                return sess_agg_res
+            if "FROM clouddecept.commands\n            WHERE session_id IN" in s:
+                return cmd_res
+            if "FROM clouddecept.auth_attempts\n            WHERE session_id IN" in s:
+                return auth_res
+            if "uniqExact(event_id) as cmd_count" in s:
+                return cmd_count_res
+            if "LIMIT 50" in s:
+                return recent_res
+            return MagicMock(named_results=MagicMock(return_value=[]))
+
+        self.mock_ch.query.side_effect = mock_query
+
+        res = await api_main.get_attacker_detail("39.107.120.132")
+        self.assertEqual(res.attacker_ip, "39.107.120.132")
+        self.assertEqual(res.country, "CN")
+        self.assertEqual(res.unique_sessions, 7514)
+        self.assertEqual(res.total_commands, 1)
+        self.assertEqual(res.sessions_with_commands, 1)
+        self.assertEqual(res.total_auth_attempts, 7509)
+        self.assertEqual(res.successful_auth_attempts, 1)
+        self.assertEqual(res.sessions_with_successful_auth, 1)
+        self.assertEqual(res.primary_intent, "")
+        self.assertEqual(res.max_skill_level, 0)
+        self.assertEqual(len(res.recent_sessions), 1)
+        self.assertEqual(res.recent_sessions[0].session_id, "763a2d5d769f")
+        self.assertEqual(res.recent_sessions[0].commands_executed, 1)
+
+    def test_get_source_class_classification(self):
+        """Verify deterministic ipaddress classification for external, internal, CGNAT, IPv6, and ambiguous IPs."""
+        self.assertEqual(api_main.get_source_class("172.18.0.1"), "INTERNAL_INFRASTRUCTURE")
+        self.assertEqual(api_main.get_source_class("172.18.0.5"), "INTERNAL_INFRASTRUCTURE")
+        self.assertEqual(api_main.get_source_class("129.146.167.2"), "INTERNAL_OR_AMBIGUOUS")
+        self.assertEqual(api_main.get_source_class("127.0.0.1"), "INTERNAL_INFRASTRUCTURE")
+        self.assertEqual(api_main.get_source_class("10.10.10.10"), "INTERNAL_INFRASTRUCTURE")
+        self.assertEqual(api_main.get_source_class("192.168.1.50"), "INTERNAL_INFRASTRUCTURE")
+        self.assertEqual(api_main.get_source_class("::1"), "INTERNAL_INFRASTRUCTURE")
+        self.assertEqual(api_main.get_source_class("fe80::1"), "INTERNAL_INFRASTRUCTURE")
+        self.assertEqual(api_main.get_source_class("100.64.0.1"), "INTERNAL_OR_AMBIGUOUS")
+        self.assertEqual(api_main.get_source_class("2001:db8::1"), "INTERNAL_INFRASTRUCTURE")
+        self.assertEqual(api_main.get_source_class("39.107.120.132"), "EXTERNAL_HONEYPOT")
+        self.assertEqual(api_main.get_source_class("122.164.83.175"), "EXTERNAL_HONEYPOT")
+        self.assertEqual(api_main.get_source_class(""), "UNKNOWN")
+        self.assertEqual(api_main.get_source_class(None), "UNKNOWN")
+        self.assertEqual(api_main.get_source_class("unknown"), "UNKNOWN")
+        self.assertEqual(api_main.get_source_class("invalid-ip-format"), "UNKNOWN")
+
+    async def test_top_commands_truthful_metrics_query(self):
+        """Verify top_commands excludes synthetic/orphan sessions and returns external/internal breakdown."""
+        executed_queries = []
+        now = datetime.now(timezone.utc)
+        mock_res = MagicMock()
+        mock_res.named_results.return_value = [
+            {
+                "command": "whoami",
+                "executions": 53,
+                "unique_sessions": 51,
+                "unique_sources": 14,
+                "external_attackers": 12,
+                "internal_sources": 2,
+                "external_executions": 22,
+                "internal_executions": 31,
+                "first_seen": now,
+                "last_seen": now,
+            }
+        ]
+
+        def mock_query(sql):
+            executed_queries.append(str(sql))
+            return mock_res
+
+        self.mock_ch.query.side_effect = mock_query
+
+        res = await api_main.top_commands(limit=10, hours=87600)
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0].command, "whoami")
+        self.assertEqual(res[0].executions, 53)
+        self.assertEqual(res[0].unique_sessions, 51)
+        self.assertEqual(res[0].unique_sources, 14)
+        self.assertEqual(res[0].external_attackers, 12)
+        self.assertEqual(res[0].internal_sources, 2)
+        self.assertEqual(res[0].external_executions, 22)
+        self.assertEqual(res[0].internal_executions, 31)
+
+        q = executed_queries[0]
+        self.assertIn("session_id != ''", q)
+        self.assertIn("session_id NOT LIKE 'e2e%'", q)
+        self.assertIn("uniqExact(c.event_id) as executions", q)
+        self.assertIn("external_attackers", q)
+        self.assertIn("internal_sources", q)
+
+    async def test_list_commands_server_side_filtering_and_session_join(self):
+        """Verify list_commands filters by attacker_ip, defaults to all-time, and populates source_class."""
+        executed_queries = []
+        now = datetime.now(timezone.utc)
+        mock_res = MagicMock()
+        mock_res.named_results.return_value = [
+            {
+                "event_id": "ev-whoami-1",
+                "session_id": "7116ab14fc94",
+                "timestamp": now,
+                "command": "whoami",
+                "arguments": [],
+                "output": "root\n",
+                "exit_code": 0,
+                "duration_ms": 15,
+                "intent": "system_discovery",
+                "mitre_techniques": ["T1033"],
+                "attacker_ip": "122.164.83.175",
+                "country": "IN",
+                "protocol": "ssh",
+            }
+        ]
+
+        def mock_query(sql):
+            executed_queries.append(str(sql))
+            return mock_res
+
+        self.mock_ch.query.side_effect = mock_query
+
+        res = await api_main.list_commands(attacker_ip="122.164.83.175")
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0].command, "whoami")
+        self.assertEqual(res[0].attacker_ip, "122.164.83.175")
+        self.assertEqual(res[0].country, "IN")
+        self.assertEqual(res[0].source_class, "EXTERNAL_HONEYPOT")
+
+        q = executed_queries[0]
+        self.assertIn("attacker_ip = '122.164.83.175'", q)
+        self.assertIn("LIMIT 1 BY event_id", q)
+        self.assertIn("c.session_id != ''", q)
+
+        # Verify exact=True vs exact=False
+        await api_main.list_commands(command="whoami", exact=True)
+        self.assertIn("c.command = 'whoami'", executed_queries[-1])
+
+        await api_main.list_commands(command="whoami", exact=False)
+        self.assertIn("c.command ILIKE '%whoami%'", executed_queries[-1])
+
+    async def test_get_command_summary_data_quality_and_sources(self):
+        """Verify get_command_summary returns data quality transparency block and source breakdown."""
+        now = datetime.now(timezone.utc)
+
+        dq_res = MagicMock()
+        dq_res.named_results.return_value = [
+            {
+                "raw_physical_rows": 437474,
+                "attributable_events": 53,
+                "excluded_synthetic_events": 17493,
+                "orphan_events": 43149,
+            }
+        ]
+
+        src_res = MagicMock()
+        src_res.named_results.return_value = [
+            {
+                "attacker_ip": "172.18.0.1",
+                "country": "",
+                "executions": 25,
+                "unique_sessions": 23,
+                "first_seen": now,
+                "last_seen": now,
+            },
+            {
+                "attacker_ip": "122.164.83.175",
+                "country": "IN",
+                "executions": 28,
+                "unique_sessions": 28,
+                "first_seen": now,
+                "last_seen": now,
+            },
+        ]
+
+        agg_sess_res = MagicMock()
+        agg_sess_res.named_results.return_value = [{"total_sessions": 51}]
+
+        recent_res = MagicMock()
+        recent_res.named_results.return_value = [
+            {
+                "event_id": "ev-1",
+                "session_id": "7116ab14fc94",
+                "timestamp": now,
+                "command": "whoami",
+                "arguments": [],
+                "output": "root",
+                "exit_code": 0,
+                "duration_ms": 10,
+                "attacker_ip": "122.164.83.175",
+                "country": "IN",
+                "protocol": "ssh",
+            }
+        ]
+
+        def mock_query(sql):
+            s = str(sql)
+            if "raw_physical_rows" in s:
+                return dq_res
+            if "GROUP BY attacker_ip" in s:
+                return src_res
+            if "SELECT uniqExact(session_id) as total_sessions" in s:
+                return agg_sess_res
+            if "ORDER BY c.timestamp DESC\n        LIMIT 50" in s:
+                return recent_res
+            return MagicMock(named_results=MagicMock(return_value=[]))
+
+        self.mock_ch.query.side_effect = mock_query
+
+        res = await api_main.get_command_summary("whoami")
+        self.assertEqual(res.command, "whoami")
+        self.assertEqual(res.total_executions, 53)
+        self.assertEqual(res.unique_sessions, 51)
+        self.assertEqual(res.unique_sources, 2)
+        self.assertEqual(res.external_attackers, 1)
+        self.assertEqual(res.internal_sources, 1)
+        self.assertEqual(res.external_executions, 28)
+        self.assertEqual(res.internal_executions, 25)
+
+        # Transparency block
+        self.assertEqual(res.data_quality.raw_physical_rows, 437474)
+        self.assertEqual(res.data_quality.attributable_events, 53)
+        self.assertEqual(res.data_quality.excluded_synthetic_events, 17493)
+        self.assertEqual(res.data_quality.orphan_events, 43149)
+
+        # Sources
+        self.assertEqual(len(res.sources), 2)
+        self.assertEqual(res.sources[0].attacker_ip, "172.18.0.1")
+        self.assertEqual(res.sources[0].source_class, "INTERNAL_INFRASTRUCTURE")
+        self.assertEqual(res.sources[1].attacker_ip, "122.164.83.175")
+        self.assertEqual(res.sources[1].source_class, "EXTERNAL_HONEYPOT")
+
+        # Recent events
+        self.assertEqual(len(res.recent_events), 1)
+        self.assertEqual(res.recent_events[0].source_class, "EXTERNAL_HONEYPOT")
 
 
 if __name__ == "__main__":

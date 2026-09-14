@@ -27,11 +27,11 @@ interface ConnectionStatus {
 
 interface DashboardActions {
   // Global Commands & Auth
-  fetchGlobalCommands: (params?: { limit?: number; offset?: number; session_id?: string; command?: string; intent?: string; hours?: number }) => Promise<void>;
+  fetchGlobalCommands: (params?: { limit?: number; offset?: number; session_id?: string; command?: string; attacker_ip?: string; intent?: string; hours?: number; include_synthetic?: boolean }) => Promise<void>;
   fetchGlobalAuth: (params?: { limit?: number; offset?: number; session_id?: string; username?: string; success?: boolean; hours?: number }) => Promise<void>;
 
   // Sessions
-  fetchSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string; min_skill_level?: number }) => Promise<void>;
+  fetchSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string; min_skill_level?: number; attacker_ip?: string; session_id?: string }) => Promise<void>;
   fetchSession: (sessionId: string) => Promise<void>;
   fetchSessionCommands: (sessionId: string) => Promise<void>;
   fetchSessionAuth: (sessionId: string) => Promise<void>;

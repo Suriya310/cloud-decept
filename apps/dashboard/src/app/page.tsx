@@ -420,9 +420,18 @@ export default function OverviewPage() {
                   key={cmd.command}
                   className="p-3 flex items-center justify-between hover:bg-cyan-950/20 transition-all text-xs"
                 >
-                  <div className="flex items-center gap-2 truncate max-w-sm">
-                    <span className="text-emerald-400 font-bold">$</span>
-                    <span className="font-bold text-white font-mono truncate">{cmd.command}</span>
+                  <div className="space-y-0.5 truncate max-w-sm">
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="text-emerald-400 font-bold">$</span>
+                      <span className="font-bold text-white font-mono truncate">{cmd.command}</span>
+                    </div>
+                    {(cmd.external_executions !== undefined || cmd.internal_executions !== undefined) && (
+                      <div className="text-[10px] text-slate-500 flex items-center gap-2">
+                        <span className="text-emerald-400/80">{cmd.external_executions ?? 0} External</span>
+                        <span>•</span>
+                        <span className="text-amber-400/80">{cmd.internal_executions ?? 0} Internal</span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-3 flex-shrink-0">
@@ -431,14 +440,14 @@ export default function OverviewPage() {
                         {cmd.executions} Runs
                       </span>
                       <span className="text-[10px] text-slate-400 block">
-                        {cmd.unique_sessions} Sessions
+                        {cmd.unique_sessions} Sessions • {cmd.unique_sources ?? cmd.unique_sessions} Sources
                       </span>
                     </div>
 
                     <Link
                       href={`/commands?search=${encodeURIComponent(cmd.command)}`}
                       className="p-1 rounded bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/30"
-                      title="Explore command runs"
+                      title="Explore command forensic drill-down"
                     >
                       <ChevronRight className="w-4 h-4" />
                     </Link>

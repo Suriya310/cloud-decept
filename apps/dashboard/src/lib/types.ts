@@ -84,6 +84,10 @@ export interface Command {
   intent?: string;
   intent_confidence?: number;
   mitre_techniques?: string[];
+  attacker_ip?: string;
+  country?: string;
+  protocol?: string;
+  source_class?: string;
 }
 
 export interface AuthEvent {
@@ -177,10 +181,85 @@ export interface TopAttacker {
   last_seen?: string;
 }
 
+export interface AttackerDetail {
+  attacker_ip: string;
+  country: string;
+  total_sessions: number;
+  unique_sessions: number;
+  first_seen?: string | null;
+  last_seen?: string | null;
+  total_commands: number;
+  sessions_with_commands: number;
+  total_auth_attempts: number;
+  successful_auth_attempts: number;
+  sessions_with_successful_auth: number;
+  classified_sessions: number;
+  unknown_sessions: number;
+  unclassified_sessions: number;
+  max_skill_level: number;
+  primary_intent: string;
+  recent_sessions: Session[];
+}
+
 export interface TopCommand {
   command: string;
   executions: number;
   unique_sessions: number;
+  unique_sources?: number;
+  external_attackers?: number;
+  internal_sources?: number;
+  external_executions?: number;
+  internal_executions?: number;
+  first_seen?: string | null;
+  last_seen?: string | null;
+}
+
+export interface CommandSourceBreakdown {
+  attacker_ip: string;
+  country: string;
+  source_class: string;
+  executions: number;
+  unique_sessions: number;
+  first_seen?: string | null;
+  last_seen?: string | null;
+}
+
+export interface CommandEventItem {
+  event_id: string;
+  session_id: string;
+  timestamp: string;
+  command: string;
+  arguments?: string[];
+  output?: string;
+  exit_code?: number;
+  duration_ms?: number;
+  attacker_ip?: string;
+  country?: string;
+  protocol?: string;
+  source_class?: string;
+}
+
+export interface CommandDataQuality {
+  raw_physical_rows: number;
+  attributable_events: number;
+  excluded_synthetic_events: number;
+  orphan_events: number;
+}
+
+export interface CommandSummary {
+  command: string;
+  total_executions: number;
+  unique_sessions: number;
+  unique_sources: number;
+  external_attackers: number;
+  internal_sources: number;
+  external_executions: number;
+  internal_executions: number;
+  first_seen?: string | null;
+  last_seen?: string | null;
+  sources: CommandSourceBreakdown[];
+  recent_events: CommandEventItem[];
+  data_quality: CommandDataQuality;
 }
 
 export interface AdaptiveStrategy {

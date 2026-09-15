@@ -24,6 +24,9 @@ export interface Session {
   intent_history?: string[];
   threat_score?: number;
   tactics?: string[];
+  lifecycle_status?: 'active' | 'closed' | 'timed_out' | 'stale';
+  auth_outcome?: 'accepted' | 'rejected' | 'incomplete' | 'unknown';
+  shell_status?: 'granted' | 'not_granted';
   status?: 'active' | 'closed' | 'failed' | 'timed_out' | 'stale';
   assessment?: FinalAssessment;
 }
@@ -288,6 +291,30 @@ export interface QuarantinedSessionsBreakdown {
   orphan_sessions: number;
 }
 
+export interface DataIntegrityStore {
+  total_commands_raw: number;
+  orphan_commands: number;
+  synthetic_commands: number;
+  internal_commands: number;
+  external_commands: number;
+  total_sessions_raw: number;
+  external_sessions: number;
+  quarantined_sessions: number;
+  total_auth_attempts_raw?: number;
+  orphan_auth_attempts?: number;
+  external_auth_attempts?: number;
+  formula_balanced: boolean;
+}
+
+export interface AuthOutcomes {
+  total_attempts: number;
+  accepted_attempts: number;
+  rejected_attempts: number;
+  accepted_sessions: number;
+  interactive_sessions: number;
+  command_bearing_sessions?: number;
+}
+
 export interface Stats {
   // All-time totals (authoritative)
   total_sessions: number;
@@ -299,6 +326,13 @@ export interface Stats {
   external_commands?: number;
   external_auth_sessions?: number;
   quarantined_sessions?: QuarantinedSessionsBreakdown;
+  interactive_sessions?: number;
+  command_bearing_sessions?: number;
+  unique_external_attackers?: number;
+  auth_outcomes?: AuthOutcomes;
+  data_integrity?: DataIntegrityStore;
+  assessed_sessions_count?: number;
+  unassessed_sessions_count?: number;
 
   // Recent window (configurable, default 24h)
   recent_sessions: number;
@@ -310,9 +344,9 @@ export interface Stats {
 
   // Aggregated data for charts
   top_intents: { intent: string; count: number }[];
-  top_countries: { country: string; count: number }[];
+  top_countries: { country: string; count: number; attackers?: number }[];
   threat_distribution: { level: string; count: number }[];
-  sessions_per_hour: { hour: string; count: number }[];
+  sessions_per_hour: { hour: string; count: number; date?: string }[];
   commands_per_day: { date: string; count: number }[];
   sessions_per_day?: { date: string; count: number }[];
   successful_auth_sessions?: number;
@@ -344,6 +378,8 @@ export interface DashboardState {
   globalCommandsLoading: boolean;
   globalAuth: AuthEvent[];
   globalAuthLoading: boolean;
+  authStats: AuthStats | null;
+  authStatsLoading: boolean;
   isConnected: boolean;
   isLiveConnected: boolean;
   liveEventCount: number;
@@ -353,4 +389,16 @@ export interface DashboardState {
     country: string;
     dateRange: [Date | undefined, Date | undefined];
   };
+}
+
+export interface AuthStats {
+  total_probes: number;
+  authenticated_sessions: number;
+  unique_sources: number;
+  unique_usernames: number;
+  unique_passwords: number;
+  top_usernames: { username: string; count: number }[];
+  top_passwords: { password: string; count: number }[];
+  auth_policy?: string;
+  publickey_allowed?: boolean;
 }

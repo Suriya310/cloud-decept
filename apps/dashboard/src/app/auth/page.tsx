@@ -25,7 +25,7 @@ import { safeCopyToClipboard } from '@/lib/clipboard';
 import { getCountryName } from '@/lib/countries';
 
 export default function AuthenticationForensicsPage() {
-  const { globalAuth, globalAuthLoading, fetchGlobalAuth, timeWindowHours } = useDashboardStore();
+  const { globalAuth, globalAuthLoading, fetchGlobalAuth, authStats, fetchAuthStats, timeWindowHours } = useDashboardStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'failed'>('all');
   const [currentPage, setCurrentPage] = useState(1);
@@ -35,7 +35,8 @@ export default function AuthenticationForensicsPage() {
 
   useEffect(() => {
     fetchGlobalAuth({ hours: timeWindowHours, limit: 300 });
-  }, [fetchGlobalAuth, timeWindowHours]);
+    fetchAuthStats(timeWindowHours);
+  }, [fetchGlobalAuth, fetchAuthStats, timeWindowHours]);
 
   const copyToClipboard = useCallback(async (text: string, key: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -69,36 +70,76 @@ export default function AuthenticationForensicsPage() {
     });
   }, [globalAuth, searchQuery, statusFilter]);
 
-  // Aggregate stats
-  const totalProbes = filteredAuth.length;
-  const successfulLogins = filteredAuth.filter((a) => a.success).length;
-  const uniqueSources = useMemo(() => new Set(filteredAuth.map((a) => a.attacker_ip || a.src_ip || 'unknown')).size, [filteredAuth]);
-  const uniqueUsernames = useMemo(() => new Set(filteredAuth.map((a) => a.username)).size, [filteredAuth]);
-  const uniquePasswords = useMemo(() => new Set(filteredAuth.map((a) => a.password)).size, [filteredAuth]);
+  // Aggregate stats (authoritative queries, falling back to filtered table only during active search)
+  const isFiltered = Boolean(searchQuery || statusFilter !== 'all');
 
-  // Top Targeted Usernames
+  const totalProbes = isFiltered
+    ? filteredAuth.length
+    : (authStats?.total_probes && authStats.total_probes > 0
+        ? authStats.total_probes
+        : filteredAuth.length);
+
+  const authenticatedSessions = isFiltered
+    ? filteredAuth.filter((a) => a.success).length
+    : (authStats?.authenticated_sessions && authStats.authenticated_sessions > 0
+        ? authStats.authenticated_sessions
+        : filteredAuth.filter((a) => a.success).length);
+
+  const uniqueSources = isFiltered
+    ? new Set(filteredAuth.map((a) => a.attacker_ip || a.src_ip || 'unknown')).size
+    : (authStats?.unique_sources && authStats.unique_sources > 0
+        ? authStats.unique_sources
+        : new Set(filteredAuth.map((a) => a.attacker_ip || a.src_ip || 'unknown')).size);
+
+  const uniqueUsernames = isFiltered
+    ? new Set(filteredAuth.map((a) => a.username?.trim()).filter(Boolean)).size
+    : (authStats?.unique_usernames && authStats.unique_usernames > 0
+        ? authStats.unique_usernames
+        : new Set(filteredAuth.map((a) => a.username?.trim()).filter(Boolean)).size);
+
+  const uniquePasswords = isFiltered
+    ? new Set(filteredAuth.map((a) => a.password?.trim()).filter(Boolean)).size
+    : (authStats?.unique_passwords && authStats.unique_passwords > 0
+        ? authStats.unique_passwords
+        : new Set(filteredAuth.map((a) => a.password?.trim()).filter(Boolean)).size);
+
+  // Top Targeted Usernames (filtered blanks/placeholders)
   const topUsernames = useMemo(() => {
+    if (!isFiltered && authStats?.top_usernames && authStats.top_usernames.length > 0) {
+      return authStats.top_usernames
+        .filter((u) => u.username && u.username.trim() !== '')
+        .map((u) => [u.username, u.count] as [string, number]);
+    }
     const counts: Record<string, number> = {};
     filteredAuth.forEach((a) => {
-      counts[a.username] = (counts[a.username] || 0) + 1;
-    });
-    return Object.entries(counts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
-  }, [filteredAuth]);
-
-  // Top Targeted Passwords
-  const topPasswords = useMemo(() => {
-    const counts: Record<string, number> = {};
-    filteredAuth.forEach((a) => {
-      if (a.password) {
-        counts[a.password] = (counts[a.password] || 0) + 1;
+      const u = (a.username || '').trim();
+      if (u) {
+        counts[u] = (counts[u] || 0) + 1;
       }
     });
     return Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5);
-  }, [filteredAuth]);
+  }, [filteredAuth, isFiltered, authStats]);
+
+  // Top Targeted Passwords (filtered blanks/placeholders)
+  const topPasswords = useMemo(() => {
+    if (!isFiltered && authStats?.top_passwords && authStats.top_passwords.length > 0) {
+      return authStats.top_passwords
+        .filter((p) => p.password && p.password.trim() !== '')
+        .map((p) => [p.password, p.count] as [string, number]);
+    }
+    const counts: Record<string, number> = {};
+    filteredAuth.forEach((a) => {
+      const p = (a.password || '').trim();
+      if (p) {
+        counts[p] = (counts[p] || 0) + 1;
+      }
+    });
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+  }, [filteredAuth, isFiltered, authStats]);
 
   const totalPages = Math.max(1, Math.ceil(filteredAuth.length / itemsPerPage));
   const paginatedAuth = useMemo(() => {
@@ -114,7 +155,7 @@ export default function AuthenticationForensicsPage() {
       a.country || '',
       a.session_id ?? '',
       a.username ?? '',
-      (a.password ?? '').replace(/"/g, '""'),
+      showRawPasswords ? (a.password ?? '').replace(/"/g, '""') : '••••••••',
       a.success ? 'SUCCESS' : 'FAILED',
       a.auth_method ?? 'password',
     ]);
@@ -143,13 +184,16 @@ export default function AuthenticationForensicsPage() {
             <span>AUTHENTICATION & CREDENTIAL FORENSICS</span>
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Analyzing credential spraying, brute force attempts, and successful authentications ({timeWindowHours >= 87600 ? 'All-Time' : `Last ${timeWindowHours}h`})
+            Analyzing authentication activity, credential attempts, and session logins ({timeWindowHours >= 87600 ? 'All-Time' : `Last ${timeWindowHours}h`})
           </p>
         </div>
 
         <div className="flex items-center gap-2.5">
           <button
-            onClick={() => fetchGlobalAuth({ hours: timeWindowHours, limit: 300 })}
+            onClick={() => {
+              fetchGlobalAuth({ hours: timeWindowHours, limit: 300 });
+              fetchAuthStats(timeWindowHours);
+            }}
             className="p-2 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 hover:text-cyan-300 transition-all"
             title="Refresh authentication events"
           >
@@ -165,34 +209,45 @@ export default function AuthenticationForensicsPage() {
         </div>
       </div>
 
+      {/* Policy Notice Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-[#070e22] border border-cyan-500/20 text-xs">
+        <span className="flex items-center gap-2 text-slate-300">
+          <Shield className="w-4 h-4 text-cyan-400" />
+          <span>Honeypot Policy: <strong className="text-cyan-300">Password-Only Authentication</strong> (SSH publickey disabled; userdb-restricted)</span>
+        </span>
+        <span className="text-[10px] text-slate-400">
+          Telemetry Source: <strong className="text-cyan-300">ClickHouse auth_attempts</strong>
+        </span>
+      </div>
+
       {/* Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
         <div className="p-3 rounded-xl bg-[#070e22] border border-cyan-500/20">
           <span className="text-[10px] text-slate-400 uppercase">AUTH PROBES LOGGED</span>
           <div className="text-xl font-bold text-white mt-1">{totalProbes.toLocaleString()}</div>
-          <span className="text-[9px] text-slate-500">Total Probing Events</span>
+          <span className="text-[9px] text-slate-500">{isFiltered ? 'Matching Filter Query' : 'Total Ingested Events'}</span>
         </div>
         <div className="p-3 rounded-xl bg-[#070e22] border border-emerald-500/30">
-          <span className="text-[10px] text-emerald-400 uppercase font-bold">SUCCESSFUL LOGINS</span>
-          <div className="text-xl font-bold text-emerald-400 mt-1">{successfulLogins.toLocaleString()}</div>
+          <span className="text-[10px] text-emerald-400 uppercase font-bold">AUTHENTICATED SESSIONS</span>
+          <div className="text-xl font-bold text-emerald-400 mt-1">{authenticatedSessions.toLocaleString()}</div>
           <span className="text-[9px] text-emerald-500/80">
-            {totalProbes > 0 ? `${((successfulLogins / totalProbes) * 100).toFixed(1)}% probe conversion` : '0%'}
+            Session-Level Verified Access
           </span>
         </div>
         <div className="p-3 rounded-xl bg-[#070e22] border border-cyan-500/20">
-          <span className="text-[10px] text-slate-400 uppercase">UNIQUE SPRAY SOURCES</span>
+          <span className="text-[10px] text-slate-400 uppercase">UNIQUE AUTH SOURCES</span>
           <div className="text-xl font-bold text-cyan-300 mt-1">{uniqueSources.toLocaleString()}</div>
-          <span className="text-[9px] text-slate-500">Distinct Threat Actor IPs</span>
+          <span className="text-[9px] text-slate-500">Distinct Originating IPs</span>
         </div>
         <div className="p-3 rounded-xl bg-[#070e22] border border-cyan-500/20">
           <span className="text-[10px] text-slate-400 uppercase">UNIQUE USERNAMES</span>
           <div className="text-xl font-bold text-white mt-1">{uniqueUsernames.toLocaleString()}</div>
-          <span className="text-[9px] text-slate-500">Targeted Account IDs</span>
+          <span className="text-[9px] text-slate-500">Targeted Account Identifiers</span>
         </div>
         <div className="p-3 rounded-xl bg-[#070e22] border border-cyan-500/20">
           <span className="text-[10px] text-slate-400 uppercase">UNIQUE PASSWORDS</span>
           <div className="text-xl font-bold text-amber-300 mt-1">{uniquePasswords.toLocaleString()}</div>
-          <span className="text-[9px] text-slate-500">Sprayed Dictionaries</span>
+          <span className="text-[9px] text-slate-500">Observed Password Values</span>
         </div>
       </div>
 
@@ -202,7 +257,7 @@ export default function AuthenticationForensicsPage() {
         <div className="p-4 rounded-xl bg-[#070e22] border border-cyan-500/20 space-y-2.5">
           <h3 className="text-xs font-bold text-white uppercase flex items-center justify-between">
             <span>MOST TARGETED USERNAMES</span>
-            <span className="text-[10px] text-cyan-400 font-normal">Account Spray Ranking</span>
+            <span className="text-[10px] text-cyan-400 font-normal">Account Frequency Ranking</span>
           </h3>
           <div className="space-y-1.5">
             {topUsernames.length === 0 ? (
@@ -221,8 +276,8 @@ export default function AuthenticationForensicsPage() {
         {/* Top Passwords */}
         <div className="p-4 rounded-xl bg-[#070e22] border border-cyan-500/20 space-y-2.5">
           <h3 className="text-xs font-bold text-white uppercase flex items-center justify-between">
-            <span>MOST SPRAYED PASSWORDS</span>
-            <span className="text-[10px] text-amber-400 font-normal">Dictionary Probes</span>
+            <span>MOST FREQUENT PASSWORDS</span>
+            <span className="text-[10px] text-amber-400 font-normal">Observed Credential Values</span>
           </h3>
           <div className="space-y-1.5">
             {topPasswords.length === 0 ? (

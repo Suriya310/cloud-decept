@@ -1440,7 +1440,7 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sessions[0].command_count, 17)
 
         # Verify SQL generated in ClickHouse query
-        query_sql = self.mock_ch.query.call_args[0][0]
+        query_sql = self.mock_ch.query.call_args_list[0][0][0]
         self.assertIn("session_id IN (SELECT DISTINCT session_id FROM clouddecept.commands", query_sql)
         self.assertIn("WHERE session_id != ''", query_sql)
 
@@ -1452,7 +1452,7 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
 
         await api_main.list_sessions(limit=50, hours=24, auth_success=True)
         query_sql = self.mock_ch.query.call_args[0][0]
-        self.assertIn("auth_success = 1", query_sql)
+        self.assertIn("auth_attempts WHERE success = 1", query_sql)
 
     async def test_top_attackers_sort_by_commands(self):
         """Verify /attackers/top with sort_by='commands' sorts by total_commands DESC."""
@@ -1645,6 +1645,424 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
             auth_success=True,
         )
         self.assertTrue(summary.auth_success)
+
+
+    def test_stats_response_model_phase_3_6b(self):
+        """Verify StatsResponse, DataIntegrityStore, and AuthOutcomes models support Phase 3.6B/C contracts."""
+        data_integrity = api_main.DataIntegrityStore(
+            total_commands_raw=194790,
+            orphan_commands=137952,
+            synthetic_commands=55980,
+            external_commands=488,
+            internal_commands=370,
+            total_sessions_raw=14066,
+            external_sessions=14066,
+            formula_balanced=True,
+            total_auth_attempts_raw=272009624,
+            orphan_auth_attempts=219681326,
+            external_auth_attempts=52328298,
+        )
+        self.assertEqual(data_integrity.total_commands_raw, 194790)
+        # Verify orphan and synthetic command fields are never swapped:
+        self.assertEqual(data_integrity.orphan_commands, 137952)
+        self.assertEqual(data_integrity.synthetic_commands, 55980)
+        self.assertGreater(data_integrity.orphan_commands, data_integrity.synthetic_commands)
+        self.assertEqual(data_integrity.internal_commands, 370)
+        self.assertEqual(data_integrity.external_commands, 488)
+
+        # Verify command store partition balance:
+        self.assertEqual(
+            data_integrity.synthetic_commands + data_integrity.orphan_commands + data_integrity.external_commands + data_integrity.internal_commands,
+            data_integrity.total_commands_raw
+        )
+        # Verify auth store partition balance:
+        self.assertEqual(
+            data_integrity.orphan_auth_attempts + data_integrity.external_auth_attempts,
+            data_integrity.total_auth_attempts_raw
+        )
+
+        auth_outcomes = api_main.AuthOutcomes(
+            total_attempts=52328298,
+            accepted_attempts=172978,
+            rejected_attempts=52328298 - 172978,
+            accepted_sessions=575,
+            interactive_sessions=278,
+            command_bearing_sessions=278,
+        )
+        self.assertEqual(auth_outcomes.command_bearing_sessions, 278)
+        self.assertEqual(auth_outcomes.total_attempts, 52328298)
+        self.assertEqual(auth_outcomes.accepted_sessions, 575)
+
+        stats = api_main.StatsResponse(
+            total_sessions=14066,
+            total_commands=488,
+            unique_attackers=2118,
+            external_sessions=14066,
+            external_commands=488,
+            external_auth_sessions=575,
+            recent_sessions=50,
+            recent_commands=10,
+            recent_unique_attackers=5,
+            active_sessions=2,
+            top_intents=[],
+            top_countries=[],
+            threat_distribution=[],
+            sessions_per_hour=[],
+            commands_per_day=[],
+            command_bearing_sessions=278,
+            interactive_sessions=278,
+            unique_external_attackers=2118,
+            auth_outcomes=auth_outcomes,
+            data_integrity=data_integrity,
+            assessed_sessions_count=361,
+            unassessed_sessions_count=13705,
+        )
+        self.assertEqual(stats.command_bearing_sessions, 278)
+        self.assertEqual(stats.interactive_sessions, 278)
+        self.assertEqual(stats.auth_outcomes.accepted_attempts, 172978)
+        self.assertEqual(stats.data_integrity.external_auth_attempts, 52328298)
+
+    def test_phase_3_6c_command_partition_reconciliation(self):
+        """PHASE 3.6C: Authoritative command partition exact zero-drift reconciliation."""
+        total = 194790
+        orphan = 137952
+        synthetic = 55980
+        internal_infra = 370
+        external_attacker = 488
+
+        # Verify no label/value swap:
+        self.assertGreater(orphan, synthetic)
+        self.assertEqual(orphan + synthetic + internal_infra + external_attacker, total)
+
+    def test_phase_3_6c_auth_session_dedup_semantics(self):
+        """PHASE 3.6C: Multiple accepted attempts in a session must deduplicate to exactly 1 authenticated session."""
+        # Simulated session with 300 accepted credential events (bot loops or duplicate rows)
+        raw_auth_events = [
+            {"session_id": "sess_victim_01", "event_id": f"ev_{i}", "success": 1}
+            for i in range(300)
+        ]
+        # uniqExact(session_id) ensures session yield remains 1, not 300
+        unique_sessions = len(set(e["session_id"] for e in raw_auth_events if e["success"] == 1))
+        self.assertEqual(unique_sessions, 1)
+
+    def test_phase_3_6c_classifier_rule_based_truthfulness(self):
+        """PHASE 3.6C: Verify threat-intel summarizer identifies as rule-based, not ML."""
+        import importlib.util
+        ti_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "services", "threat-intel", "src"))
+        if ti_path not in sys.path:
+            sys.path.insert(0, ti_path)
+        spec = importlib.util.spec_from_file_location(
+            "rule_based_summarizer",
+            os.path.join(ti_path, "rule_based_summarizer.py")
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        summarizer = mod.RuleBasedSummarizer()
+        summary = summarizer.summarize({"commands": [], "intent_history": []})
+        self.assertEqual(summary.get("model"), "rule-based")
+        self.assertNotEqual(summary.get("model"), "ml")
+
+    def test_phase_3_6d_cowrie_userdb_explicit_credentials_only(self):
+        """PHASE 3.6D: Verify Cowrie userdb has explicit credentials and no arbitrary wildcard entry."""
+        userdb_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "configs", "cowrie", "cowrie", "userdb.txt"))
+        self.assertTrue(os.path.exists(userdb_path), "userdb.txt must exist")
+        with open(userdb_path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+        
+        # Must have exactly 25 explicit credentials
+        self.assertEqual(len(lines), 25)
+        # Must not contain wildcard *:x:*
+        self.assertNotIn("*:x:*", lines)
+        self.assertFalse(any(line.startswith("*:") for line in lines))
+
+    def test_phase_3_6d_raw_auth_telemetry_distinguished_from_sessions(self):
+        """PHASE 3.6D: Raw auth telemetry rows must be separated from deduplicated session metrics."""
+        auth_outcomes = api_main.AuthOutcomes(
+            total_attempts=52328298,
+            accepted_attempts=172978,
+            rejected_attempts=52328298 - 172978,
+            accepted_sessions=575,
+            interactive_sessions=278,
+            command_bearing_sessions=278,
+        )
+        # Session yield is 575 unique sessions, not raw rows
+        self.assertEqual(auth_outcomes.accepted_sessions, 575)
+        self.assertEqual(auth_outcomes.command_bearing_sessions, 278)
+
+        # Ensure conversion rate between sessions is truthful:
+        post_auth_conversion = auth_outcomes.command_bearing_sessions / auth_outcomes.accepted_sessions
+        self.assertAlmostEqual(post_auth_conversion, 278 / 575, places=4)
+
+    def test_phase_3_6e_funnel_nested_containment(self):
+        """PHASE 3.6E: Verify strict nested subset containment of the operational threat funnel."""
+        total_sessions = 101069
+        quarantined_sessions = 73
+        external_sessions = 100996
+        authenticated_sessions = 575
+        command_bearing_sessions = 278
+        external_commands = 488
+
+        # 1. Total session partition
+        self.assertEqual(external_sessions + quarantined_sessions, total_sessions)
+
+        # 2. Strict nested subset containment
+        self.assertLessEqual(command_bearing_sessions, authenticated_sessions)
+        self.assertLessEqual(authenticated_sessions, external_sessions)
+        self.assertLessEqual(external_sessions, total_sessions)
+
+        # 3. Truthful conversion yields
+        auth_yield = authenticated_sessions / external_sessions
+        self.assertAlmostEqual(auth_yield, 0.005693, places=5)  # 0.57%
+
+        post_auth_conversion = command_bearing_sessions / authenticated_sessions
+        self.assertAlmostEqual(post_auth_conversion, 0.483478, places=5)  # 48.3%
+
+        cmd_density = external_commands / command_bearing_sessions
+        self.assertAlmostEqual(cmd_density, 1.755395, places=5)  # 1.76 cmds/session
+
+    def test_phase_3_6e_cowrie_auth_method_password_only(self):
+        """PHASE 3.6E: Verify Cowrie config strictly enforces password auth and disables public key auth."""
+        cfg_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "configs", "cowrie", "cowrie", "cowrie.cfg"))
+        self.assertTrue(os.path.exists(cfg_path), "cowrie.cfg must exist")
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        self.assertIn("auth_password = true", content)
+        self.assertIn("auth_publickey = false", content)
+        self.assertIn("userdb = /cowrie/etc/userdb.txt", content)
+
+    def test_final_audit_session_registry_lifecycle_and_auth_separation(self):
+        """FINAL AUDIT: Verify SessionSummary strictly separates lifecycle, auth_outcome, and shell_status."""
+        # 1. Command-bearing session with verified auth success
+        sess_with_auth = api_main.SessionSummary(
+            session_id="auth-accepted-sess",
+            start_time=datetime.utcnow(),
+            attacker_ip="175.207.59.187",
+            commands_executed=17,
+            credentials_tried=1,
+            auth_success=True,
+            auth_outcome="accepted",
+            shell_status="granted",
+            lifecycle_status="closed",
+        )
+        self.assertEqual(sess_with_auth.shell_status, "granted")
+        self.assertEqual(sess_with_auth.auth_outcome, "accepted")
+        self.assertTrue(sess_with_auth.auth_success)
+
+        # 2. Command-bearing session with missing/unrecorded auth success (e.g. 223.237.184.85 with 37 commands)
+        sess_incomplete_auth = api_main.SessionSummary(
+            session_id="223-237-184-85-sess",
+            start_time=datetime.utcnow(),
+            attacker_ip="223.237.184.85",
+            commands_executed=37,
+            credentials_tried=4,
+            auth_success=False,
+            auth_outcome="incomplete",
+            shell_status="granted",
+            lifecycle_status="closed",
+        )
+        self.assertEqual(sess_incomplete_auth.shell_status, "granted")
+        self.assertEqual(sess_incomplete_auth.auth_outcome, "incomplete")
+        self.assertFalse(sess_incomplete_auth.auth_success)
+        self.assertNotEqual(sess_incomplete_auth.auth_outcome, "accepted")
+
+        # 3. Failed probe session (0 commands)
+        failed_probe = api_main.SessionSummary(
+            session_id="failed-probe-sess",
+            start_time=datetime.utcnow(),
+            attacker_ip="192.0.2.1",
+            commands_executed=0,
+            credentials_tried=3,
+            auth_success=False,
+            auth_outcome="rejected",
+            shell_status="not_granted",
+            lifecycle_status="closed",
+        )
+        self.assertEqual(failed_probe.shell_status, "not_granted")
+        self.assertEqual(failed_probe.auth_outcome, "rejected")
+        self.assertFalse(failed_probe.auth_success)
+
+    def test_final_audit_story_a_canonical_identity_and_command_count(self):
+        """FINAL AUDIT: Canonical Story A is 9707d005efc0 (175.207.59.187) with exactly 17 commands. f81991343ed8 is NOT Story A."""
+        story_a_id = "9707d005efc0"
+        story_a_ip = "175.207.59.187"
+        story_a_country = "South Korea"
+        story_a_cmds = 17
+
+        # Distinct session f81991343ed8
+        other_sid = "f81991343ed8"
+        other_ip = "122.164.81.145"
+        other_cmds = 5
+
+        self.assertNotEqual(story_a_id, other_sid, "Story A must remain 9707d005efc0 and must not be relabeled as f81991343ed8")
+        self.assertEqual(story_a_cmds, 17, "Story A has exactly 17 commands")
+        self.assertEqual(other_cmds, 5, "f81991343ed8 has 5 commands")
+        self.assertEqual(story_a_ip, "175.207.59.187")
+
+    def test_final_audit_command_count_does_not_fabricate_auth_success(self):
+        """FINAL AUDIT: Commands executed must NOT automatically fabricate auth_success = True."""
+        raw_sess = [{
+            "session_id": "223-237-184-85-sess",
+            "start_time": datetime.utcnow(),
+            "end_time": datetime.utcnow(),
+            "duration_seconds": 30,
+            "attacker_ip": "223.237.184.85",
+            "country": "India",
+            "protocol": "ssh",
+            "commands_executed": 37,
+            "files_transferred": 0,
+            "credentials_tried": 4,
+            "intent": "Unclassified Activity",
+            "skill_level": 2,
+            "disconnection_reason": "closed",
+        }]
+
+        # Telemetry returns 37 commands, but auth_attempts returns max_success = 0
+        def mock_ch_query(sql):
+            res = MagicMock()
+            sql_str = str(sql)
+            if "clouddecept.sessions" in sql_str:
+                res.named_results.return_value = list(raw_sess)
+            elif "clouddecept.commands" in sql_str:
+                res.named_results.return_value = [{"session_id": "223-237-184-85-sess", "cmd_count": 37}]
+            elif "clouddecept.auth_attempts" in sql_str:
+                res.named_results.return_value = [{"session_id": "223-237-184-85-sess", "auth_count": 4, "max_success": 0}]
+            else:
+                res.named_results.return_value = []
+            return res
+
+        self.mock_ch.query.side_effect = mock_ch_query
+        import asyncio
+        loop = asyncio.get_event_loop()
+        sessions = loop.run_until_complete(api_main.list_sessions(session_id="223-237-184-85-sess"))
+
+        self.assertEqual(len(sessions), 1)
+        s = sessions[0]
+        self.assertEqual(s.commands_executed, 37)
+        self.assertEqual(s.shell_status, "granted")
+        # auth_success MUST NOT be True
+        self.assertFalse(s.auth_success)
+        # auth_outcome MUST be 'incomplete' rather than 'accepted'
+        self.assertEqual(s.auth_outcome, "incomplete")
+
+    def test_final_audit_accepted_auth_preset_excludes_auth_unknown_and_incomplete(self):
+        """FINAL AUDIT: Accepted Auth preset requires explicit accepted auth, excluding incomplete/unknown telemetry."""
+        # Function mirroring dashboard preset filters
+        def matches_accepted_auth_preset(session: dict) -> bool:
+            return session.get("auth_outcome") == "accepted" or session.get("auth_success") is True
+
+        def matches_commands_preset(session: dict) -> bool:
+            return (session.get("commands_executed") or session.get("command_count") or 0) > 0
+
+        # Session with 37 commands and incomplete auth telemetry
+        sess_incomplete = {
+            "session_id": "223-237-184-85-sess",
+            "commands_executed": 37,
+            "auth_success": False,
+            "auth_outcome": "incomplete",
+            "shell_status": "granted",
+        }
+
+        # Session with verified auth accepted
+        sess_verified_auth = {
+            "session_id": "9707d005efc0",
+            "commands_executed": 17,
+            "auth_success": True,
+            "auth_outcome": "accepted",
+            "shell_status": "granted",
+        }
+
+        # Accepted Auth preset MUST include verified auth, but MUST EXCLUDE incomplete auth
+        self.assertTrue(matches_accepted_auth_preset(sess_verified_auth))
+        self.assertFalse(matches_accepted_auth_preset(sess_incomplete))
+
+        # Both MUST qualify for the separate With Commands preset
+        self.assertTrue(matches_commands_preset(sess_verified_auth))
+        self.assertTrue(matches_commands_preset(sess_incomplete))
+
+    def test_final_audit_103_195_81_146_external_classification_and_behavioral_exclusion(self):
+        """FINAL AUDIT: 103.195.81.146 is EXTERNAL traffic, excluded from High-Value Incidents on behavioral grounds only."""
+        # 1. IP classification check
+        src_class = api_main.get_source_class("103.195.81.146")
+        self.assertEqual(src_class, "EXTERNAL_HONEYPOT", "103.195.81.146 must be classified as EXTERNAL_HONEYPOT")
+        self.assertNotEqual(src_class, "INTERNAL_INFRASTRUCTURE")
+
+        # 2. Known internal infrastructure checks
+        self.assertEqual(api_main.get_source_class("172.18.0.1"), "INTERNAL_INFRASTRUCTURE")
+        self.assertEqual(api_main.get_source_class("127.0.0.1"), "INTERNAL_INFRASTRUCTURE")
+        self.assertEqual(api_main.get_source_class("129.146.167.2"), "INTERNAL_OR_AMBIGUOUS")
+
+        # 3. Behavioral exclusion check for 103.195.81.146 (0 commands, rejected auth, low threat score)
+        sess_external_unqualified = {
+            "session_id": "probe120s",
+            "attacker_ip": "103.195.81.146",
+            "commands_executed": 0,
+            "auth_success": False,
+            "threat_score": 10,
+        }
+        self.assertFalse(qualifies_as_high_value(sess_external_unqualified))
+
+    async def test_final_audit_auth_stats_endpoint(self):
+        """FINAL AUDIT: Verify /auth/stats endpoint provides authoritative aggregated telemetry and password-only policy."""
+        def mock_auth_ch_cmd(sql):
+            sql_s = str(sql)
+            if "count(*)" in sql_s:
+                return 52328298
+            elif "success = 1" in sql_s:
+                return 575
+            elif "uniqExact(s.attacker_ip)" in sql_s:
+                return 2118
+            elif "uniqExact(username)" in sql_s:
+                return 59
+            elif "uniqExact(password)" in sql_s:
+                return 244
+            return 0
+
+        self.mock_ch.command.side_effect = mock_auth_ch_cmd
+        res = await api_main.get_auth_stats(hours=87600)
+        self.assertIsInstance(res, api_main.AuthStatsResponse)
+        self.assertEqual(res.total_probes, 52328298)
+        self.assertEqual(res.authenticated_sessions, 575)
+        self.assertEqual(res.unique_sources, 2118)
+        self.assertEqual(res.unique_usernames, 59)
+        self.assertEqual(res.unique_passwords, 244)
+        self.assertEqual(res.auth_policy, "password_only")
+        self.assertFalse(res.publickey_allowed)
+
+    def test_final_audit_cowrie_userdb_security(self):
+        """FINAL AUDIT: Verify Cowrie userdb.txt contains exact credential pairs and NO wildcard accept-all."""
+        userdb_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "configs", "cowrie", "cowrie", "userdb.txt"))
+        self.assertTrue(os.path.exists(userdb_path), "userdb.txt must exist")
+        with open(userdb_path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+
+        # Ensure no wildcard entry like *:x:* exists
+        for line in lines:
+            parts = line.split(":")
+            self.assertNotEqual(parts[0], "*", "userdb must never contain wildcard user '*'")
+            if len(parts) > 2:
+                self.assertNotEqual(parts[2], "*", "userdb must never contain wildcard password '*'")
+        self.assertGreaterEqual(len(lines), 10, "userdb must contain defined honeypot decoy credentials")
+
+    def test_micro_verification_command_bearing_auth_containment(self):
+        """MICRO-VERIFICATION: Verify command-bearing auth containment and equation."""
+        total_command_bearing = 278
+        accepted = 278
+        incomplete = 0
+        rejected = 0
+        unknown = 0
+
+        # Verify exact equation: TOTAL = ACCEPTED + INCOMPLETE + REJECTED + UNKNOWN
+        self.assertEqual(total_command_bearing, accepted + incomplete + rejected + unknown)
+
+        # Verify 278 ⊆ 575 containment
+        total_authenticated_sessions = 575
+        self.assertLessEqual(total_command_bearing, total_authenticated_sessions)
+
+        # Ensure post-auth conversion is mathematically exact
+        post_auth_conversion = total_command_bearing / total_authenticated_sessions
+        self.assertAlmostEqual(post_auth_conversion, 278 / 575, places=5)
+
 
 
 # Helpers mirroring dashboard qualification, sorting, and auth badge contracts

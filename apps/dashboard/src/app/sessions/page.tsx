@@ -35,7 +35,7 @@ function SessionsPageContent() {
 
   const { sessions, sessionsLoading, fetchSessions, timeWindowHours } = useDashboardStore();
   const [searchQuery, setSearchQuery] = useState(urlSearch || urlIp);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'closed' | 'failed' | 'timed_out' | 'stale'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'closed' | 'timed_out' | 'stale'>('all');
   const [quickFilter, setQuickFilter] = useState<'all' | 'commands' | 'auth_success' | 'high_threat'>(
     urlFilter === 'commands' || urlHasCmds ? 'commands' : urlFilter === 'auth_success' ? 'auth_success' : 'all'
   );
@@ -80,13 +80,21 @@ function SessionsPageContent() {
         (s.country && s.country.toLowerCase().includes(q)) ||
         (s.intent && s.intent.toLowerCase().includes(q));
 
-      const matchesStatus = statusFilter === 'all' || s.status === statusFilter;
+      const cmdCount = s.command_count || s.commands_executed || 0;
+      const isAuthAccepted = s.auth_outcome === 'accepted' || s.auth_success === true;
+
+      const matchesStatus =
+        statusFilter === 'all' ||
+        s.lifecycle_status === statusFilter ||
+        (s.status === statusFilter && statusFilter !== 'closed') ||
+        (statusFilter === 'closed' && (s.lifecycle_status === 'closed' || s.status === 'closed' || s.status === 'failed'));
+
       const matchesIntent = intentFilter === 'all' || s.intent === intentFilter;
       const matchesCountry = countryFilter === 'all' || s.country === countryFilter || s.src_country === countryFilter;
       const matchesQuick =
         quickFilter === 'all' ||
-        (quickFilter === 'commands' && (s.command_count || s.commands_executed || 0) > 0) ||
-        (quickFilter === 'auth_success' && s.status !== 'failed' && (s.credentials_tried || 0) > 0) ||
+        (quickFilter === 'commands' && cmdCount > 0) ||
+        (quickFilter === 'auth_success' && isAuthAccepted) ||
         (quickFilter === 'high_threat' && (s.threat_score ?? s.skill_level ?? 0) >= 40);
 
       return matchesSearch && matchesStatus && matchesIntent && matchesCountry && matchesQuick;
@@ -100,20 +108,49 @@ function SessionsPageContent() {
 
   const exportToCSV = () => {
     if (filteredSessions.length === 0) return;
-    const headers = ['Session ID', 'Attacker IP', 'Country', 'Protocol', 'Start Time', 'Duration (s)', 'Commands', 'Auth Probes', 'Intent', 'Threat Score', 'Status'];
-    const rows = filteredSessions.map((s) => [
-      s.session_id,
-      s.src_ip || s.attacker_ip || '',
-      s.src_country || s.country || '',
-      s.protocol || 'ssh',
-      s.start_time,
-      s.duration_seconds || 0,
-      s.command_count || s.commands_executed || 0,
-      s.credentials_tried || 0,
-      normalizeIntent(s.intent).label,
-      s.threat_score ?? s.skill_level ?? 0,
-      s.status || 'closed',
-    ]);
+    const headers = [
+      'Session ID',
+      'Attacker IP',
+      'Country',
+      'Protocol',
+      'Start Time',
+      'Duration (s)',
+      'Commands',
+      'Auth Attempts',
+      'Auth Outcome',
+      'Shell Status',
+      'Intent',
+      'Threat Score',
+      'Lifecycle Status',
+    ];
+    const rows = filteredSessions.map((s) => {
+      const cmdCount = s.command_count || s.commands_executed || 0;
+      const isAuthAccepted = s.auth_outcome === 'accepted' || s.auth_success === true;
+      const isAuthIncomplete = !isAuthAccepted && (s.auth_outcome === 'incomplete' || (cmdCount > 0 && s.auth_success !== true));
+      const authOutcome = isAuthAccepted
+        ? 'ACCEPTED'
+        : isAuthIncomplete
+        ? 'INCOMPLETE'
+        : s.auth_outcome === 'rejected' || s.auth_success === false
+        ? 'REJECTED'
+        : 'UNKNOWN';
+      const shellStatus = cmdCount > 0 ? 'GRANTED' : 'NOT GRANTED';
+      return [
+        s.session_id,
+        s.src_ip || s.attacker_ip || '',
+        s.src_country || s.country || '',
+        s.protocol || 'ssh',
+        s.start_time,
+        s.duration_seconds || 0,
+        cmdCount,
+        s.credentials_tried || 0,
+        authOutcome,
+        shellStatus,
+        normalizeIntent(s.intent, cmdCount).label,
+        s.threat_score ?? s.skill_level ?? 0,
+        s.lifecycle_status || s.status || 'closed',
+      ];
+    });
 
     const csvContent = [
       headers.join(','),
@@ -200,7 +237,7 @@ function SessionsPageContent() {
           )}
         >
           <KeyRound className="w-3 h-3 text-cyan-400" />
-          <span>Auth Probe / Accepted</span>
+          <span>Authenticated / Accepted Auth</span>
         </button>
         <button
           onClick={() => { setQuickFilter('high_threat'); setCurrentPage(1); }}
@@ -244,8 +281,7 @@ function SessionsPageContent() {
         >
           <option value="all">All Session Lifecycles</option>
           <option value="active">Active / Connected Now</option>
-          <option value="closed">Closed Cleanly</option>
-          <option value="failed">Auth Failed (0 Cmds)</option>
+          <option value="closed">Closed</option>
           <option value="timed_out">Timed Out (&lt; 1h)</option>
           <option value="stale">Stale (&gt; 1h)</option>
         </select>
@@ -282,13 +318,15 @@ function SessionsPageContent() {
           <table className="w-full text-left text-xs">
             <thead className="bg-[#040816] text-[10px] text-slate-400 uppercase border-b border-cyan-500/15">
               <tr>
-                <th className="py-3 px-4">STATUS</th>
+                <th className="py-3 px-4">LIFECYCLE</th>
+                <th className="py-3 px-4">AUTH</th>
+                <th className="py-3 px-4">SHELL</th>
                 <th className="py-3 px-4">SESSION ID</th>
                 <th className="py-3 px-4">ATTACKER IP</th>
                 <th className="py-3 px-4">ORIGIN</th>
                 <th className="py-3 px-4">DURATION</th>
                 <th className="py-3 px-4">CMDS</th>
-                <th className="py-3 px-4">AUTH</th>
+                <th className="py-3 px-4">AUTH ATTEMPTS</th>
                 <th className="py-3 px-4">INTENT</th>
                 <th className="py-3 px-4">THREAT</th>
                 <th className="py-3 px-4 text-right">ACTION</th>
@@ -297,14 +335,14 @@ function SessionsPageContent() {
             <tbody className="divide-y divide-cyan-500/10 font-mono">
               {sessionsLoading && filteredSessions.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-8 text-center text-slate-400">
+                  <td colSpan={12} className="py-8 text-center text-slate-400">
                     <RefreshCw className="w-6 h-6 text-cyan-400 animate-spin mx-auto mb-2" />
                     Querying ClickHouse sessions...
                   </td>
                 </tr>
               ) : filteredSessions.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-8 text-center text-slate-500">
+                  <td colSpan={12} className="py-8 text-center text-slate-500">
                     No sessions match the current search filters in this time window.
                   </td>
                 </tr>
@@ -313,22 +351,23 @@ function SessionsPageContent() {
                   const ip = s.src_ip || s.attacker_ip || 'unknown';
                   const countryName = getCountryName(s.src_country || s.country);
                   const threat = evaluateThreat(s.threat_score ?? s.skill_level);
-                  const intent = normalizeIntent(s.intent);
+                  const cmdCount = s.command_count || s.commands_executed || 0;
+                  const intent = normalizeIntent(s.intent, cmdCount);
 
-                  const statusPill =
-                    s.status === 'active' ? (
+                  const isAuthAccepted = s.auth_outcome === 'accepted' || s.auth_success === true;
+                  const isAuthIncomplete = !isAuthAccepted && (s.auth_outcome === 'incomplete' || (cmdCount > 0 && s.auth_success !== true));
+                  const isAuthRejected = !isAuthAccepted && !isAuthIncomplete && (s.auth_outcome === 'rejected' || s.auth_success === false);
+
+                  const lifecyclePill =
+                    s.lifecycle_status === 'active' || s.status === 'active' ? (
                       <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 animate-pulse">
                         ACTIVE NOW
                       </span>
-                    ) : s.status === 'failed' ? (
-                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                        AUTH FAILED
-                      </span>
-                    ) : s.status === 'timed_out' ? (
+                    ) : s.lifecycle_status === 'timed_out' || s.status === 'timed_out' ? (
                       <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
                         TIMED OUT
                       </span>
-                    ) : s.status === 'stale' ? (
+                    ) : s.lifecycle_status === 'stale' || s.status === 'stale' ? (
                       <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
                         STALE
                       </span>
@@ -338,9 +377,42 @@ function SessionsPageContent() {
                       </span>
                     );
 
+                  const authPill = isAuthAccepted ? (
+                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      ACCEPTED
+                    </span>
+                  ) : isAuthIncomplete ? (
+                    <span
+                      className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                      title="Commands executed without accepted auth telemetry"
+                    >
+                      INCOMPLETE
+                    </span>
+                  ) : isAuthRejected ? (
+                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                      REJECTED
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
+                      UNKNOWN
+                    </span>
+                  );
+
+                  const shellPill = cmdCount > 0 ? (
+                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      GRANTED
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-900 text-slate-500 border border-slate-800">
+                      NOT GRANTED
+                    </span>
+                  );
+
                   return (
                     <tr key={s.session_id} className="hover:bg-cyan-950/20 transition-all">
-                      <td className="py-2.5 px-4">{statusPill}</td>
+                      <td className="py-2.5 px-4">{lifecyclePill}</td>
+                      <td className="py-2.5 px-4">{authPill}</td>
+                      <td className="py-2.5 px-4">{shellPill}</td>
                       <td className="py-2.5 px-4">
                         <Link
                           href={`/sessions/${s.session_id}`}
@@ -365,9 +437,9 @@ function SessionsPageContent() {
                         {formatDuration(s.duration_seconds || 0)}
                       </td>
                       <td className="py-2.5 px-4">
-                        {(s.command_count || s.commands_executed || 0) > 0 ? (
+                        {cmdCount > 0 ? (
                           <span className="text-emerald-400 font-bold">
-                            {s.command_count || s.commands_executed}
+                            {cmdCount}
                           </span>
                         ) : (
                           <span className="text-slate-600">0</span>

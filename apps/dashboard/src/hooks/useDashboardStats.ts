@@ -61,6 +61,18 @@ export function useDashboardStats(options: { autoRefreshIntervalMs?: number } = 
     uniqueAttackers: (stats as any)?.unique_attackers ?? (stats as any)?.uniqueAttackers ?? 0,
     activeSessions: (stats as any)?.active_sessions ?? (stats as any)?.activeSessions ?? 0,
 
+    // Authoritative External Attacker Metrics (Phase 3.2 & 3.6 truthful semantics)
+    externalSessions: (stats as any)?.external_sessions ?? 0,
+    externalCommands: (stats as any)?.external_commands ?? 0,
+    externalAuthSessions: (stats as any)?.external_auth_sessions ?? 0,
+    interactiveSessions: (stats as any)?.interactive_sessions ?? 0,
+    commandBearingSessions: (stats as any)?.command_bearing_sessions ?? (stats as any)?.interactive_sessions ?? 0,
+    uniqueExternalAttackers: (stats as any)?.unique_external_attackers ?? (stats as any)?.unique_attackers ?? 0,
+    authOutcomes: (stats as any)?.auth_outcomes ?? null,
+    dataIntegrity: (stats as any)?.data_integrity ?? null,
+    assessedSessionsCount: (stats as any)?.assessed_sessions_count ?? 0,
+    unassessedSessionsCount: (stats as any)?.unassessed_sessions_count ?? 0,
+
     // Authoritative Recent Window Metrics (Last 24h)
     recentSessions24h: (stats as any)?.recent_sessions ?? (stats as any)?.recentSessions ?? 0,
     recentCommands24h: (stats as any)?.recent_commands ?? (stats as any)?.recentCommands ?? 0,
@@ -68,10 +80,10 @@ export function useDashboardStats(options: { autoRefreshIntervalMs?: number } = 
 
     // Authoritative Chart Time-Series & Aggregations
     topIntents: ((stats as any)?.top_intents ?? (stats as any)?.topIntents ?? []) as { intent: string; count: number }[],
-    topCountries: ((stats as any)?.top_countries ?? (stats as any)?.topCountries ?? []) as { country: string; count: number }[],
+    topCountries: ((stats as any)?.top_countries ?? (stats as any)?.topCountries ?? []) as { country: string; count: number; attackers?: number }[],
     threatDistribution: threatDistributionMap,
     threatDistributionList: ((stats as any)?.threat_distribution ?? (stats as any)?.threatDistribution ?? []) as { level: string; count: number }[],
-    sessionsPerHour: ((stats as any)?.sessions_per_hour ?? (stats as any)?.sessionsPerHour ?? []) as { hour: string; count: number }[],
+    sessionsPerHour: ((stats as any)?.sessions_per_hour ?? (stats as any)?.sessionsPerHour ?? []) as { hour: string; count: number; date?: string }[],
     commandsPerDay: ((stats as any)?.commands_per_day ?? (stats as any)?.commandsPerDay ?? []) as { date: string; count: number }[],
     sessionsPerDay: ((stats as any)?.sessions_per_day ?? (stats as any)?.sessionsPerDay ?? []) as { date: string; count: number }[],
 

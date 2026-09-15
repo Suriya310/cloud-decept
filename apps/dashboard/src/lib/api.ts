@@ -11,6 +11,7 @@ import {
   CommandSummary,
   AdaptiveStrategy,
   Stats,
+  AuthStats,
 } from './types';
 
 const API_BASE = "/api/backend";
@@ -199,6 +200,21 @@ export const api = {
     if (params?.success !== undefined) search.set("success", params.success.toString());
     if (params?.hours) search.set("hours", params.hours.toString());
     return fetchJson<AuthEvent[]>(`${API_BASE}/auth?${search}`).then((res) => (Array.isArray(res) ? res : []));
+  },
+
+  getAuthStats: (hours?: number): Promise<AuthStats> => {
+    const search = hours ? `?hours=${hours}` : '';
+    return fetchJson<AuthStats>(`${API_BASE}/auth/stats${search}`).catch(() => ({
+      total_probes: 0,
+      authenticated_sessions: 0,
+      unique_sources: 0,
+      unique_usernames: 0,
+      unique_passwords: 0,
+      top_usernames: [],
+      top_passwords: [],
+      auth_policy: 'password_only',
+      publickey_allowed: false,
+    }));
   },
 
   // Analytics: Top Commands & Attackers

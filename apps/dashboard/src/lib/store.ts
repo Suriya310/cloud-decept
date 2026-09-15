@@ -29,6 +29,7 @@ interface DashboardActions {
   // Global Commands & Auth
   fetchGlobalCommands: (params?: { limit?: number; offset?: number; session_id?: string; command?: string; attacker_ip?: string; intent?: string; hours?: number; include_synthetic?: boolean }) => Promise<void>;
   fetchGlobalAuth: (params?: { limit?: number; offset?: number; session_id?: string; username?: string; success?: boolean; hours?: number }) => Promise<void>;
+  fetchAuthStats: (hours?: number) => Promise<void>;
 
   // Sessions
   fetchSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string; min_skill_level?: number; attacker_ip?: string; session_id?: string; has_commands?: boolean; auth_success?: boolean }) => Promise<void>;
@@ -78,7 +79,7 @@ const defaultFilters = {
   dateRange: [undefined, undefined] as [Date | undefined, Date | undefined],
 };
 
-// Transform backend session data to include UI-compatible fields with accurate lifecycle status
+// Transform backend session data to include UI-compatible fields with strictly separated lifecycle, auth outcome, and shell status
 export function transformSession(s: any): Session {
   if (!s || typeof s !== 'object') {
     return {
@@ -86,6 +87,9 @@ export function transformSession(s: any): Session {
       attacker_ip: '',
       start_time: new Date().toISOString(),
       commands_executed: 0,
+      lifecycle_status: 'closed',
+      auth_outcome: 'unknown',
+      shell_status: 'not_granted',
       status: 'closed',
     } as Session;
   }
@@ -101,44 +105,68 @@ export function transformSession(s: any): Session {
     (s.duration_seconds > 0 || (s.duration && s.duration > 0) || s.disconnection_reason)
   );
 
-  // Separate authentication outcome from TCP transport lifecycle
-  let authSuccess: boolean | undefined = undefined;
-  if (s.auth_success !== undefined && s.auth_success !== null) {
-    authSuccess = Boolean(s.auth_success);
-  } else if ((s.commands_executed ?? 0) > 0) {
-    authSuccess = true; // Commands executed in Cowrie required interactive shell access
-  } else if ((s.credentials_tried ?? 0) > 0) {
-    authSuccess = false; // Credentials probed without recorded command activity or explicit success
+  const cmdCount = Number(s.commands_executed ?? s.command_count ?? 0);
+  const credsCount = Number(s.credentials_tried ?? s.auth_attempts ?? 0);
+
+  // 1. Session Lifecycle Status (transport/socket connection lifecycle)
+  let lifecycle_status: 'active' | 'closed' | 'timed_out' | 'stale' = 'closed';
+  if (s.lifecycle_status === 'active' || s.status === 'active' || (!hasExplicitEnd && ageSeconds < 300)) {
+    lifecycle_status = 'active';
+  } else if (!hasExplicitEnd && ageSeconds < 3600) {
+    lifecycle_status = 'timed_out';
+  } else if (!hasExplicitEnd && ageSeconds >= 3600) {
+    lifecycle_status = 'stale';
+  } else {
+    lifecycle_status = 'closed';
   }
 
-  let status: 'active' | 'closed' | 'failed' | 'timed_out' | 'stale' = 'closed';
+  // 2. Shell Status (interactive shell granted only if commands were executed)
+  const shell_status: 'granted' | 'not_granted' = cmdCount > 0 ? 'granted' : 'not_granted';
 
-  if (s.status === 'failed' || authSuccess === false) {
-    status = 'failed';
-  } else if (hasExplicitEnd) {
-    status = 'closed';
+  // 3. Authentication Outcome (strictly separate from lifecycle status & shell execution)
+  let auth_outcome: 'accepted' | 'rejected' | 'incomplete' | 'unknown' = 'unknown';
+  const hasExplicitAuthSuccess = s.auth_success === true || s.auth_outcome === 'accepted';
+  if (hasExplicitAuthSuccess) {
+    auth_outcome = 'accepted';
+  } else if (cmdCount > 0) {
+    // Commands exist AND auth success telemetry is missing/unrecorded
+    auth_outcome = 'incomplete';
+  } else if (s.auth_success === false || s.auth_outcome === 'rejected' || credsCount > 0) {
+    auth_outcome = 'rejected';
   } else {
-    // No explicit end time recorded
-    if (ageSeconds < 300) {
-      status = 'active';
-    } else if (ageSeconds < 3600) {
-      status = 'timed_out';
-    } else {
-      status = 'stale';
-    }
+    auth_outcome = 'unknown';
+  }
+
+  // 4. Legacy status: if shell was granted, it can NEVER be 'failed'
+  let status: 'active' | 'closed' | 'failed' | 'timed_out' | 'stale' = 'closed';
+  if (lifecycle_status === 'active') {
+    status = 'active';
+  } else if (shell_status === 'not_granted' && auth_outcome === 'rejected') {
+    status = 'failed';
+  } else if (lifecycle_status === 'timed_out') {
+    status = 'timed_out';
+  } else if (lifecycle_status === 'stale') {
+    status = 'stale';
+  } else {
+    status = 'closed';
   }
 
   return {
     ...s,
     src_ip: s.attacker_ip || s.src_ip || '',
     src_country: s.country || s.src_country || '',
-    command_count: s.commands_executed ?? s.command_count ?? 0,
+    command_count: cmdCount,
+    commands_executed: cmdCount,
+    credentials_tried: credsCount,
+    lifecycle_status,
+    auth_outcome,
+    shell_status,
+    status,
+    auth_success: hasExplicitAuthSuccess,
     intent_history: s.intent ? [s.intent] : (s.intent_history || []),
     skill_level: typeof s.skill_level === 'number' ? s.skill_level : 0,
     threat_score: typeof s.skill_level === 'number' ? s.skill_level : 0,
     tactics: s.tactics || [],
-    status,
-    auth_success: authSuccess,
   };
 }
 
@@ -157,6 +185,8 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
   globalCommandsLoading: false,
   globalAuth: [],
   globalAuthLoading: false,
+  authStats: null,
+  authStatsLoading: false,
   threatIntel: null,
   threatIntelItems: [],
   mitreTechniques: [],
@@ -195,6 +225,17 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
     } catch (e) {
       console.error('Failed to fetch global auth:', e);
       set({ globalAuth: [], globalAuthLoading: false });
+    }
+  },
+
+  fetchAuthStats: async (hours) => {
+    set({ authStatsLoading: true });
+    try {
+      const data = await api.getAuthStats(hours);
+      set({ authStats: data || null, authStatsLoading: false });
+    } catch (e) {
+      console.error('Failed to fetch auth stats:', e);
+      set({ authStats: null, authStatsLoading: false });
     }
   },
   setTimeWindowHours: (hours) => {

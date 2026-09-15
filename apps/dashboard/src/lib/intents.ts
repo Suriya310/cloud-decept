@@ -15,19 +15,34 @@ export interface IntentInfo {
   isUnclassified: boolean;
 }
 
-export function normalizeIntent(rawIntent?: string | null): IntentInfo {
-  if (!rawIntent || rawIntent.trim() === '' || rawIntent.toLowerCase() === 'null') {
+export function normalizeIntent(rawIntent?: string | null, commandCount?: number): IntentInfo {
+  const clean = (rawIntent || '').trim();
+  const lower = clean.toLowerCase();
+  const hasZeroCmds = commandCount !== undefined && commandCount === 0;
+  const hasCommands = commandCount !== undefined && commandCount > 0;
+
+  // Failed probe or explicit no-command state
+  if (lower.includes('no post-auth') || lower.includes('auth probe') || (hasZeroCmds && (!clean || lower === 'null' || lower === 'unknown' || lower === 'unclassified' || lower === 'observation'))) {
     return {
-      label: 'Not Classified',
-      badgeClass: 'bg-gray-100 text-gray-700 border-gray-200',
+      label: 'NO POST-AUTH BEHAVIOR',
+      badgeClass: 'bg-slate-900/60 text-slate-400 border-slate-700/50',
       category: 'unclassified',
-      description: 'Session disconnected before actionable command patterns were observed',
+      description: 'Authentication probe or disconnected prior to command execution; no post-auth commands observed',
       isUnclassified: true,
     };
   }
 
-  const clean = rawIntent.trim();
-  const lower = clean.toLowerCase();
+  if (!clean || lower === 'null') {
+    return {
+      label: hasCommands ? 'Unclassified Activity' : 'Not Classified',
+      badgeClass: 'bg-slate-900/60 text-slate-400 border-slate-700/50',
+      category: 'unclassified',
+      description: hasCommands
+        ? 'Commands executed did not match known high-risk cloud attack signatures'
+        : 'Session disconnected before actionable command patterns were observed',
+      isUnclassified: true,
+    };
+  }
 
   // Failed summarization / analysis
   if (lower.includes('summarization failed') || lower.includes('failed')) {
@@ -44,7 +59,7 @@ export function normalizeIntent(rawIntent?: string | null): IntentInfo {
   if (lower === 'unknown' || lower === 'unknown activity' || lower === 'observation' || lower === 'unclassified') {
     return {
       label: 'Unclassified Activity',
-      badgeClass: 'bg-gray-100 text-gray-800 border-gray-200',
+      badgeClass: 'bg-slate-900/60 text-slate-400 border-slate-700/50',
       category: 'unclassified',
       description: 'Commands executed did not match known high-risk cloud attack signatures',
       isUnclassified: true,

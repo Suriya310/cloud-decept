@@ -14,10 +14,15 @@ import {
   Check,
   Shield,
   Filter,
+  Eye,
+  EyeOff,
+  Globe,
+  UserCheck,
 } from 'lucide-react';
 import { cn, formatTimestamp } from '@/lib/utils';
 import { useDashboardStore } from '@/lib/store';
 import { safeCopyToClipboard } from '@/lib/clipboard';
+import { getCountryName } from '@/lib/countries';
 
 export default function AuthenticationForensicsPage() {
   const { globalAuth, globalAuthLoading, fetchGlobalAuth, timeWindowHours } = useDashboardStore();
@@ -25,6 +30,7 @@ export default function AuthenticationForensicsPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'failed'>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [showRawPasswords, setShowRawPasswords] = useState(false);
   const itemsPerPage = 50;
 
   useEffect(() => {
@@ -44,11 +50,14 @@ export default function AuthenticationForensicsPage() {
     const list = globalAuth || [];
     return list.filter((a) => {
       const q = searchQuery.toLowerCase();
+      const ip = a.attacker_ip || a.src_ip || '';
       const matchesSearch =
         !q ||
         a.username.toLowerCase().includes(q) ||
         (a.password?.toLowerCase() ?? '').includes(q) ||
-        a.session_id.toLowerCase().includes(q);
+        a.session_id.toLowerCase().includes(q) ||
+        ip.toLowerCase().includes(q) ||
+        (a.country && a.country.toLowerCase().includes(q));
 
       const isSuccess = Boolean(a.success);
       const matchesStatus =
@@ -63,6 +72,7 @@ export default function AuthenticationForensicsPage() {
   // Aggregate stats
   const totalProbes = filteredAuth.length;
   const successfulLogins = filteredAuth.filter((a) => a.success).length;
+  const uniqueSources = useMemo(() => new Set(filteredAuth.map((a) => a.attacker_ip || a.src_ip || 'unknown')).size, [filteredAuth]);
   const uniqueUsernames = useMemo(() => new Set(filteredAuth.map((a) => a.username)).size, [filteredAuth]);
   const uniquePasswords = useMemo(() => new Set(filteredAuth.map((a) => a.password)).size, [filteredAuth]);
 
@@ -97,9 +107,11 @@ export default function AuthenticationForensicsPage() {
 
   const exportToCSV = () => {
     if (filteredAuth.length === 0) return;
-    const headers = ['Timestamp', 'Session ID', 'Username', 'Password', 'Result', 'Auth Method'];
+    const headers = ['Timestamp', 'Attacker IP', 'Country', 'Session ID', 'Username', 'Password', 'Result', 'Auth Method'];
     const rows = filteredAuth.map((a) => [
       a.timestamp ?? '',
+      a.attacker_ip || a.src_ip || '',
+      a.country || '',
       a.session_id ?? '',
       a.username ?? '',
       (a.password ?? '').replace(/"/g, '""'),
@@ -122,9 +134,9 @@ export default function AuthenticationForensicsPage() {
   };
 
   return (
-    <div className="space-y-6 font-mono pb-12">
+    <div className="space-y-5 font-mono pb-12">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-3 border-b border-cyan-500/15">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-cyan-500/20">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-wider text-white uppercase flex items-center gap-2.5">
             <KeyRound className="w-5 h-5 text-cyan-400" />
@@ -138,14 +150,14 @@ export default function AuthenticationForensicsPage() {
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => fetchGlobalAuth({ hours: timeWindowHours, limit: 300 })}
-            className="p-2 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 hover:text-cyan-300"
+            className="p-2 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 hover:text-cyan-300 transition-all"
             title="Refresh authentication events"
           >
-            <RefreshCw className={cn('w-4 h-4', globalAuthLoading && 'animate-spin text-cyan-400')} />
+            <RefreshCw className={cn('w-4 h-4 text-cyan-400', globalAuthLoading && 'animate-spin')} />
           </button>
           <button
             onClick={exportToCSV}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/25 text-xs text-cyan-300 hover:border-cyan-400"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/25 text-xs text-cyan-300 hover:border-cyan-400 transition-all"
           >
             <Download className="w-3.5 h-3.5" />
             <span>EXPORT CSV</span>
@@ -154,47 +166,52 @@ export default function AuthenticationForensicsPage() {
       </div>
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="p-3.5 rounded-xl bg-[#070e22] border border-cyan-500/20">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+        <div className="p-3 rounded-xl bg-[#070e22] border border-cyan-500/20">
           <span className="text-[10px] text-slate-400 uppercase">AUTH PROBES LOGGED</span>
-          <div className="text-2xl font-bold text-white mt-1">{totalProbes}</div>
-          <span className="text-[10px] text-cyan-400">Total Probing Events</span>
+          <div className="text-xl font-bold text-white mt-1">{totalProbes.toLocaleString()}</div>
+          <span className="text-[9px] text-slate-500">Total Probing Events</span>
         </div>
-        <div className="p-3.5 rounded-xl bg-[#070e22] border border-cyan-500/20">
-          <span className="text-[10px] text-slate-400 uppercase">SUCCESSFUL LOGINS</span>
-          <div className="text-2xl font-bold text-emerald-400 mt-1">{successfulLogins}</div>
-          <span className="text-[10px] text-emerald-500/80">
-            {totalProbes > 0 ? `${((successfulLogins / totalProbes) * 100).toFixed(1)}% success rate` : '0%'}
+        <div className="p-3 rounded-xl bg-[#070e22] border border-emerald-500/30">
+          <span className="text-[10px] text-emerald-400 uppercase font-bold">SUCCESSFUL LOGINS</span>
+          <div className="text-xl font-bold text-emerald-400 mt-1">{successfulLogins.toLocaleString()}</div>
+          <span className="text-[9px] text-emerald-500/80">
+            {totalProbes > 0 ? `${((successfulLogins / totalProbes) * 100).toFixed(1)}% probe conversion` : '0%'}
           </span>
         </div>
-        <div className="p-3.5 rounded-xl bg-[#070e22] border border-cyan-500/20">
-          <span className="text-[10px] text-slate-400 uppercase">UNIQUE USERNAMES</span>
-          <div className="text-2xl font-bold text-cyan-300 mt-1">{uniqueUsernames}</div>
-          <span className="text-[10px] text-slate-400">Targeted Identifiers</span>
+        <div className="p-3 rounded-xl bg-[#070e22] border border-cyan-500/20">
+          <span className="text-[10px] text-slate-400 uppercase">UNIQUE SPRAY SOURCES</span>
+          <div className="text-xl font-bold text-cyan-300 mt-1">{uniqueSources.toLocaleString()}</div>
+          <span className="text-[9px] text-slate-500">Distinct Threat Actor IPs</span>
         </div>
-        <div className="p-3.5 rounded-xl bg-[#070e22] border border-cyan-500/20">
+        <div className="p-3 rounded-xl bg-[#070e22] border border-cyan-500/20">
+          <span className="text-[10px] text-slate-400 uppercase">UNIQUE USERNAMES</span>
+          <div className="text-xl font-bold text-white mt-1">{uniqueUsernames.toLocaleString()}</div>
+          <span className="text-[9px] text-slate-500">Targeted Account IDs</span>
+        </div>
+        <div className="p-3 rounded-xl bg-[#070e22] border border-cyan-500/20">
           <span className="text-[10px] text-slate-400 uppercase">UNIQUE PASSWORDS</span>
-          <div className="text-2xl font-bold text-amber-300 mt-1">{uniquePasswords}</div>
-          <span className="text-[10px] text-slate-400">Sprayed Dictionaries</span>
+          <div className="text-xl font-bold text-amber-300 mt-1">{uniquePasswords.toLocaleString()}</div>
+          <span className="text-[9px] text-slate-500">Sprayed Dictionaries</span>
         </div>
       </div>
 
       {/* Top Dictionaries Breakdown */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Top Usernames */}
-        <div className="p-4 rounded-xl bg-[#070e22] border border-cyan-500/20 space-y-3">
+        <div className="p-4 rounded-xl bg-[#070e22] border border-cyan-500/20 space-y-2.5">
           <h3 className="text-xs font-bold text-white uppercase flex items-center justify-between">
-            <span>MOST SPRAYED USERNAMES</span>
-            <span className="text-[10px] text-cyan-400 font-normal">Top Probed Accounts</span>
+            <span>MOST TARGETED USERNAMES</span>
+            <span className="text-[10px] text-cyan-400 font-normal">Account Spray Ranking</span>
           </h3>
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             {topUsernames.length === 0 ? (
               <div className="text-xs text-slate-500 py-3">No username data available.</div>
             ) : (
               topUsernames.map(([uname, count]) => (
                 <div key={uname} className="flex items-center justify-between text-xs p-2 rounded bg-[#040816] border border-cyan-500/10">
-                  <span className="font-bold text-cyan-300">{uname}</span>
-                  <span className="text-slate-400">{count} attempts</span>
+                  <span className="font-bold text-cyan-300 font-mono">{uname}</span>
+                  <span className="text-slate-400">{count.toLocaleString()} attempts</span>
                 </div>
               ))
             )}
@@ -202,19 +219,21 @@ export default function AuthenticationForensicsPage() {
         </div>
 
         {/* Top Passwords */}
-        <div className="p-4 rounded-xl bg-[#070e22] border border-cyan-500/20 space-y-3">
+        <div className="p-4 rounded-xl bg-[#070e22] border border-cyan-500/20 space-y-2.5">
           <h3 className="text-xs font-bold text-white uppercase flex items-center justify-between">
             <span>MOST SPRAYED PASSWORDS</span>
             <span className="text-[10px] text-amber-400 font-normal">Dictionary Probes</span>
           </h3>
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             {topPasswords.length === 0 ? (
               <div className="text-xs text-slate-500 py-3">No password data available.</div>
             ) : (
               topPasswords.map(([pw, count]) => (
                 <div key={pw} className="flex items-center justify-between text-xs p-2 rounded bg-[#040816] border border-cyan-500/10">
-                  <span className="font-bold text-amber-300 font-mono">{pw}</span>
-                  <span className="text-slate-400">{count} attempts</span>
+                  <span className="font-bold text-amber-300 font-mono">
+                    {showRawPasswords ? pw : '••••••••'}
+                  </span>
+                  <span className="text-slate-400">{count.toLocaleString()} attempts</span>
                 </div>
               ))
             )}
@@ -228,7 +247,7 @@ export default function AuthenticationForensicsPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-400/60" />
           <input
             type="search"
-            placeholder="Search username, password, session ID..."
+            placeholder="Search IP, username, password, session ID..."
             value={searchQuery}
             onChange={(e) => {
               setSearchQuery(e.target.value);
@@ -251,6 +270,14 @@ export default function AuthenticationForensicsPage() {
             <option value="success">Successful Logins Only</option>
             <option value="failed">Failed Probes Only</option>
           </select>
+
+          <button
+            onClick={() => setShowRawPasswords(!showRawPasswords)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#040816] border border-cyan-500/25 text-xs text-slate-300 hover:text-cyan-300 transition-all"
+          >
+            {showRawPasswords ? <EyeOff className="w-3.5 h-3.5 text-cyan-400" /> : <Eye className="w-3.5 h-3.5 text-slate-400" />}
+            <span>{showRawPasswords ? 'Mask Passwords' : 'Show Passwords'}</span>
+          </button>
         </div>
       </div>
 
@@ -260,95 +287,121 @@ export default function AuthenticationForensicsPage() {
           <table className="w-full text-left text-xs">
             <thead className="bg-[#040816] text-[10px] text-slate-400 uppercase border-b border-cyan-500/15">
               <tr>
-                <th className="py-3 px-4">TIMESTAMP</th>
-                <th className="py-3 px-4">SESSION ID</th>
-                <th className="py-3 px-4">USERNAME</th>
-                <th className="py-3 px-4">PASSWORD</th>
-                <th className="py-3 px-4">METHOD</th>
-                <th className="py-3 px-4">RESULT</th>
+                <th className="py-2.5 px-4">TIMESTAMP</th>
+                <th className="py-2.5 px-4">ATTACKER IP</th>
+                <th className="py-2.5 px-4">ORIGIN</th>
+                <th className="py-2.5 px-4">SESSION ID</th>
+                <th className="py-2.5 px-4">USERNAME</th>
+                <th className="py-2.5 px-4">PASSWORD</th>
+                <th className="py-2.5 px-4">METHOD</th>
+                <th className="py-2.5 px-4">RESULT</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-cyan-500/10 font-mono">
               {globalAuthLoading && filteredAuth.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-400">
+                  <td colSpan={8} className="py-8 text-center text-slate-400">
                     <RefreshCw className="w-6 h-6 text-cyan-400 animate-spin mx-auto mb-2" />
                     Querying ClickHouse auth attempts...
                   </td>
                 </tr>
               ) : filteredAuth.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-8 text-center text-slate-500">
-                    No authentication events match this query.
+                  <td colSpan={8} className="py-8 text-center text-slate-500">
+                    No authentication events match this query. External connection probes did not issue credentials in this scope.
                   </td>
                 </tr>
               ) : (
-                paginatedAuth.map((a, idx) => (
-                  <tr key={a.event_id || idx} className="hover:bg-cyan-950/20">
-                    <td className="py-2.5 px-4 text-slate-400">{formatTimestamp(a.timestamp)}</td>
-                    <td className="py-2.5 px-4">
-                      <Link
-                        href={`/sessions/${a.session_id}`}
-                        className="text-cyan-400 hover:underline flex items-center gap-1 font-bold"
-                      >
-                        <span>{a.session_id.slice(0, 8)}</span>
-                        <ExternalLink className="w-2.5 h-2.5" />
-                      </Link>
-                    </td>
-                    <td className="py-2.5 px-4 font-bold text-white">{a.username}</td>
-                    <td className="py-2.5 px-4 text-slate-300">
-                      {a.password ? (
-                        <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                          {a.password}
-                        </span>
-                      ) : (
-                        <span className="text-slate-600 italic">(none / key)</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-4 text-slate-400">{a.auth_method || 'password'}</td>
-                    <td className="py-2.5 px-4">
-                      {a.success ? (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 w-fit">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                          SUCCESS
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center gap-1 w-fit">
-                          <XCircle className="w-3 h-3 text-rose-400" />
-                          FAILED
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))
+                paginatedAuth.map((a, idx) => {
+                  const ip = a.attacker_ip || a.src_ip || 'unknown';
+                  const country = getCountryName(a.country);
+                  return (
+                    <tr key={a.event_id || idx} className="hover:bg-cyan-950/20 transition-all">
+                      <td className="py-2.5 px-4 text-slate-400">{formatTimestamp(a.timestamp)}</td>
+                      <td className="py-2.5 px-4 font-bold text-white">
+                        {ip !== 'unknown' ? (
+                          <Link
+                            href={`/attackers?ip=${encodeURIComponent(ip)}`}
+                            className="text-cyan-300 hover:underline flex items-center gap-1"
+                          >
+                            <span>{ip}</span>
+                            <ExternalLink className="w-2.5 h-2.5 text-cyan-400 opacity-60" />
+                          </Link>
+                        ) : (
+                          <span className="text-slate-500">unknown</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-400">{country}</td>
+                      <td className="py-2.5 px-4">
+                        <Link
+                          href={`/sessions/${a.session_id}`}
+                          className="text-cyan-400 hover:underline flex items-center gap-1 font-bold"
+                        >
+                          <span>CASE-{a.session_id.slice(0, 8).toUpperCase()}</span>
+                          <ExternalLink className="w-2.5 h-2.5" />
+                        </Link>
+                      </td>
+                      <td className="py-2.5 px-4 font-bold text-white">{a.username}</td>
+                      <td className="py-2.5 px-4 text-slate-300">
+                        {a.password ? (
+                          <span className="bg-slate-900 px-2 py-0.5 rounded border border-slate-800 font-mono">
+                            {showRawPasswords ? a.password : '••••••••'}
+                          </span>
+                        ) : (
+                          <span className="text-slate-600 italic">(none / key)</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-400">{a.auth_method || 'password'}</td>
+                      <td className="py-2.5 px-4">
+                        {a.success ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 w-fit">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                            SUCCESSFUL LOGIN
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center gap-1 w-fit">
+                            <XCircle className="w-3 h-3 text-rose-400" />
+                            REJECTED
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
-      </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between pt-4 border-t border-cyan-500/15 text-xs text-slate-400">
-          <span>Page {currentPage} of {totalPages}</span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              className="px-3 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 disabled:opacity-40"
-            >
-              Previous
-            </button>
-            <button
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
-              className="px-3 py-1.5 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 disabled:opacity-40"
-            >
-              Next
-            </button>
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="p-3 bg-[#040816] border-t border-cyan-500/15 flex items-center justify-between text-xs text-slate-400">
+            <span>
+              Showing {(currentPage - 1) * itemsPerPage + 1} to{' '}
+              {Math.min(currentPage * itemsPerPage, filteredAuth.length)} of {filteredAuth.length} attempts
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                disabled={currentPage <= 1}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                className="px-2.5 py-1 rounded bg-[#070e22] border border-cyan-500/20 disabled:opacity-40 hover:border-cyan-400 text-cyan-300"
+              >
+                Previous
+              </button>
+              <span className="text-white font-bold">
+                {currentPage} / {totalPages}
+              </span>
+              <button
+                disabled={currentPage >= totalPages}
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                className="px-2.5 py-1 rounded bg-[#070e22] border border-cyan-500/20 disabled:opacity-40 hover:border-cyan-400 text-cyan-300"
+              >
+                Next
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

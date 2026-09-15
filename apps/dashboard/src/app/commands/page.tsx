@@ -31,6 +31,7 @@ import { normalizeIntent } from '@/lib/intents';
 import { safeCopyToClipboard } from '@/lib/clipboard';
 import { api } from '@/lib/api';
 import { Command, CommandSummary } from '@/lib/types';
+import { getTechniqueInfo } from '@/lib/mitre';
 
 function renderSourceBadge(sourceClass?: string) {
   if (sourceClass === 'EXTERNAL_HONEYPOT') {
@@ -840,18 +841,36 @@ function GlobalCommandsContent() {
                         </pre>
 
                         {cmd.mitre_techniques && cmd.mitre_techniques.length > 0 && (
-                          <div className="pt-2 flex items-center gap-2 text-xs">
-                            <span className="text-[10px] text-slate-400 uppercase">MITRE TECHNIQUES:</span>
-                            <div className="flex flex-wrap gap-1.5">
-                              {cmd.mitre_techniques.map((t) => (
-                                <Link
-                                  key={t}
-                                  href={`/mitre?technique=${encodeURIComponent(t)}`}
-                                  className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-900/40 text-cyan-300 border border-cyan-500/30 hover:border-cyan-400"
-                                >
-                                  {t}
-                                </Link>
-                              ))}
+                          <div className="pt-2 flex flex-wrap items-center gap-2 text-xs">
+                            <span className="text-[10px] text-slate-400 uppercase">TECHNIQUES:</span>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {cmd.mitre_techniques.map((t) => {
+                                const info = getTechniqueInfo(t);
+                                return (
+                                  <div key={t} className="inline-flex items-center gap-1">
+                                    <Link
+                                      href={`/mitre?technique=${encodeURIComponent(t)}`}
+                                      className={cn(
+                                        'px-2 py-0.5 rounded text-[10px] font-bold border transition-all',
+                                        info.isCustom
+                                          ? 'bg-amber-950/70 text-amber-300 border-amber-500/40 hover:border-amber-400'
+                                          : 'bg-cyan-900/40 text-cyan-300 border border-cyan-500/30 hover:border-cyan-400'
+                                      )}
+                                      title={info.name}
+                                    >
+                                      {t}
+                                    </Link>
+                                    {info.isCustom && (
+                                      <span
+                                        className="px-1.5 py-0.2 rounded text-[8px] font-bold bg-amber-900/50 text-amber-300 border border-amber-500/30 cursor-help"
+                                        title={`Custom Taxonomy (CloudDecept research extension). Closest official: ${info.closestOfficial || 'N/A'}`}
+                                      >
+                                        CUSTOM
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}

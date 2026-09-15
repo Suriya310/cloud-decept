@@ -331,6 +331,7 @@ class SessionSummary(BaseModel):
     intent: str
     skill_level: int
     threat_score: Optional[int] = 0
+    auth_success: Optional[bool] = None
     assessment: Optional[FinalAssessment] = None
 
 
@@ -480,6 +481,8 @@ class AuthAttemptResponse(BaseModel):
     password: str
     success: bool
     auth_method: str
+    attacker_ip: Optional[str] = ""
+    country: Optional[str] = "Unknown"
 
 
 class ThreatIntelResponse(BaseModel):
@@ -507,11 +510,24 @@ class SessionSummaryDetail(BaseModel):
     created_at: datetime
 
 
+class QuarantinedSessionsBreakdown(BaseModel):
+    total: int = 0
+    internal_infrastructure: int = 0
+    synthetic_tests: int = 0
+    orphan_sessions: int = 0
+
+
 class StatsResponse(BaseModel):
     # All-time totals (no time filter)
     total_sessions: int
     total_commands: int
     unique_attackers: int
+
+    # Authoritative External Attacker Metrics (Phase 3.2 truthful semantics)
+    external_sessions: int = 0
+    external_commands: int = 0
+    external_auth_sessions: int = 0
+    quarantined_sessions: QuarantinedSessionsBreakdown = Field(default_factory=QuarantinedSessionsBreakdown)
 
     # Recent window (default 24h)
     recent_sessions: int
@@ -528,6 +544,7 @@ class StatsResponse(BaseModel):
     sessions_per_hour: list[dict]
     commands_per_day: list[dict]
     sessions_per_day: list[dict] = []
+    successful_auth_sessions: int = 0
 
 
 class AttackerDetailResponse(BaseModel):
@@ -550,6 +567,7 @@ class AttackerDetailResponse(BaseModel):
     max_skill_level: int
     primary_intent: str
     recent_sessions: list[SessionSummary] = []
+    top_commands: list[dict] = []
 
 
 class HealthResponse(BaseModel):
@@ -841,13 +859,121 @@ async def get_stats(
         for r in sessions_per_day_res.named_results()
     ]
 
+    # ============================================================
+    # SUCCESSFUL AUTH SESSIONS (Authoritative ClickHouse)
+    # ============================================================
+    auth_since_sql = f"AND timestamp >= '{since_str}'" if hours_val < 87600 else ""
+    try:
+        successful_auth_raw = await run_ch_command(
+            f"SELECT uniqExact(session_id) FROM clouddecept.auth_attempts WHERE success = 1 {auth_since_sql}"
+        )
+        successful_auth_sessions = int(successful_auth_raw or 0)
+    except Exception as e:
+        logger.debug(f"ClickHouse successful_auth_sessions query failed: {e}")
+        successful_auth_sessions = 0
+
+    # ============================================================
+    # AUTHORITATIVE EXTERNAL ATTACKER METRICS & QUARANTINE (Phase 3.2)
+    # ============================================================
+    external_sessions = 0
+    internal_infra = 0
+    synthetic_sess = 0
+    orphan_sess = 0
+    quarantined_total = 0
+    try:
+        traffic_res = await run_ch_query(
+            """
+            SELECT
+                uniqExactIf(session_id, attacker_ip NOT IN ('172.18.0.1', '129.146.167.2', '127.0.0.1') AND session_id NOT LIKE 'e2e%' AND session_id NOT LIKE 'debug%' AND session_id NOT LIKE 'final-e2e%' AND attacker_ip != '' AND isNotNull(attacker_ip)) as external_sessions,
+                uniqExactIf(session_id, attacker_ip IN ('172.18.0.1', '129.146.167.2', '127.0.0.1')) as internal_infra_sessions,
+                uniqExactIf(session_id, session_id LIKE 'e2e%' OR session_id LIKE 'debug%' OR session_id LIKE 'final-e2e%') as synthetic_sessions,
+                uniqExactIf(session_id, (attacker_ip = '' OR isNull(attacker_ip)) AND session_id NOT LIKE 'e2e%' AND session_id NOT LIKE 'debug%' AND session_id NOT LIKE 'final-e2e%') as orphan_sessions
+            FROM (
+                SELECT session_id, attacker_ip
+                FROM clouddecept.sessions
+                LIMIT 1 BY session_id
+            )
+            """
+        )
+        t_rows = list(traffic_res.named_results())
+        if t_rows:
+            external_sessions = int(t_rows[0].get("external_sessions") or 0)
+            internal_infra = int(t_rows[0].get("internal_infra_sessions") or 0)
+            synthetic_sess = int(t_rows[0].get("synthetic_sessions") or 0)
+            orphan_sess = int(t_rows[0].get("orphan_sessions") or 0)
+            quarantined_total = internal_infra + synthetic_sess + orphan_sess
+    except Exception as e:
+        logger.warning(f"Failed to query traffic classification: {e}")
+        external_sessions = 0
+        internal_infra = 0
+        synthetic_sess = 0
+        orphan_sess = 0
+        quarantined_total = 0
+
+    external_commands = 0
+    try:
+        ext_cmd_raw = await run_ch_command(
+            """
+            SELECT uniqExact(event_id)
+            FROM clouddecept.commands c
+            JOIN (
+                SELECT session_id, attacker_ip
+                FROM clouddecept.sessions
+                WHERE attacker_ip NOT IN ('172.18.0.1', '129.146.167.2', '127.0.0.1')
+                  AND session_id NOT LIKE 'e2e%'
+                  AND session_id NOT LIKE 'debug%'
+                  AND session_id NOT LIKE 'final-e2e%'
+                  AND attacker_ip != ''
+                LIMIT 1 BY session_id
+            ) s ON c.session_id = s.session_id
+            """
+        )
+        external_commands = int(ext_cmd_raw or 0)
+    except Exception as e:
+        logger.warning(f"Failed to query external commands: {e}")
+        external_commands = 0
+
+    external_auth_sessions = 0
+    try:
+        ext_auth_raw = await run_ch_command(
+            """
+            SELECT uniqExact(a.session_id)
+            FROM clouddecept.auth_attempts a
+            JOIN (
+                SELECT session_id, attacker_ip
+                FROM clouddecept.sessions
+                WHERE attacker_ip NOT IN ('172.18.0.1', '129.146.167.2', '127.0.0.1')
+                  AND session_id NOT LIKE 'e2e%'
+                  AND session_id NOT LIKE 'debug%'
+                  AND session_id NOT LIKE 'final-e2e%'
+                  AND attacker_ip != ''
+                LIMIT 1 BY session_id
+            ) s ON a.session_id = s.session_id
+            WHERE a.success = 1
+            """
+        )
+        external_auth_sessions = int(ext_auth_raw or 0)
+    except Exception as e:
+        logger.warning(f"Failed to query external auth sessions: {e}")
+        external_auth_sessions = 0
+
     return StatsResponse(
         total_sessions=total_sessions,
         total_commands=total_commands,
         unique_attackers=unique_attackers,
+        external_sessions=external_sessions,
+        external_commands=external_commands,
+        external_auth_sessions=external_auth_sessions,
+        quarantined_sessions=QuarantinedSessionsBreakdown(
+            total=quarantined_total,
+            internal_infrastructure=internal_infra,
+            synthetic_tests=synthetic_sess,
+            orphan_sessions=orphan_sess,
+        ),
         recent_sessions=recent_sessions,
         recent_commands=recent_commands,
         recent_unique_attackers=recent_unique_attackers,
+        successful_auth_sessions=successful_auth_sessions,
         active_sessions=active_sessions,
         top_intents=[{"intent": r.get("intent", ""), "count": int(r.get("cnt", r.get("count", 0)))} for r in top_intents],
         top_countries=[{"country": r.get("country", ""), "count": int(r.get("cnt", r.get("count", 0)))} for r in top_countries],
@@ -925,8 +1051,10 @@ async def list_sessions(
     hours: Optional[int] = Query(None, ge=1, le=87600),
     attacker_ip: Optional[str] = None,
     session_id: Optional[str] = None,
+    has_commands: Optional[bool] = Query(None),
+    auth_success: Optional[bool] = Query(None),
 ):
-    """List recent sessions with filters (supports server-side attacker_ip and session_id filtering)"""
+    """List recent sessions with filters (supports server-side attacker_ip, session_id, has_commands, and auth_success)"""
     try:
         limit_val = int(limit)
     except Exception:
@@ -937,7 +1065,7 @@ async def list_sessions(
         offset_val = 0
 
     if hours is None:
-        hours_val = 87600 if (attacker_ip or session_id) else 24
+        hours_val = 87600 if (attacker_ip or session_id or has_commands is not None or auth_success is not None) else 24
     else:
         try:
             hours_val = int(hours)
@@ -958,6 +1086,14 @@ async def list_sessions(
         where_clauses.append(f"intent = '{intent}'")
     if min_skill_level is not None:
         where_clauses.append(f"skill_level >= {int(min_skill_level)}")
+    if has_commands is True:
+        where_clauses.append("session_id IN (SELECT DISTINCT session_id FROM clouddecept.commands WHERE session_id != '')")
+    elif has_commands is False:
+        where_clauses.append("session_id NOT IN (SELECT DISTINCT session_id FROM clouddecept.commands WHERE session_id != '')")
+    if auth_success is True:
+        where_clauses.append("session_id IN (SELECT DISTINCT session_id FROM clouddecept.auth_attempts WHERE success = 1)")
+    elif auth_success is False:
+        where_clauses.append("session_id NOT IN (SELECT DISTINCT session_id FROM clouddecept.auth_attempts WHERE success = 1)")
 
     where_sql = " AND ".join(where_clauses)
 
@@ -969,7 +1105,7 @@ async def list_sessions(
                disconnection_reason
         FROM clouddecept.sessions
         WHERE {where_sql}
-        ORDER BY start_time DESC
+        ORDER BY start_time DESC, session_id DESC
         LIMIT {limit_val} OFFSET {offset_val}
         """
     )).named_results()
@@ -981,10 +1117,11 @@ async def list_sessions(
     # Deterministically consolidate multiple historical rows per session_id
     consolidated_results = consolidate_session_rows(raw_results)
 
-    # Batch reconcile commands_executed and credentials_tried against authoritative raw telemetry
+    # Batch reconcile commands_executed, credentials_tried, and auth_success against authoritative raw telemetry
     sids = [r.get("session_id") for r in consolidated_results if r.get("session_id")]
     cmd_counts = None
     auth_counts = None
+    auth_success_map = None
     if sids:
         placeholders = ",".join(f"'{sid}'" for sid in sids)
         try:
@@ -1003,13 +1140,14 @@ async def list_sessions(
         try:
             auth_res = (await run_ch_query(
                 f"""
-                SELECT session_id, uniqExact(event_id) as auth_count
+                SELECT session_id, uniqExact(event_id) as auth_count, max(success) as max_success
                 FROM clouddecept.auth_attempts
                 WHERE session_id IN ({placeholders})
                 GROUP BY session_id
                 """
             )).named_results()
             auth_counts = {r["session_id"]: int(r["auth_count"]) for r in auth_res}
+            auth_success_map = {r["session_id"]: bool(int(r.get("max_success") or 0) == 1) for r in auth_res}
         except Exception as e:
             logger.debug(f"Could not batch reconcile auth counts: {e}")
 
@@ -1026,8 +1164,10 @@ async def list_sessions(
 
             if auth_counts is not None:
                 sess_dict["credentials_tried"] = auth_counts.get(sid, 0)
+                sess_dict["auth_success"] = auth_success_map.get(sid, False) if auth_success_map else False
             else:
                 sess_dict["credentials_tried"] = int(sess_dict.get("credentials_tried") or 0)
+                sess_dict["auth_success"] = None
 
         # An active session in ClickHouse has end_time placeholder equal to start_time, duration 0, and no disconnect reason
         is_active = (
@@ -1704,14 +1844,32 @@ async def list_auth_attempts(
 
     where_sql = " AND ".join(where_clauses)
 
+    sessions_subquery = """
+        SELECT session_id, any(attacker_ip) as attacker_ip, any(country) as country
+        FROM clouddecept.sessions
+        GROUP BY session_id
+    """
+
     results = (await run_ch_query(
         f"""
-        SELECT event_id, session_id, timestamp, username, password,
-               success, auth_method
-        FROM clouddecept.auth_attempts
-        WHERE {where_sql}
-        ORDER BY timestamp DESC
-        LIMIT 1 BY event_id
+        SELECT a.event_id as event_id,
+               a.session_id as session_id,
+               a.timestamp as timestamp,
+               a.username as username,
+               a.password as password,
+               a.success as success,
+               a.auth_method as auth_method,
+               coalesce(nullIf(s.attacker_ip, ''), '') as attacker_ip,
+               coalesce(nullIf(s.country, ''), 'Unknown') as country
+        FROM (
+            SELECT event_id, session_id, timestamp, username, password,
+                   success, auth_method
+            FROM clouddecept.auth_attempts
+            WHERE {where_sql}
+            LIMIT 1 BY event_id
+        ) AS a
+        LEFT JOIN ({sessions_subquery}) AS s ON a.session_id = s.session_id
+        ORDER BY a.timestamp DESC
         LIMIT {limit_val} OFFSET {offset_val}
         """
     )).named_results()
@@ -2044,8 +2202,9 @@ async def list_mitre_techniques():
 async def top_attackers(
     limit: int = Query(20, ge=1, le=100),
     hours: int = Query(168, ge=1, le=87600),
+    sort_by: Optional[str] = Query(None),
 ):
-    """Get top attackers by session count (pre-aggregates commands to avoid join explosion)"""
+    """Get top attackers by session count or command count (excludes synthetic and internal infrastructure)"""
     try:
         limit_val = int(limit)
     except Exception:
@@ -2057,6 +2216,8 @@ async def top_attackers(
 
     since = datetime.utcnow() - timedelta(hours=hours_val)
     since_str = since.strftime('%Y-%m-%d %H:%M:%S')
+
+    order_sql = "ORDER BY total_commands DESC, sessions DESC" if sort_by == "commands" else "ORDER BY sessions DESC"
 
     results = (await run_ch_query(
         f"""
@@ -2082,6 +2243,10 @@ async def top_attackers(
             FROM clouddecept.sessions
             WHERE start_time >= '{since_str}' AND start_time <= now()
               AND attacker_ip != '' AND attacker_ip IS NOT NULL
+              AND attacker_ip NOT IN ('172.18.0.1', '129.146.167.2', '127.0.0.1')
+              AND session_id NOT LIKE 'e2e%'
+              AND session_id NOT LIKE 'debug%'
+              AND session_id NOT LIKE 'final-e2e%'
             GROUP BY attacker_ip, session_id
         ) AS s
         LEFT JOIN (
@@ -2090,7 +2255,7 @@ async def top_attackers(
             GROUP BY session_id
         ) AS c ON s.session_id = c.session_id
         GROUP BY s.attacker_ip
-        ORDER BY sessions DESC
+        {order_sql}
         LIMIT {limit_val}
         """
     )).named_results()
@@ -2237,6 +2402,32 @@ async def get_attacker_detail(attacker_ip: str):
         s_dict.pop("disconnection_reason", None)
         formatted_recent.append(SessionSummary(**s_dict))
 
+    # 5. Top commands executed by this actor
+    top_commands = []
+    try:
+        top_cmd_res = await run_ch_query(
+            f"""
+            SELECT command, uniqExact(event_id) as executions, uniqExact(session_id) as sessions
+            FROM clouddecept.commands
+            WHERE session_id IN (
+                SELECT session_id FROM clouddecept.sessions WHERE attacker_ip = '{safe_ip}'
+            ) AND command != ''
+            GROUP BY command
+            ORDER BY executions DESC
+            LIMIT 10
+            """
+        )
+        top_commands = [
+            {
+                "command": r.get("command", ""),
+                "executions": int(r.get("executions", 0)),
+                "sessions": int(r.get("sessions", 0)),
+            }
+            for r in top_cmd_res.named_results()
+        ]
+    except Exception as e:
+        logger.debug(f"Could not fetch top commands for attacker {safe_ip}: {e}")
+
     return AttackerDetailResponse(
         attacker_ip=row["attacker_ip"],
         country=row.get("country") or "Unknown",
@@ -2255,6 +2446,7 @@ async def get_attacker_detail(attacker_ip: str):
         max_skill_level=int(row.get("max_skill_level") or 0),
         primary_intent=row.get("primary_intent") or "",
         recent_sessions=formatted_recent,
+        top_commands=top_commands,
     )
 
 

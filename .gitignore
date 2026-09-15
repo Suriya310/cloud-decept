@@ -94,3 +94,6 @@ research/paper/*.toc
 *.bak
 *.backup
 *~
+
+# Temporary scratch & audit scripts
+scratch/

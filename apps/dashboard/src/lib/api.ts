@@ -39,7 +39,18 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   // Sessions
-  getSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string; min_skill_level?: number; attacker_ip?: string; session_id?: string }) => {
+  getSessions: (params?: {
+    status?: string;
+    limit?: number;
+    offset?: number;
+    hours?: number;
+    intent?: string;
+    min_skill_level?: number;
+    attacker_ip?: string;
+    session_id?: string;
+    has_commands?: boolean;
+    auth_success?: boolean;
+  }) => {
     const search = new URLSearchParams();
     if (params?.limit) search.set('limit', params.limit.toString());
     if (params?.offset) search.set('offset', params.offset.toString());
@@ -48,6 +59,8 @@ export const api = {
     if (params?.min_skill_level !== undefined) search.set('min_skill_level', params.min_skill_level.toString());
     if (params?.attacker_ip) search.set('attacker_ip', params.attacker_ip);
     if (params?.session_id) search.set('session_id', params.session_id);
+    if (params?.has_commands !== undefined) search.set('has_commands', params.has_commands.toString());
+    if (params?.auth_success !== undefined) search.set('auth_success', params.auth_success.toString());
     // Backend returns array directly: SessionSummary[]
     return fetchJson<any[]>(`${API_BASE}/sessions?${search}`).then(sessions => ({
       sessions: Array.isArray(sessions) ? sessions : [],
@@ -196,10 +209,11 @@ export const api = {
     return fetchJson<TopCommand[]>(`${API_BASE}/commands/top?${search}`).then((res) => (Array.isArray(res) ? res : []));
   },
 
-  getTopAttackers: (params?: { limit?: number; hours?: number }): Promise<TopAttacker[]> => {
+  getTopAttackers: (params?: { limit?: number; hours?: number; sort_by?: string }): Promise<TopAttacker[]> => {
     const search = new URLSearchParams();
     if (params?.limit) search.set('limit', params.limit.toString());
     if (params?.hours) search.set('hours', params.hours.toString());
+    if (params?.sort_by) search.set('sort_by', params.sort_by);
     return fetchJson<TopAttacker[]>(`${API_BASE}/attackers/top?${search}`).then((res) => (Array.isArray(res) ? res : []));
   },
 

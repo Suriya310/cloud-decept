@@ -30,10 +30,15 @@ function SessionsPageContent() {
   const urlSearch = searchParams.get('search') || '';
   const urlCountry = searchParams.get('country') || '';
   const urlIp = searchParams.get('ip') || '';
+  const urlFilter = searchParams.get('filter') || '';
+  const urlHasCmds = searchParams.get('has_commands') === 'true';
 
   const { sessions, sessionsLoading, fetchSessions, timeWindowHours } = useDashboardStore();
   const [searchQuery, setSearchQuery] = useState(urlSearch || urlIp);
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'closed' | 'failed' | 'timed_out' | 'stale'>('all');
+  const [quickFilter, setQuickFilter] = useState<'all' | 'commands' | 'auth_success' | 'high_threat'>(
+    urlFilter === 'commands' || urlHasCmds ? 'commands' : urlFilter === 'auth_success' ? 'auth_success' : 'all'
+  );
   const [intentFilter, setIntentFilter] = useState<string>('all');
   const [countryFilter, setCountryFilter] = useState<string>(urlCountry || 'all');
   const [currentPage, setCurrentPage] = useState(1);
@@ -50,10 +55,14 @@ function SessionsPageContent() {
       fetchSessions({ attacker_ip: trimmed, hours: 87600, limit: 300 });
     } else if (isSessionId(trimmed)) {
       fetchSessions({ session_id: trimmed, hours: 87600, limit: 300 });
+    } else if (quickFilter === 'commands') {
+      fetchSessions({ has_commands: true, hours: 87600, limit: 300 });
+    } else if (quickFilter === 'auth_success') {
+      fetchSessions({ auth_success: true, hours: 87600, limit: 300 });
     } else {
       fetchSessions({ hours: timeWindowHours, limit: 300 });
     }
-  }, [searchQuery, urlIp, isIp, isSessionId, fetchSessions, timeWindowHours]);
+  }, [searchQuery, urlIp, isIp, isSessionId, quickFilter, fetchSessions, timeWindowHours]);
 
   useEffect(() => {
     loadSessions();
@@ -74,10 +83,15 @@ function SessionsPageContent() {
       const matchesStatus = statusFilter === 'all' || s.status === statusFilter;
       const matchesIntent = intentFilter === 'all' || s.intent === intentFilter;
       const matchesCountry = countryFilter === 'all' || s.country === countryFilter || s.src_country === countryFilter;
+      const matchesQuick =
+        quickFilter === 'all' ||
+        (quickFilter === 'commands' && (s.command_count || s.commands_executed || 0) > 0) ||
+        (quickFilter === 'auth_success' && s.status !== 'failed' && (s.credentials_tried || 0) > 0) ||
+        (quickFilter === 'high_threat' && (s.threat_score ?? s.skill_level ?? 0) >= 40);
 
-      return matchesSearch && matchesStatus && matchesIntent && matchesCountry;
+      return matchesSearch && matchesStatus && matchesIntent && matchesCountry && matchesQuick;
     });
-  }, [sessions, searchQuery, statusFilter, intentFilter, countryFilter]);
+  }, [sessions, searchQuery, statusFilter, intentFilter, countryFilter, quickFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredSessions.length / itemsPerPage));
   const paginatedSessions = useMemo(() => {
@@ -145,6 +159,61 @@ function SessionsPageContent() {
             <span>EXPORT CSV</span>
           </button>
         </div>
+      </div>
+
+      {/* Quick Triage Bar */}
+      <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-xl bg-[#070e22] border border-cyan-500/20 text-xs">
+        <span className="text-[10px] text-slate-400 uppercase tracking-wider px-2 font-bold flex items-center gap-1.5">
+          <Filter className="w-3.5 h-3.5 text-cyan-400" />
+          <span>TRIAGE PRESETS:</span>
+        </span>
+        <button
+          onClick={() => { setQuickFilter('all'); setCurrentPage(1); }}
+          className={cn(
+            'px-2.5 py-1 rounded text-xs font-bold transition-all',
+            quickFilter === 'all'
+              ? 'bg-cyan-500/25 text-cyan-300 border border-cyan-400/50'
+              : 'bg-[#040816] text-slate-400 hover:text-slate-200 border border-slate-800'
+          )}
+        >
+          All Sessions
+        </button>
+        <button
+          onClick={() => { setQuickFilter('commands'); setCurrentPage(1); }}
+          className={cn(
+            'px-2.5 py-1 rounded text-xs font-bold transition-all flex items-center gap-1.5',
+            quickFilter === 'commands'
+              ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-400/50'
+              : 'bg-[#040816] text-slate-400 hover:text-emerald-300 border border-slate-800'
+          )}
+        >
+          <Terminal className="w-3 h-3 text-emerald-400" />
+          <span>Interactive / With Commands</span>
+        </button>
+        <button
+          onClick={() => { setQuickFilter('auth_success'); setCurrentPage(1); }}
+          className={cn(
+            'px-2.5 py-1 rounded text-xs font-bold transition-all flex items-center gap-1.5',
+            quickFilter === 'auth_success'
+              ? 'bg-cyan-500/25 text-cyan-300 border border-cyan-400/50'
+              : 'bg-[#040816] text-slate-400 hover:text-cyan-300 border border-slate-800'
+          )}
+        >
+          <KeyRound className="w-3 h-3 text-cyan-400" />
+          <span>Auth Probe / Accepted</span>
+        </button>
+        <button
+          onClick={() => { setQuickFilter('high_threat'); setCurrentPage(1); }}
+          className={cn(
+            'px-2.5 py-1 rounded text-xs font-bold transition-all flex items-center gap-1.5',
+            quickFilter === 'high_threat'
+              ? 'bg-rose-500/25 text-rose-300 border border-rose-400/50'
+              : 'bg-[#040816] text-slate-400 hover:text-rose-300 border border-slate-800'
+          )}
+        >
+          <AlertTriangle className="w-3 h-3 text-rose-400" />
+          <span>High Threat (Score &ge; 40)</span>
+        </button>
       </div>
 
       {/* Filter Bar */}

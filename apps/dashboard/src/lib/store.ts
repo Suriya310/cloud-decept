@@ -31,7 +31,7 @@ interface DashboardActions {
   fetchGlobalAuth: (params?: { limit?: number; offset?: number; session_id?: string; username?: string; success?: boolean; hours?: number }) => Promise<void>;
 
   // Sessions
-  fetchSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string; min_skill_level?: number; attacker_ip?: string; session_id?: string }) => Promise<void>;
+  fetchSessions: (params?: { status?: string; limit?: number; offset?: number; hours?: number; intent?: string; min_skill_level?: number; attacker_ip?: string; session_id?: string; has_commands?: boolean; auth_success?: boolean }) => Promise<void>;
   fetchSession: (sessionId: string) => Promise<void>;
   fetchSessionCommands: (sessionId: string) => Promise<void>;
   fetchSessionAuth: (sessionId: string) => Promise<void>;
@@ -43,7 +43,7 @@ interface DashboardActions {
   fetchThreatIntelItems: (params?: { limit?: number; severity?: string; ioc_type?: string }) => Promise<void>;
   fetchMitreTechniques: () => Promise<void>;
   fetchTopCommands: (hours?: number, limit?: number) => Promise<void>;
-  fetchTopAttackers: (hours?: number, limit?: number) => Promise<void>;
+  fetchTopAttackers: (hours?: number, limit?: number, sort_by?: string) => Promise<void>;
 
   // Stats
   fetchStats: (hours?: number) => Promise<void>;
@@ -101,14 +101,22 @@ export function transformSession(s: any): Session {
     (s.duration_seconds > 0 || (s.duration && s.duration > 0) || s.disconnection_reason)
   );
 
+  // Separate authentication outcome from TCP transport lifecycle
+  let authSuccess: boolean | undefined = undefined;
+  if (s.auth_success !== undefined && s.auth_success !== null) {
+    authSuccess = Boolean(s.auth_success);
+  } else if ((s.commands_executed ?? 0) > 0) {
+    authSuccess = true; // Commands executed in Cowrie required interactive shell access
+  } else if ((s.credentials_tried ?? 0) > 0) {
+    authSuccess = false; // Credentials probed without recorded command activity or explicit success
+  }
+
   let status: 'active' | 'closed' | 'failed' | 'timed_out' | 'stale' = 'closed';
 
-  if (hasExplicitEnd) {
-    if ((s.credentials_tried ?? 0) > 0 && (s.commands_executed ?? 0) === 0 && (s.duration_seconds ?? 0) < 15) {
-      status = 'failed';
-    } else {
-      status = 'closed';
-    }
+  if (s.status === 'failed' || authSuccess === false) {
+    status = 'failed';
+  } else if (hasExplicitEnd) {
+    status = 'closed';
   } else {
     // No explicit end time recorded
     if (ageSeconds < 300) {
@@ -130,7 +138,7 @@ export function transformSession(s: any): Session {
     threat_score: typeof s.skill_level === 'number' ? s.skill_level : 0,
     tactics: s.tactics || [],
     status,
-    auth_success: s.credentials_tried && s.credentials_tried > 0 ? ((s.commands_executed ?? 0) > 0) : undefined,
+    auth_success: authSuccess,
   };
 }
 
@@ -288,9 +296,9 @@ export const useDashboardStore = create<DashboardState & DashboardActions>((set,
     }
   },
 
-  fetchTopAttackers: async (hours = 168, limit = 20) => {
+  fetchTopAttackers: async (hours = 168, limit = 20, sort_by?: string) => {
     try {
-      const top = await api.getTopAttackers({ hours, limit });
+      const top = await api.getTopAttackers({ hours, limit, sort_by });
       set({ topAttackers: top });
     } catch (error) {
       console.error('Failed to fetch top attackers:', error);

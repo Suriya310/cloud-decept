@@ -18,6 +18,9 @@ import {
   Radio,
   Clock,
   Layers,
+  Cpu,
+  CheckCircle2,
+  HelpCircle,
 } from 'lucide-react';
 import { cn, formatTimestamp } from '@/lib/utils';
 import { useDashboardStore } from '@/lib/store';
@@ -67,7 +70,8 @@ export default function ThreatIntelligencePage() {
         item.ioc_type.toLowerCase().includes(q) ||
         item.context.toLowerCase().includes(q);
 
-      const matchesSeverity = selectedSeverity === 'all' || item.severity.toLowerCase() === selectedSeverity.toLowerCase();
+      const matchesSeverity =
+        selectedSeverity === 'all' || item.severity.toLowerCase() === selectedSeverity.toLowerCase();
       return matchesSearch && matchesSeverity;
     });
   }, [iocList, searchQuery, selectedSeverity]);
@@ -88,25 +92,48 @@ export default function ThreatIntelligencePage() {
       else if (lvl === 'high') counts.high = td.count;
       else if (lvl === 'medium') counts.medium = td.count;
       else if (lvl === 'low') counts.low = td.count;
+      else if (lvl === 'unclassified') counts.unclassified = td.count;
     });
 
     const evaluated = counts.critical + counts.high + counts.medium + counts.low;
-    counts.unclassified = Math.max(0, (stats?.total_sessions || 0) - evaluated);
+    if (counts.unclassified === 0) {
+      counts.unclassified = Math.max(0, (stats?.total_sessions || 0) - evaluated);
+    }
     return counts;
   }, [stats]);
+
+  // Provenance counts across loaded sessions
+  const provenanceStats = useMemo(() => {
+    const list = sessions || [];
+    let aiCount = 0;
+    let fallbackCount = 0;
+    let pendingCount = 0;
+
+    list.forEach((s) => {
+      if (s.assessment?.source === 'threat-intel-service') {
+        aiCount++;
+      } else if (s.intent && s.intent !== 'reconnaissance') {
+        fallbackCount++;
+      } else {
+        pendingCount++;
+      }
+    });
+
+    return { aiCount, fallbackCount, pendingCount };
+  }, [sessions]);
 
   // High risk sessions
   const highRiskSessions = useMemo(() => {
     const list = sessions || [];
     return list
-      .filter((s) => (s.skill_level ?? s.threat_score ?? 0) >= 4)
+      .filter((s) => (s.skill_level ?? s.threat_score ?? 0) >= 3 || (s.command_count || s.commands_executed || 0) > 0)
       .slice(0, 10);
   }, [sessions]);
 
   return (
-    <div className="space-y-6 font-mono pb-12">
+    <div className="space-y-5 font-mono pb-12">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-3 border-b border-cyan-500/15">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-cyan-500/20">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-wider text-white uppercase flex items-center gap-2.5">
             <Shield className="w-5 h-5 text-cyan-400" />
@@ -124,7 +151,7 @@ export default function ThreatIntelligencePage() {
               fetchSessions({ hours: timeWindowHours, limit: 300 });
               fetchStats(timeWindowHours);
             }}
-            className="p-2 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 hover:text-cyan-300"
+            className="p-2 rounded-lg bg-[#070e22] border border-cyan-500/25 text-slate-300 hover:text-cyan-300 transition-all"
             title="Refresh threat intel"
           >
             <RefreshCw className="w-4 h-4 text-cyan-400" />
@@ -132,83 +159,127 @@ export default function ThreatIntelligencePage() {
         </div>
       </div>
 
-      {/* Threat Posture Taxonomy Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-        <div className="p-3.5 rounded-xl bg-[#070e22] border border-rose-500/30">
+      {/* Analysis Provenance & AI Role Banner */}
+      <div className="p-4 rounded-xl bg-[#070e22] border border-cyan-500/20 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-cyan-500/15 pb-2.5">
+          <div className="flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-cyan-400" />
+            <span className="text-xs font-bold text-white uppercase tracking-wider">
+              AI ANALYSIS PIPELINE & CLASSIFICATION PROVENANCE
+            </span>
+          </div>
+          <span className="text-[10px] text-slate-400">
+            Truthful representation of AI evaluations vs rule-based heuristic fallbacks
+          </span>
+        </div>
+
+        <p className="text-xs text-slate-300 leading-relaxed font-sans sm:text-sm">
+          CloudDecept pairs high-throughput rule-based heuristic classification with asynchronous LLM forensic evaluation.
+          Automated connection sprayers are triaged by rule-based taxonomy, while sessions exhibiting interactive shell execution
+          or high-value cloud reconnaissance are queued for deep behavioral assessment.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-xs">
+          <div className="p-2.5 rounded-lg bg-[#040816] border border-purple-500/30">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-purple-300 uppercase font-bold">AI EVALUATED</span>
+              <span className="w-2 h-2 rounded-full bg-purple-400" />
+            </div>
+            <div className="text-lg font-bold text-white mt-1">{provenanceStats.aiCount} Sessions</div>
+            <span className="text-[9px] text-slate-400">PostgreSQL session_summaries</span>
+          </div>
+
+          <div className="p-2.5 rounded-lg bg-[#040816] border border-amber-500/30">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-amber-300 uppercase font-bold">RULE-BASED FALLBACK</span>
+              <span className="w-2 h-2 rounded-full bg-amber-400" />
+            </div>
+            <div className="text-lg font-bold text-white mt-1">{provenanceStats.fallbackCount} Sessions</div>
+            <span className="text-[9px] text-slate-400">Pre-computed command heuristics</span>
+          </div>
+
+          <div className="p-2.5 rounded-lg bg-[#040816] border border-slate-700">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-slate-400 uppercase font-bold">PENDING / UNCLASSIFIED</span>
+              <span className="w-2 h-2 rounded-full bg-slate-500" />
+            </div>
+            <div className="text-lg font-bold text-slate-300 mt-1">{provenanceStats.pendingCount} Sessions</div>
+            <span className="text-[9px] text-slate-500">Awaiting deep assessment</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Threat Severity Taxonomy Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+        <div className="p-3 rounded-xl bg-[#070e22] border border-rose-500/30">
           <div className="flex items-center justify-between">
             <span className="text-[10px] text-rose-400 uppercase font-bold">CRITICAL</span>
             <AlertOctagon className="w-3.5 h-3.5 text-rose-400" />
           </div>
-          <div className="text-2xl font-bold text-white mt-1">{threatCounts.critical}</div>
-          <span className="text-[9px] text-slate-400">Hostile / Exploit Payloads</span>
+          <div className="text-xl font-bold text-white mt-1">{threatCounts.critical}</div>
+          <span className="text-[9px] text-slate-400">Exploit / Droppers</span>
         </div>
 
-        <div className="p-3.5 rounded-xl bg-[#070e22] border border-orange-500/30">
+        <div className="p-3 rounded-xl bg-[#070e22] border border-orange-500/30">
           <div className="flex items-center justify-between">
             <span className="text-[10px] text-orange-400 uppercase font-bold">HIGH RISK</span>
             <AlertTriangle className="w-3.5 h-3.5 text-orange-400" />
           </div>
-          <div className="text-2xl font-bold text-white mt-1">{threatCounts.high}</div>
-          <span className="text-[9px] text-slate-400">Aggressive Probing</span>
+          <div className="text-xl font-bold text-white mt-1">{threatCounts.high}</div>
+          <span className="text-[9px] text-slate-400">Cloud Recon / Enum</span>
         </div>
 
-        <div className="p-3.5 rounded-xl bg-[#070e22] border border-amber-500/30">
+        <div className="p-3 rounded-xl bg-[#070e22] border border-amber-500/30">
           <div className="flex items-center justify-between">
             <span className="text-[10px] text-amber-400 uppercase font-bold">MEDIUM RISK</span>
-            <Shield className="w-3.5 h-3.5 text-amber-400" />
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
           </div>
-          <div className="text-2xl font-bold text-white mt-1">{threatCounts.medium}</div>
-          <span className="text-[9px] text-slate-400">Reconnaissance & Scan</span>
+          <div className="text-xl font-bold text-white mt-1">{threatCounts.medium}</div>
+          <span className="text-[9px] text-slate-400">Reconnaissance Probes</span>
         </div>
 
-        <div className="p-3.5 rounded-xl bg-[#070e22] border border-emerald-500/30">
+        <div className="p-3 rounded-xl bg-[#070e22] border border-emerald-500/30">
           <div className="flex items-center justify-between">
             <span className="text-[10px] text-emerald-400 uppercase font-bold">LOW RISK</span>
-            <Check className="w-3.5 h-3.5 text-emerald-400" />
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
           </div>
-          <div className="text-2xl font-bold text-white mt-1">{threatCounts.low}</div>
-          <span className="text-[9px] text-slate-400">Benign / Port Discovery</span>
+          <div className="text-xl font-bold text-white mt-1">{threatCounts.low}</div>
+          <span className="text-[9px] text-slate-400">Basic Connectivity</span>
         </div>
 
-        <div className="p-3.5 rounded-xl bg-[#070e22] border border-slate-700">
+        <div className="p-3 rounded-xl bg-[#070e22] border border-slate-700/60">
           <div className="flex items-center justify-between">
             <span className="text-[10px] text-slate-400 uppercase font-bold">UNCLASSIFIED</span>
-            <Clock className="w-3.5 h-3.5 text-slate-500" />
+            <HelpCircle className="w-3.5 h-3.5 text-slate-500" />
           </div>
-          <div className="text-2xl font-bold text-slate-300 mt-1">{threatCounts.unclassified}</div>
-          <span className="text-[9px] text-slate-400">Pre-Auth / Zero Cmds</span>
+          <div className="text-xl font-bold text-slate-300 mt-1">{threatCounts.unclassified}</div>
+          <span className="text-[9px] text-slate-500">Early Disconnects</span>
         </div>
       </div>
 
-      {/* Semantic Distinction Alert */}
-      <div className="p-3 bg-[#070e22] border border-cyan-500/15 rounded-xl text-xs text-slate-400 flex items-start gap-2.5">
-        <AlertTriangle className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" />
-        <div>
-          <span className="font-bold text-slate-200">Semantic Classification Standard: </span>
-          Sessions labeled <span className="text-slate-200 font-bold">UNCLASSIFIED</span> represent connections with insufficient command executions to trigger heuristic IOC evaluation (92.5% of sessions exit pre-auth). <span className="text-amber-300 font-bold">UNKNOWN</span> represents sessions where command patterns did not match the cloud-specific regex rules.
-        </div>
-      </div>
-
-      {/* High-Risk Active Sessions */}
-      <div className="rounded-xl border border-cyan-500/20 bg-[#070e22] overflow-hidden space-y-0">
-        <div className="p-3.5 bg-[#040816] border-b border-cyan-500/15 flex items-center justify-between">
-          <h3 className="text-xs font-bold text-white uppercase flex items-center gap-2">
-            <AlertOctagon className="w-4 h-4 text-rose-400" />
-            <span>CRITICAL & HIGH-RISK THREAT SESSIONS</span>
-          </h3>
-          <span className="text-[10px] text-slate-400">{highRiskSessions.length} Captured</span>
+      {/* High-Risk Assessed Sessions Table */}
+      <div className="rounded-xl border border-cyan-500/20 bg-[#070e22] overflow-hidden">
+        <div className="p-3 bg-[#040816] border-b border-cyan-500/15 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Shield className="w-4 h-4 text-cyan-400" />
+            <h2 className="text-xs font-bold text-white uppercase tracking-wider">
+              PRIORITY ASSESSED ATTACK SESSIONS
+            </h2>
+          </div>
+          <span className="text-[10px] text-slate-400">Sessions with active command executions or threat ratings</span>
         </div>
 
         <div className="divide-y divide-cyan-500/10">
           {highRiskSessions.length === 0 ? (
             <div className="p-6 text-center text-xs text-slate-500">
-              No high-risk sessions observed in current window.
+              No high-risk sessions observed in the current time window.
             </div>
           ) : (
             highRiskSessions.map((s) => {
               const ip = s.src_ip || s.attacker_ip || 'unknown';
-              const threat = evaluateThreat(s.threat_score ?? s.skill_level);
+              const threat = evaluateThreat(s.threat_score ?? (s.skill_level ? s.skill_level * 10 : 20));
               const intent = normalizeIntent(s.intent);
+              const cmdCount = s.command_count || s.commands_executed || 0;
 
               return (
                 <div
@@ -218,22 +289,22 @@ export default function ThreatIntelligencePage() {
                   <div className="space-y-1">
                     <div className="flex items-center gap-2.5">
                       <span className={cn('px-1.5 py-0.5 rounded text-[9px] font-bold border', threat.badgeClass)}>
-                        {threat.label.toUpperCase()} ({s.skill_level}/10)
+                        {threat.label.toUpperCase()} ({s.skill_level ?? 2}/10)
                       </span>
-                      <span className="font-bold text-white">{ip}</span>
+                      <span className="font-bold text-white font-mono">{ip}</span>
                       <span className="text-slate-600">•</span>
                       <span className="text-slate-400">{getCountryName(s.src_country || s.country)}</span>
                       <span className="text-slate-600">•</span>
                       <span className="text-cyan-300 font-bold">{intent.label}</span>
                     </div>
                     <div className="text-[11px] text-slate-400">
-                      Session {s.session_id} • Commands: {s.command_count || s.commands_executed || 0} • Duration: {s.duration_seconds || 0}s
+                      CASE-{s.session_id.slice(0, 8).toUpperCase()} • Commands: <span className={cn('font-bold', cmdCount > 0 ? 'text-emerald-400' : 'text-slate-500')}>{cmdCount}</span> • Duration: {s.duration_seconds || 0}s
                     </div>
                   </div>
 
                   <Link
                     href={`/sessions/${s.session_id}`}
-                    className="flex items-center gap-1 px-3 py-1 rounded bg-cyan-500/15 border border-cyan-500/30 text-[10px] font-bold text-cyan-300 hover:bg-cyan-500/25 transition-all w-fit"
+                    className="flex items-center gap-1 px-3 py-1 rounded bg-cyan-500/15 border border-cyan-500/30 text-[10px] font-bold text-cyan-300 hover:bg-cyan-500/25 transition-all w-fit uppercase"
                   >
                     <span>INVESTIGATE CASE</span>
                     <ExternalLink className="w-2.5 h-2.5" />
@@ -279,19 +350,19 @@ export default function ThreatIntelligencePage() {
             <table className="w-full text-left text-xs">
               <thead className="bg-[#040816] text-[10px] text-slate-400 uppercase border-b border-cyan-500/15">
                 <tr>
-                  <th className="py-3 px-4">SEVERITY</th>
-                  <th className="py-3 px-4">IOC TYPE</th>
-                  <th className="py-3 px-4">INDICATOR VALUE</th>
-                  <th className="py-3 px-4">CONFIDENCE</th>
-                  <th className="py-3 px-4">CONTEXT</th>
-                  <th className="py-3 px-4">FIRST SEEN</th>
+                  <th className="py-2.5 px-4">SEVERITY</th>
+                  <th className="py-2.5 px-4">IOC TYPE</th>
+                  <th className="py-2.5 px-4">INDICATOR VALUE</th>
+                  <th className="py-2.5 px-4">CONFIDENCE</th>
+                  <th className="py-2.5 px-4">CONTEXT</th>
+                  <th className="py-2.5 px-4">FIRST SEEN</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-cyan-500/10 font-mono">
                 {filteredIocs.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="py-8 text-center text-slate-500">
-                      No standalone threat indicators match current query.
+                      No threat indicators match the current query or time window.
                     </td>
                   </tr>
                 ) : (

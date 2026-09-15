@@ -101,6 +101,8 @@ export interface AuthEvent {
   auth_method?: string;
   src_ip?: string;
   src_port?: number;
+  attacker_ip?: string;
+  country?: string;
 }
 
 export interface IOC {
@@ -199,6 +201,7 @@ export interface AttackerDetail {
   max_skill_level: number;
   primary_intent: string;
   recent_sessions: Session[];
+  top_commands?: { command: string; executions: number; sessions: number }[];
 }
 
 export interface TopCommand {
@@ -278,11 +281,24 @@ export interface AdaptationEvent {
   details?: Record<string, unknown>;
 }
 
+export interface QuarantinedSessionsBreakdown {
+  total: number;
+  internal_infrastructure: number;
+  synthetic_tests: number;
+  orphan_sessions: number;
+}
+
 export interface Stats {
   // All-time totals (authoritative)
   total_sessions: number;
   total_commands: number;
   unique_attackers: number;
+
+  // Authoritative external attacker metrics (Phase 3.2 truthful semantics)
+  external_sessions?: number;
+  external_commands?: number;
+  external_auth_sessions?: number;
+  quarantined_sessions?: QuarantinedSessionsBreakdown;
 
   // Recent window (configurable, default 24h)
   recent_sessions: number;
@@ -299,6 +315,7 @@ export interface Stats {
   sessions_per_hour: { hour: string; count: number }[];
   commands_per_day: { date: string; count: number }[];
   sessions_per_day?: { date: string; count: number }[];
+  successful_auth_sessions?: number;
 }
 
 export interface RealTimeEvent {

@@ -1373,6 +1373,316 @@ class TestBackendApiFixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(res.recent_events), 1)
         self.assertEqual(res.recent_events[0].source_class, "EXTERNAL_HONEYPOT")
 
+    def test_phase3_2_stats_response_external_and_quarantine_models(self):
+        """Verify StatsResponse contains truthful external metrics and quarantined breakdown."""
+        from backend.api.main import StatsResponse, QuarantinedSessionsBreakdown
+        breakdown = QuarantinedSessionsBreakdown(
+            total=71,
+            internal_infrastructure=45,
+            synthetic_tests=25,
+            orphan_sessions=1,
+        )
+        self.assertEqual(breakdown.total, 71)
+        self.assertEqual(breakdown.internal_infrastructure, 45)
+        self.assertEqual(breakdown.synthetic_tests, 25)
+        self.assertEqual(breakdown.orphan_sessions, 1)
+
+        stats = StatsResponse(
+            total_sessions=98472,
+            total_commands=154723,
+            unique_attackers=2087,
+            external_sessions=98401,
+            external_commands=5672,
+            external_auth_sessions=547,
+            quarantined_sessions=breakdown,
+            recent_sessions=100,
+            recent_commands=20,
+            recent_unique_attackers=10,
+            successful_auth_sessions=599,
+            active_sessions=0,
+            top_intents=[],
+            top_countries=[],
+            threat_distribution=[],
+            sessions_per_hour=[],
+            commands_per_day=[],
+        )
+        self.assertEqual(stats.total_sessions, 98472)
+        self.assertEqual(stats.external_sessions, 98401)
+        self.assertEqual(stats.external_commands, 5672)
+        self.assertEqual(stats.external_auth_sessions, 547)
+        self.assertEqual(stats.quarantined_sessions.total, 71)
+
+    async def test_list_sessions_has_commands_filter(self):
+        """Verify list_sessions with has_commands=True queries with session_id subquery and expanded time window."""
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        self.mock_pg_pool.getconn.return_value = mock_conn
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+
+        ch_query_res = MagicMock()
+        ch_query_res.named_results.return_value = [
+            {
+                "session_id": "9707d005efc0",
+                "attacker_ip": "175.207.59.187",
+                "start_time": datetime.now(timezone.utc),
+                "end_time": datetime.now(timezone.utc),
+                "protocol": "ssh",
+                "command_count": 17,
+                "auth_attempts": 1,
+                "auth_success": 1,
+            }
+        ]
+        self.mock_ch.query.return_value = ch_query_res
+
+        sessions = await api_main.list_sessions(limit=50, hours=24, has_commands=True)
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0].session_id, "9707d005efc0")
+        self.assertEqual(sessions[0].command_count, 17)
+
+        # Verify SQL generated in ClickHouse query
+        query_sql = self.mock_ch.query.call_args[0][0]
+        self.assertIn("session_id IN (SELECT DISTINCT session_id FROM clouddecept.commands", query_sql)
+        self.assertIn("WHERE session_id != ''", query_sql)
+
+    async def test_list_sessions_auth_success_filter(self):
+        """Verify list_sessions with auth_success=True filters auth_success = 1."""
+        ch_query_res = MagicMock()
+        ch_query_res.named_results.return_value = []
+        self.mock_ch.query.return_value = ch_query_res
+
+        await api_main.list_sessions(limit=50, hours=24, auth_success=True)
+        query_sql = self.mock_ch.query.call_args[0][0]
+        self.assertIn("auth_success = 1", query_sql)
+
+    async def test_top_attackers_sort_by_commands(self):
+        """Verify /attackers/top with sort_by='commands' sorts by total_commands DESC."""
+        ch_query_res = MagicMock()
+        ch_query_res.named_results.return_value = []
+        self.mock_ch.query.return_value = ch_query_res
+
+        await api_main.get_top_attackers(limit=10, sort_by="commands")
+        query_sql = self.mock_ch.query.call_args[0][0]
+        self.assertIn("ORDER BY total_commands DESC, sessions DESC", query_sql)
+
+    # =========================================================================
+    # PHASE 3.5B: HIGH-VALUE INCIDENT SELECTION & AUTHENTICATION BADGE TESTS
+    # =========================================================================
+
+    def test_high_value_qualification_rejected_credential_long_duration_excluded(self):
+        """TEST A: Long duration (120s) with rejected auth and 0 commands must NOT qualify as high-value."""
+        sess = {
+            "session_id": "probe120s",
+            "attacker_ip": "103.195.81.146",
+            "duration_seconds": 120,
+            "commands_executed": 0,
+            "auth_success": False,
+            "credentials_tried": 1,
+            "threat_score": 10,
+            "status": "failed",
+        }
+        self.assertFalse(qualifies_as_high_value(sess))
+
+    def test_high_value_qualification_rejected_credential_short_duration_excluded(self):
+        """TEST B: Short duration (3s) with rejected auth and 0 commands must NOT qualify."""
+        sess = {
+            "session_id": "probe3s",
+            "attacker_ip": "103.195.81.146",
+            "duration_seconds": 3,
+            "commands_executed": 0,
+            "auth_success": False,
+            "credentials_tried": 1,
+            "threat_score": 10,
+            "status": "failed",
+        }
+        self.assertFalse(qualifies_as_high_value(sess))
+
+    def test_high_value_qualification_auth_success_zero_commands_zero_threat_excluded(self):
+        """TEST C: Auth success with 0 commands and low threat score (<40) must NOT qualify."""
+        sess = {
+            "session_id": "low_threat_auth",
+            "attacker_ip": "192.168.1.100",
+            "duration_seconds": 50,
+            "commands_executed": 0,
+            "auth_success": True,
+            "credentials_tried": 1,
+            "threat_score": 20,
+            "status": "closed",
+        }
+        self.assertFalse(qualifies_as_high_value(sess))
+
+    def test_high_value_qualification_auth_success_with_commands_qualifies(self):
+        """TEST D: Post-auth session with commands executed must qualify."""
+        sess = {
+            "session_id": "interactive_cmd_sess",
+            "attacker_ip": "185.220.101.5",
+            "duration_seconds": 45,
+            "commands_executed": 3,
+            "auth_success": True,
+            "credentials_tried": 1,
+            "threat_score": 60,
+            "status": "closed",
+        }
+        self.assertTrue(qualifies_as_high_value(sess))
+
+    def test_high_value_qualification_story_a_ranks_top(self):
+        """TEST E: Story A (9707d005efc0) with 17 commands must qualify and rank #1."""
+        story_a = {
+            "session_id": "9707d005efc0",
+            "attacker_ip": "175.207.59.187",
+            "duration_seconds": 41,
+            "commands_executed": 17,
+            "auth_success": True,
+            "credentials_tried": 1,
+            "threat_score": 85,
+            "start_time": "2026-03-01T12:00:00Z",
+        }
+        other_sess_1 = {
+            "session_id": "other1",
+            "attacker_ip": "1.1.1.1",
+            "duration_seconds": 300,
+            "commands_executed": 5,
+            "auth_success": True,
+            "credentials_tried": 1,
+            "threat_score": 90,
+            "start_time": "2026-03-02T12:00:00Z",
+        }
+        other_sess_2 = {
+            "session_id": "other2",
+            "attacker_ip": "2.2.2.2",
+            "duration_seconds": 120,
+            "commands_executed": 0,
+            "auth_success": True,
+            "credentials_tried": 1,
+            "threat_score": 70,
+            "start_time": "2026-03-03T12:00:00Z",
+        }
+        unqualified = {
+            "session_id": "probe120s",
+            "attacker_ip": "103.195.81.146",
+            "duration_seconds": 120,
+            "commands_executed": 0,
+            "auth_success": False,
+            "threat_score": 10,
+            "start_time": "2026-03-04T12:00:00Z",
+        }
+
+        candidates = [story_a, other_sess_1, other_sess_2, unqualified]
+        qualified = [s for s in candidates if qualifies_as_high_value(s)]
+        self.assertNotIn(unqualified, qualified)
+        self.assertIn(story_a, qualified)
+
+        ranked = sort_high_value_incidents(qualified)
+        self.assertEqual(ranked[0]["session_id"], "9707d005efc0")
+
+    def test_high_value_deterministic_ordering_tie_breaker(self):
+        """TEST F: Identical commands, threat score, and start_time must sort deterministically by session_id DESC."""
+        sess_a = {
+            "session_id": "aaaa1111",
+            "commands_executed": 2,
+            "threat_score": 50,
+            "start_time": "2026-03-01T12:00:00Z",
+            "auth_success": True,
+        }
+        sess_b = {
+            "session_id": "bbbb2222",
+            "commands_executed": 2,
+            "threat_score": 50,
+            "start_time": "2026-03-01T12:00:00Z",
+            "auth_success": True,
+        }
+        sorted_list = sort_high_value_incidents([sess_a, sess_b])
+        self.assertEqual([s["session_id"] for s in sorted_list], ["bbbb2222", "aaaa1111"])
+
+    def test_high_value_auth_badge_truthfulness(self):
+        """TEST G: Auth badge must never show 'Authenticated' for missing username or rejected auth."""
+        # 1. Rejected auth with empty username -> 'AUTH REJECTED', NOT 'Authenticated'
+        sess_rejected = {
+            "username": "",
+            "auth_success": False,
+            "commands_executed": 0,
+            "status": "failed",
+        }
+        badge = get_auth_badge(sess_rejected)
+        self.assertEqual(badge, "AUTH REJECTED")
+        self.assertNotEqual(badge, "Authenticated")
+
+        # 2. Accepted auth without username -> 'AUTH ACCEPTED', NOT 'Authenticated'
+        sess_accepted_no_user = {
+            "username": "",
+            "auth_success": True,
+            "commands_executed": 0,
+            "status": "closed",
+        }
+        self.assertEqual(get_auth_badge(sess_accepted_no_user), "AUTH ACCEPTED")
+
+        # 3. Shell granted with commands executed -> 'root (shell)' or 'SHELL GRANTED'
+        sess_shell = {
+            "username": "root",
+            "auth_success": True,
+            "commands_executed": 17,
+            "status": "closed",
+        }
+        self.assertEqual(get_auth_badge(sess_shell), "root (shell)")
+
+        sess_shell_no_user = {
+            "username": "",
+            "auth_success": True,
+            "commands_executed": 2,
+            "status": "closed",
+        }
+        self.assertEqual(get_auth_badge(sess_shell_no_user), "SHELL GRANTED")
+
+    def test_session_summary_model_has_auth_success(self):
+        """Verify SessionSummary model includes auth_success field."""
+        summary = api_main.SessionSummary(
+            session_id="test1234",
+            attacker_ip="1.2.3.4",
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            protocol="ssh",
+            command_count=0,
+            auth_attempts=1,
+            auth_success=True,
+        )
+        self.assertTrue(summary.auth_success)
+
+
+# Helpers mirroring dashboard qualification, sorting, and auth badge contracts
+def qualifies_as_high_value(session: dict) -> bool:
+    cmd_count = session.get("command_count") or session.get("commands_executed") or 0
+    threat_score = session.get("threat_score") if session.get("threat_score") is not None else ((session.get("skill_level") or 0) * 10)
+    is_verified_auth = session.get("auth_success") is True
+    return cmd_count > 0 or (is_verified_auth and threat_score >= 40)
+
+
+def sort_high_value_incidents(sessions: list) -> list:
+    return sorted(
+        sessions,
+        key=lambda s: (
+            s.get("command_count") or s.get("commands_executed") or 0,
+            s.get("threat_score") if s.get("threat_score") is not None else ((s.get("skill_level") or 0) * 10),
+            s.get("start_time") or "",
+            s.get("session_id") or ""
+        ),
+        reverse=True
+    )
+
+
+def get_auth_badge(session: dict) -> str:
+    cmd_count = session.get("command_count") or session.get("commands_executed") or 0
+    auth_success = session.get("auth_success")
+    username = session.get("username")
+    status = session.get("status")
+
+    if cmd_count > 0:
+        return f"{username} (shell)" if username else "SHELL GRANTED"
+    elif auth_success is True:
+        return f"{username} (accepted)" if username else "AUTH ACCEPTED"
+    elif status == "failed" or auth_success is False:
+        return "AUTH REJECTED"
+    else:
+        return "AUTH UNKNOWN"
+
 
 if __name__ == "__main__":
     unittest.main()

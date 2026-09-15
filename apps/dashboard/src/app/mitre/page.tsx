@@ -17,70 +17,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useDashboardStore } from '@/lib/store';
-
-// MITRE Knowledge base definitions for CloudDecept
-const MITRE_KNOWLEDGE: Record<string, { name: string; tactic: string; description: string; commonCommands: string[] }> = {
-  'T1082': {
-    name: 'System Information Discovery',
-    tactic: 'Discovery',
-    description: 'Adversaries may attempt to get detailed information about the operating system and hardware, including version, patches, architecture, and configuration.',
-    commonCommands: ['uname -a', 'cat /etc/os-release', 'cat /proc/version', 'lscpu', 'hostname', 'uptime'],
-  },
-  'T1033': {
-    name: 'System Owner/User Discovery',
-    tactic: 'Discovery',
-    description: 'Adversaries may attempt to identify the primary user, currently logged in user, prior users, or system privileges.',
-    commonCommands: ['whoami', 'id', 'w', 'who', 'users', 'last'],
-  },
-  'T1059': {
-    name: 'Command and Scripting Interpreter',
-    tactic: 'Execution',
-    description: 'Adversaries may abuse Unix shell commands and scripting interpreters to execute malicious commands or scripts.',
-    commonCommands: ['sh', 'bash', 'dash', '/bin/sh', 'python', 'perl'],
-  },
-  'T1110': {
-    name: 'Brute Force / Password Guessing',
-    tactic: 'Credential Access',
-    description: 'Adversaries may use brute force techniques to attempt authentication with common usernames and passwords.',
-    commonCommands: ['SSH login attempts (root, admin, user, test, ubuntu)'],
-  },
-  'T1016': {
-    name: 'System Network Configuration Discovery',
-    tactic: 'Discovery',
-    description: 'Adversaries may look for details about the network configuration and interfaces to understand neighboring systems.',
-    commonCommands: ['ifconfig', 'ip addr', 'ip route', 'netstat -rn', 'arp -a', 'route -n'],
-  },
-  'T1087': {
-    name: 'Account Discovery',
-    tactic: 'Discovery',
-    description: 'Adversaries may attempt to get a list of local system accounts or domain accounts.',
-    commonCommands: ['cat /etc/passwd', 'cut -d: -f1 /etc/passwd', 'cat /etc/shadow'],
-  },
-  'T1046': {
-    name: 'Network Service Discovery',
-    tactic: 'Discovery',
-    description: 'Adversaries may attempt to gather information about active network services using listening ports and scanners.',
-    commonCommands: ['netstat -tuln', 'ss -tuln', 'nmap', 'nc -zv'],
-  },
-  'T1005': {
-    name: 'Data from Local System',
-    tactic: 'Collection',
-    description: 'Adversaries may search for and collect sensitive data, configuration files, and keys from the local system.',
-    commonCommands: ['cat ~/.bash_history', 'cat ~/.ssh/id_rsa', 'find / -name "*.conf"'],
-  },
-  'T1053': {
-    name: 'Scheduled Task/Job',
-    tactic: 'Persistence',
-    description: 'Adversaries may abuse task scheduling systems like crontab to facilitate recurring malicious execution.',
-    commonCommands: ['crontab -l', 'cat /etc/crontab', 'ls -la /etc/cron.*'],
-  },
-  'T1105': {
-    name: 'Ingress Tool Transfer',
-    tactic: 'Command and Control',
-    description: 'Adversaries may transfer tools or other files from an external system into a compromised environment.',
-    commonCommands: ['wget http://...', 'curl -O http://...', 'tftp', 'ftp', 'scp'],
-  },
-};
+import { TAXONOMY_REGISTRY, getTechniqueInfo } from '@/lib/mitre';
 
 function MitreInvestigationPageContent() {
   const searchParams = useSearchParams();
@@ -99,23 +36,20 @@ function MitreInvestigationPageContent() {
     const raw = mitreTechniques || [];
     // Ensure all known CloudDecept techniques are available even if count is 0
     const map = new Map<string, number>();
-    Object.keys(MITRE_KNOWLEDGE).forEach(k => map.set(k, 0));
+    Object.keys(TAXONOMY_REGISTRY).forEach(k => map.set(k, 0));
     raw.forEach(r => map.set(r.technique, r.count));
 
     return Array.from(map.entries()).map(([technique, count]) => {
-      const info = MITRE_KNOWLEDGE[technique] || {
-        name: technique,
-        tactic: 'Discovery',
-        description: 'Adversary activity classified under MITRE ATT&CK framework.',
-        commonCommands: [],
-      };
+      const info = getTechniqueInfo(technique);
       return {
         id: technique,
         name: info.name,
         tactic: info.tactic,
         description: info.description,
         count,
-        commonCommands: info.commonCommands,
+        commonCommands: info.commonCommands || [],
+        isCustom: info.isCustom,
+        closestOfficial: info.closestOfficial,
       };
     });
   }, [mitreTechniques]);
@@ -208,10 +142,20 @@ function MitreInvestigationPageContent() {
                   )}
                 >
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-900/40 text-cyan-300 border border-cyan-500/30">
+                    <div className="flex items-center gap-1.5">
+                      <span className={cn(
+                        'px-1.5 py-0.5 rounded text-[10px] font-bold border',
+                        tech.isCustom
+                          ? 'bg-amber-950/70 text-amber-300 border-amber-500/40'
+                          : 'bg-cyan-900/40 text-cyan-300 border border-cyan-500/30'
+                      )}>
                         {tech.id}
                       </span>
+                      {tech.isCustom && (
+                        <span className="px-1 py-0.2 rounded text-[8px] font-bold bg-amber-900/50 text-amber-200 border border-amber-500/30">
+                          CUSTOM
+                        </span>
+                      )}
                       <span className="text-xs font-bold text-white tracking-wide">{tech.name}</span>
                     </div>
                     <span className="text-[10px] font-bold text-slate-400">
@@ -235,23 +179,44 @@ function MitreInvestigationPageContent() {
             <div className="space-y-4">
               {/* Header Box */}
               <div className="p-4 rounded-xl bg-[#070e22] border border-cyan-500/20 space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5">
-                    <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-400/40">
+                    <span className={cn(
+                      'px-2.5 py-1 rounded-lg text-xs font-bold border',
+                      selectedTechnique.isCustom
+                        ? 'bg-amber-950/70 text-amber-300 border-amber-500/40'
+                        : 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/40'
+                    )}>
                       {selectedTechnique.id}
                     </span>
                     <h2 className="text-base font-bold text-white tracking-wide uppercase">
                       {selectedTechnique.name}
                     </h2>
                   </div>
-                  <span className="px-2.5 py-0.5 rounded text-xs font-bold bg-[#040816] text-slate-300 border border-slate-700">
-                    {selectedTechnique.tactic.toUpperCase()}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {selectedTechnique.isCustom && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-900 text-amber-200 border border-amber-500/40 uppercase">
+                        CUSTOM TAXONOMY
+                      </span>
+                    )}
+                    <span className="px-2.5 py-0.5 rounded text-xs font-bold bg-[#040816] text-slate-300 border border-slate-700">
+                      {selectedTechnique.tactic.toUpperCase()}
+                    </span>
+                  </div>
                 </div>
 
                 <p className="text-xs text-slate-300 leading-relaxed pt-1">
                   {selectedTechnique.description}
                 </p>
+
+                {selectedTechnique.isCustom && selectedTechnique.closestOfficial && (
+                  <div className="p-2.5 rounded-lg bg-amber-950/30 border border-amber-500/30 text-xs text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                    <span className="text-[11px] text-slate-400">Closest Official MITRE ATT&CK Mapping:</span>
+                    <span className="font-mono font-bold text-cyan-300 bg-black/40 px-2 py-0.5 rounded border border-cyan-500/30 text-[11px]">
+                      {selectedTechnique.closestOfficial}
+                    </span>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-3 pt-2">
                   <div className="p-2.5 rounded-lg bg-[#040816] border border-cyan-500/15">

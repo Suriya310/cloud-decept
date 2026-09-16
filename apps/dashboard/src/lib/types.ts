@@ -402,3 +402,36 @@ export interface AuthStats {
   auth_policy?: string;
   publickey_allowed?: boolean;
 }
+
+export interface MitreInterpretationItem {
+  technique_id: string;
+  interpretation: string;
+}
+
+export interface RiskAssessment {
+  verified_severity: string;
+  contextual_impact: string;
+}
+
+export interface AIForensicAnalysis {
+  incident_summary: string;
+  likely_intent: string;
+  key_evidence: string[];
+  attack_progression: string[];
+  mitre_interpretation: MitreInterpretationItem[];
+  risk_assessment: RiskAssessment | string;
+  recommended_actions: string[];
+  confidence: 'High' | 'Medium' | 'Low' | string;
+  limitations: string[];
+  analyzed_at?: string;
+  model_used?: string;
+}
+
+export interface AIAnalysisResponse {
+  session_id: string;
+  analysis: AIForensicAnalysis;
+  cached: boolean;
+  evidence_hash?: string;
+  model_used?: string;
+  timestamp: string;
+}

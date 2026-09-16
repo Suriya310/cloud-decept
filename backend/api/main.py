@@ -9,7 +9,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import ipaddress
@@ -21,7 +21,29 @@ import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, ConfigDict
 
+try:
+    from backend.api.ai_service import (
+        AIForensicAnalysis,
+        AIAnalysisResponse,
+        build_forensic_fact_block,
+        compute_evidence_hash,
+        get_cached_analysis,
+        set_cached_analysis,
+        analyze_session_with_gemini,
+    )
+except ImportError:
+    from ai_service import (
+        AIForensicAnalysis,
+        AIAnalysisResponse,
+        build_forensic_fact_block,
+        compute_evidence_hash,
+        get_cached_analysis,
+        set_cached_analysis,
+        analyze_session_with_gemini,
+    )
+
 logging.basicConfig(level=logging.INFO)
+
 logger = logging.getLogger("backend-api")
 
 # Database connections
@@ -1765,14 +1787,30 @@ async def get_session_case_file(session_id: str):
                         (session_id,)
                     )
                     for r in cur.fetchall():
-                        t_id = r[0]
+                        raw_id = (r[0] or "").strip()
+                        if raw_id == "T1550.007":
+                            t_id = "T1550.001"
+                            t_name = "Use Alternate Authentication Material: Application Access Token"
+                            t_tactic = "Lateral Movement"
+                            t_sev = "critical"
+                        elif raw_id == "T1059.008":
+                            t_id = "T1059.009"
+                            t_name = "Command and Scripting Interpreter: Cloud API"
+                            t_tactic = "Execution"
+                            t_sev = "medium"
+                        else:
+                            t_id = raw_id
+                            t_name = r[1] or t_id
+                            t_tactic = r[2] or "Discovery"
+                            t_sev = r[3] or "medium"
+
                         if t_id and t_id not in seen_tech_ids:
                             seen_tech_ids.add(t_id)
                             mitre_techniques.append({
                                 "technique_id": t_id,
-                                "name": r[1] or t_id,
-                                "tactic": r[2] or "Discovery",
-                                "severity": r[3] or "medium",
+                                "name": t_name,
+                                "tactic": t_tactic,
+                                "severity": t_sev,
                                 "trigger": r[4] or "",
                                 "confidence": float(r[5] or 0.85),
                             })
@@ -1783,13 +1821,27 @@ async def get_session_case_file(session_id: str):
 
     # Fallback to summary techniques if none in threat_intelligence table
     if not mitre_techniques and summary_data:
-        for t in summary_data.get("mitre_techniques", []):
+        for raw_t in summary_data.get("mitre_techniques", []):
+            raw_t = (raw_t or "").strip()
+            if raw_t == "T1550.007":
+                t = "T1550.001"
+                t_name = "Use Alternate Authentication Material: Application Access Token"
+                t_tactic = "Lateral Movement"
+            elif raw_t == "T1059.008":
+                t = "T1059.009"
+                t_name = "Command and Scripting Interpreter: Cloud API"
+                t_tactic = "Execution"
+            else:
+                t = raw_t
+                t_name = raw_t
+                t_tactic = "Discovery"
+
             if t and t not in seen_tech_ids:
                 seen_tech_ids.add(t)
                 mitre_techniques.append({
                     "technique_id": t,
-                    "name": t,
-                    "tactic": "Discovery",
+                    "name": t_name,
+                    "tactic": t_tactic,
                     "severity": "medium",
                     "trigger": "",
                     "confidence": 0.85,
@@ -1947,6 +1999,8 @@ async def get_session_case_file(session_id: str):
     # 10. Threat Intel block
     threat_intel_block = None
     if summary_data:
+        summary_text = (summary_data.get("summary") or "").replace("T1550.007", "T1550.001").replace("T1059.008", "T1059.009")
+        narrative_text = (summary_data.get("narrative") or summary_text).replace("T1550.007", "T1550.001").replace("T1059.008", "T1059.009")
         threat_intel_block = {
             "session_id": session_id,
             "timestamp": summary_data.get("created_at"),
@@ -1955,8 +2009,8 @@ async def get_session_case_file(session_id: str):
             "tactic_summary": {m["tactic"]: sum(1 for x in mitre_techniques if x.get("tactic") == m["tactic"]) for m in mitre_techniques},
             "summary": {
                 "session_id": session_id,
-                "summary": summary_data.get("summary"),
-                "narrative": summary_data.get("summary"),
+                "summary": summary_text,
+                "narrative": narrative_text,
                 "primary_objective": assessment_data.get("intent"),
                 "intent": assessment_data.get("intent"),
                 "skill_level": assessment_data.get("skill_level"),
@@ -1981,8 +2035,81 @@ async def get_session_case_file(session_id: str):
     }
 
 
+@app.post("/sessions/{session_id}/ai-analysis", response_model=AIAnalysisResponse)
+@app.post("/api/sessions/{session_id}/ai-analysis", response_model=AIAnalysisResponse)
+async def analyze_session_ai(session_id: str):
+    """
+    Server-side Gemini AI Forensic Interpretation of verified CloudDecept evidence.
+    CloudDecept establishes forensic truth; Gemini interprets that truth.
+    """
+    import re
+    if not session_id or not re.match(r"^[a-zA-Z0-9_-]{1,64}$", session_id):
+        raise HTTPException(status_code=400, detail="Invalid session_id format")
+
+    try:
+        case_file = await get_session_case_file(session_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch session {session_id} for AI analysis: {e}")
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found or inaccessible")
+
+    # Build verified deterministic fact block
+    fact_block = build_forensic_fact_block(
+        session_data=case_file.get("session", {}),
+        auth_rows=case_file.get("auth_attempts", []),
+        cmd_rows=case_file.get("commands", []),
+        assessment_data=case_file.get("assessment", {}),
+        mitre_techniques=case_file.get("threat_intel", {}).get("techniques", []) if case_file.get("threat_intel") else [],
+    )
+
+    evidence_hash = compute_evidence_hash(fact_block)
+
+    # Check cache for unchanged evidence
+    cached = get_cached_analysis(session_id, evidence_hash)
+    if cached:
+        cached_analysis = AIForensicAnalysis.model_validate(cached)
+        return AIAnalysisResponse(
+            session_id=session_id,
+            analysis=cached_analysis,
+            cached=True,
+            evidence_hash=evidence_hash,
+            model_used=f"{cached_analysis.model_used or 'gemini'} (cache)",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
+    # Validate API key presence
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="AI analysis unavailable: GEMINI_API_KEY is not configured on the server",
+        )
+
+    try:
+        analysis = await analyze_session_with_gemini(fact_block, api_key=api_key)
+        set_cached_analysis(session_id, evidence_hash, analysis.model_dump())
+        return AIAnalysisResponse(
+            session_id=session_id,
+            analysis=analysis,
+            cached=False,
+            evidence_hash=evidence_hash,
+            model_used=analysis.model_used,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+    except ValueError as ve:
+        logger.warning(f"AI analysis validation error for {session_id}: {ve}")
+        raise HTTPException(status_code=502, detail=f"AI analysis validation error: {ve}")
+    except RuntimeError as re_err:
+        logger.error(f"Gemini API execution error for {session_id}: {re_err}")
+        raise HTTPException(status_code=503, detail=f"AI analysis unavailable: {re_err}")
+    except Exception as e:
+        logger.error(f"Unexpected error during AI analysis for {session_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal error during forensic AI analysis")
+
 
 @app.get("/commands", response_model=list[CommandResponse])
+
 async def list_commands(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),

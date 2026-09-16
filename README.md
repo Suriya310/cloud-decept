@@ -285,6 +285,38 @@ docker compose -f docker-compose.yml -f docker-compose.oracle.yml exec clickhous
 docker compose -f docker-compose.yml -f docker-compose.oracle.yml exec postgres pg_dump -U deception deception > backup_$(date +%Y%m%d).sql
 ```
 
+## AI Forensic Interpretation (Gemini Integration)
+
+CloudDecept operates on a strict **deterministic-first** architecture:
+
+> *"CloudDecept establishes forensic truth; Gemini interprets that truth."*
+
+The core CloudDecept engine and backend deterministically establish:
+- Session identity, IP origin, and temporal boundaries
+- Authoritative authentication outcomes (`accepted`, `rejected`, `incomplete`, `unknown`)
+- Exact, deduplicated command execution timelines
+- Behavioral classification and intent identification
+- Quantitative threat scores (0–100) and severity levels
+- Grounded MITRE ATT&CK technique mappings
+
+### Investigator Workflow
+1. An analyst navigates to any **Session Case File** in the Investigation Registry.
+2. The investigator inspects the verified deterministic evidence and unified attack timeline.
+3. The investigator explicitly clicks **`[ ✨ ANALYZE WITH AI ]`** to request an AI synthesis.
+4. The server-side backend constructs a strictly delimited forensic fact block and dispatches it to Google Gemini.
+5. Gemini generates an analyst-readable incident synthesis without altering or fabricating facts:
+   - **Executive Incident Summary**: Narrative synthesis of the session.
+   - **Likely Attacker Intent**: Inferred adversarial goals grounded in observed commands.
+   - **Key Forensic Evidence**: Essential facts anchoring the assessment.
+   - **Attack Progression**: Chronological phases from ingress to exit.
+   - **MITRE ATT&CK Interpretation**: Contextual analysis of verified techniques.
+   - **Operational Risk Assessment & Hardening Recommendations**: Actionable guidance for SOC teams.
+   - **Confidence Level & Visibility Boundaries**: Clear disclaimers of what was observed vs. unobserved.
+
+Gemini acts as an AI analyst interpreting verified evidence—it is **never** the forensic source of truth.
+
+
+
 ## Security Notes
 
 ⚠️ **Important**:

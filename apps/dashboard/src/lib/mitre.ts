@@ -112,36 +112,47 @@ export const TAXONOMY_REGISTRY: Record<string, TaxonomyTechnique> = {
     commonCommands: ['wget http://...', 'curl -O http://...', 'tftp', 'ftp', 'scp'],
   },
 
-  // CloudDecept Custom Research Extensions / Non-Standard Mappings
-  'T1550.007': {
-    id: 'T1550.007',
-    name: 'Use Alternate Authentication Material: Cloud Token',
+  // Official MITRE ATT&CK Standard Mappings for Cloud API & Token Access
+  'T1550.001': {
+    id: 'T1550.001',
+    name: 'Use Alternate Authentication Material: Application Access Token',
     tactic: 'Lateral Movement',
-    isCustom: true,
-    closestOfficial: 'T1550.001 (Application Access Token) / T1078.004 (Valid Accounts: Cloud Accounts)',
-    description: 'CloudDecept custom research extension representing cloud token extraction and STS identity enumeration (e.g. aws sts get-caller-identity or assume-role).',
+    isCustom: false,
+    description: 'Adversaries may use application access tokens to bypass standard authentication processes and access resources.',
     commonCommands: ['aws sts get-caller-identity', 'assume-role'],
   },
-  'T1059.008': {
-    id: 'T1059.008',
-    name: 'Command and Scripting Interpreter: Cloud API CLI',
+  'T1059.009': {
+    id: 'T1059.009',
+    name: 'Command and Scripting Interpreter: Cloud API',
     tactic: 'Execution',
-    isCustom: true,
-    closestOfficial: 'T1059.009 (Cloud Shell) / T1059.004 (Unix Shell)',
-    description: 'CloudDecept internal taxonomy mapping representing cloud CLI commands (aws, az, gcloud) executed within an interactive honeypot shell.',
+    isCustom: false,
+    description: 'Adversaries may execute commands directly against cloud APIs or through cloud CLI tools.',
     commonCommands: ['aws ...', 'az ...', 'gcloud ...'],
   },
 };
 
+/**
+ * Normalizes legacy/non-standard technique IDs to official MITRE ATT&CK standards.
+ * Suppresses invalid IDs like T1550.007 and non-standard T1059.008.
+ */
+export function normalizeMitreId(id: string): string {
+  if (!id) return '';
+  const trimmed = id.trim();
+  if (trimmed === 'T1550.007') return 'T1550.001';
+  if (trimmed === 'T1059.008') return 'T1059.009';
+  return trimmed;
+}
+
 export function getTechniqueInfo(id: string): TaxonomyTechnique {
-  if (TAXONOMY_REGISTRY[id]) {
-    return TAXONOMY_REGISTRY[id];
+  const normId = normalizeMitreId(id);
+  if (TAXONOMY_REGISTRY[normId]) {
+    return TAXONOMY_REGISTRY[normId];
   }
-  // Heuristic detection: if subtechnique has 3 digits that don't match ATT&CK conventions
-  const isCustom = id.includes('.007') || id.includes('.008') || id.startsWith('CUSTOM-');
+  // Fallback heuristic detection
+  const isCustom = normId.startsWith('CUSTOM-');
   return {
-    id,
-    name: id,
+    id: normId,
+    name: normId,
     tactic: 'Discovery',
     isCustom,
     closestOfficial: isCustom ? 'T1059 (Execution) / T1082 (Discovery)' : undefined,

@@ -12,7 +12,9 @@ import {
   AdaptiveStrategy,
   Stats,
   AuthStats,
+  AIAnalysisResponse,
 } from './types';
+
 
 const API_BASE = "/api/backend";
 const COLLECTOR_BASE = "/api/collector";
@@ -307,7 +309,14 @@ export const api = {
     fetchJson<any>(`${COLLECTOR_BASE}/health`),
 
   // Real-time events (SSE)
+  analyzeSessionWithAI: (sessionId: string) => {
+    return fetchJson<AIAnalysisResponse>(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/ai-analysis`, {
+      method: 'POST',
+    });
+  },
+
   subscribeToEvents: (onEvent: (event: any) => void, onConnected?: () => void, onDisconnected?: () => void) => {
+
     if (typeof window === 'undefined') return () => {};
     try {
       const eventSource = new EventSource(`${COLLECTOR_BASE}/events/live`);

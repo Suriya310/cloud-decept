@@ -128,7 +128,10 @@ services:
       - POSTGRES_DB=clouddecept
       - REDIS_URL=redis://redis:6379
       - LOG_LEVEL=INFO
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-flash-latest}
     depends_on:
+
       clickhouse:
         condition: service_healthy
       postgres:

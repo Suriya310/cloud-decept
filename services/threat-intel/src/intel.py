@@ -36,6 +36,12 @@ MITRE_CLOUD_TECHNIQUES = {
     },
 
     # Execution
+    "T1059.009": {
+        "name": "Command and Scripting Interpreter: Cloud API",
+        "tactic": "Execution",
+        "triggers": ["aws ", "az ", "gcloud ", "cli ", "cloud shell", "run command"],
+        "severity": "medium"
+    },
     "T1059.008": {
         "name": "Command and Scripting Interpreter: Cloud API",
         "tactic": "Execution",
@@ -209,6 +215,12 @@ MITRE_CLOUD_TECHNIQUES = {
         "tactic": "Lateral Movement",
         "triggers": ["winrm", "psexec", "wmic", "Invoke-Command", "Enter-PSSession"],
         "severity": "high"
+    },
+    "T1550.001": {
+        "name": "Use Alternate Authentication Material: Application Access Token",
+        "tactic": "Lateral Movement",
+        "triggers": ["assume-role", "sts ", "session-token", "access-token", "bearer token", "service account token"],
+        "severity": "critical"
     },
     "T1550.007": {
         "name": "Use Alternate Authentication Material: Cloud Token",
